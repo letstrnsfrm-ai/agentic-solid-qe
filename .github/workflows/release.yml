@@ -1,0 +1,60 @@
+name: Automated GitHub Release Notes
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-release:
+    name: Validate & Publish Release Notes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository with full history and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Fast Quality & Architecture Gate
+        run: |
+          npm run typecheck
+          npm run audit:solid
+          npm run validate:tapes
+
+      - name: Generate SemVer Tag & Release Notes
+        id: notes
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          node scripts/generate-release-notes.mjs \
+            --output .release-notes.md \
+            --json-meta .release-meta.json
+
+      - name: Publish GitHub Release & Tag
+        if: steps.notes.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT_TAG: ${{ steps.notes.outputs.next_tag }}
+          RELEASE_TITLE: ${{ steps.notes.outputs.release_title }}
+        run: |
+          gh release create "$NEXT_TAG" \
+            --target "${{ github.sha }}" \
+            --title "$RELEASE_TITLE" \
+            --notes-file .release-notes.md \
+            --latest

@@ -7,3 +7,5 @@ playwright/.cache/
 .env
 .DS_Store
 *.log
+.release-notes.md
+.release-meta.json
