@@ -4,6 +4,9 @@
   "description": "Zero-API-key agent skill framework bridging Autonomous Exploratory Testing (@playwright/cli) and SOLID Playwright TypeScript Architecture.",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "agentic-solid-qe": "./scripts/sync-skills.mjs"
+  },
   "scripts": {
     "test": "playwright test --project=chromium",
     "test:headed": "playwright test --headed",

@@ -108,10 +108,25 @@ The agent:
 
 ## Installing or Upgrading in Existing Repositories
 
-To copy or upgrade the static Core Engine (`.agents/skills/`, `session-tape.schema.json`, `AGENTS.md`, `.github/copilot-instructions.md`, and audit scripts) into another repository **without** overwriting that repository's `.agents/domain/domain-memory.md` or `src/`:
+### Option A: One-Command Drop-In for Existing Projects (`npx`)
+Inside **any existing TypeScript/Playwright repository**, run:
 
 ```bash
-npm run sync:skills -- /path/to/your-application-repo
+# Scaffold skills, domain-memory.md, and starter SOLID directories (never overwrites existing files):
+npx github:letstrnsfrm-ai/agentic-solid-qe init
+
+# Upgrade only the Core Engine (.agents/skills, schema, audit scripts) while preserving domain-memory.md & src/:
+npx github:letstrnsfrm-ai/agentic-solid-qe sync
+```
+
+### Option B: Start a Brand-New Repository from the GitHub Template
+Click **"Use this template"** on GitHub or run via GitHub CLI:
+```bash
+gh repo create my-app-e2e --template letstrnsfrm-ai/agentic-solid-qe --public --clone
+cd my-app-e2e
+npm install
+npx playwright install chromium
+npm run verify
 ```
 
 ---
