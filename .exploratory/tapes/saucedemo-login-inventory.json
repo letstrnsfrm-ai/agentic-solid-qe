@@ -1,0 +1,127 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "saucedemo-login-inventory",
+  "title": "Standard User Login, Cart Mutation, and Locked-Out User Validation",
+  "charter": "happy-path-baseline",
+  "recordedAt": "2026-10-25T12:00:00Z",
+  "baseUrl": "https://www.saucedemo.com",
+  "persona": {
+    "role": "standard",
+    "dataBuilderRef": "UserBuilder.standardUser"
+  },
+  "preconditions": [
+    "Application is reachable at https://www.saucedemo.com",
+    "Browser storage state is clean (unauthenticated)"
+  ],
+  "semanticSteps": [
+    {
+      "stepIndex": 1,
+      "intent": "Navigate to the Swag Labs login page",
+      "action": "goto",
+      "componentCandidate": "LoginPage",
+      "locatorContract": {
+        "strategy": "url",
+        "value": "/"
+      }
+    },
+    {
+      "stepIndex": 2,
+      "intent": "Enter username into the login form",
+      "cliRefSource": "e4",
+      "action": "fill",
+      "inputDataRef": "UserBuilder.standardUser().username",
+      "componentCandidate": "LoginFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#login_button_container"
+        },
+        "strategy": "getByPlaceholder",
+        "value": "Username",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 3,
+      "intent": "Enter password into the login form",
+      "cliRefSource": "e5",
+      "action": "fill",
+      "inputDataRef": "UserBuilder.standardUser().password",
+      "componentCandidate": "LoginFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#login_button_container"
+        },
+        "strategy": "getByPlaceholder",
+        "value": "Password",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 4,
+      "intent": "Submit the login form",
+      "cliRefSource": "e6",
+      "action": "click",
+      "componentCandidate": "LoginFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#login_button_container"
+        },
+        "strategy": "getByRole",
+        "role": "button",
+        "value": "Login",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 5,
+      "intent": "Add Sauce Labs Backpack to the shopping cart scoped by product card",
+      "cliRefSource": "e14",
+      "action": "click",
+      "inputDataRef": "ProductBuilder.backpack().name",
+      "componentCandidate": "InventoryListComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "getByTestId",
+          "value": "inventory-item"
+        },
+        "strategy": "getByRole",
+        "role": "button",
+        "value": "Add to cart",
+        "nameExact": true
+      }
+    }
+  ],
+  "networkContracts": [
+    {
+      "urlPattern": "https://www.saucedemo.com/**",
+      "method": "GET",
+      "expectedStatus": 200
+    }
+  ],
+  "expectedStates": [
+    {
+      "description": "Inventory header displays Products title after authentication",
+      "assertionType": "toHaveText",
+      "targetComponent": "inventoryPage.header",
+      "targetProperty": "pageTitle",
+      "expectedValueRef": "ProductBuilder.catalogTitle()"
+    },
+    {
+      "description": "Inventory catalog renders all 6 items",
+      "assertionType": "toHaveCount",
+      "targetComponent": "inventoryPage.catalog",
+      "targetProperty": "items",
+      "expectedValueRef": "ProductBuilder.expectedCatalogCount()"
+    },
+    {
+      "description": "Shopping cart badge increments to 1 after adding backpack",
+      "assertionType": "toHaveText",
+      "targetComponent": "inventoryPage.header",
+      "targetProperty": "cartBadge",
+      "expectedValueRef": "ProductBuilder.singleItemBadgeCount()"
+    }
+  ]
+}
