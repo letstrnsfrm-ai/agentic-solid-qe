@@ -1,9 +1,12 @@
 ---
 name: 02-solid-architect
-description: Compiles JSON Session Tapes into a SOLID Playwright TypeScript suite. Audits existing classes, scaffolds atomic Components, Pages, Data Builders, and Fixtures, and runs verification gates.
+description: Compiles JSON Session Tapes into a SOLID Playwright TypeScript suite. Invoke with /02-solid-architect to auto-detect uncompiled Session Tapes, scaffold atomic Components, Pages, Data Builders, and Fixtures, and run npm run verify.
 ---
 
 # Skill 02: SOLID Playwright Architect
+
+## 0. Zero-Prompt Auto-Start (When Invoked as `/02-solid-architect`)
+When invoked without arguments, **immediately run `npm run coverage:gaps`**, select the latest uncompiled Session Tape in `.exploratory/tapes/*.json`, and execute Steps 1–3 below automatically.
 
 ## 1. Validation & De-duplication Audit (FR-3.1)
 1. Run `npm run validate:tapes` to verify `.exploratory/tapes/*.json`.

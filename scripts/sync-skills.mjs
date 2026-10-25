@@ -44,6 +44,8 @@ const coreEnginePaths = [
   '.agents/domain/session-tape.schema.json',
   'AGENTS.md',
   '.github/copilot-instructions.md',
+  '.github/prompts',
+  '.claude/commands',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',
   'scripts/validate-tapes.mjs',

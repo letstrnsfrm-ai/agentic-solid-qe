@@ -1,0 +1,5 @@
+---
+mode: agent
+description: Compile recorded Session Tapes (.exploratory/tapes/*.json) into SOLID Playwright TypeScript specs
+---
+Activate `.agents/skills/02-solid-architect/SKILL.md` and execute its **Zero-Prompt Auto-Start** workflow (`npm run coverage:gaps` ➔ `npm run validate:tapes` ➔ audit `src/` for reuse ➔ generate SOLID Components, Pages, Fixtures, Builders, and `.spec.ts` ➔ run `npm run verify`).
