@@ -10,9 +10,9 @@ description: Autonomous exploratory testing and defect triage via @playwright/cl
 2. Pick a charter (`happy-path-baseline`, `boundary-analysis`, `state-interruption`, `chaos-network-500`, `multi-persona-auth`) from `.agents/skills/01-cli-explorer/references/charters.md`.
 
 ## 2. CLI Browser Execution (FR-1.2)
-Run named `@playwright/cli` sessions (`-s=<name>`):
+Run named `@playwright/cli` sessions (`-s=<name>`) in `--headed` mode by default so engineers can watch live and intervene (e.g., MFA/CAPTCHA):
 ```bash
-npx playwright-cli -s=explore open <baseUrl>
+npx playwright-cli -s=explore open <baseUrl> --headed
 npx playwright-cli -s=explore fill <ref> "<value>"
 npx playwright-cli -s=explore click <ref>
 npx playwright-cli -s=explore console error
