@@ -81,28 +81,46 @@ npx playwright test      # Runs the SOLID Playwright test suite
 
 ---
 
-## End-to-End Walkthrough: Explore ➔ Triage ➔ SOLID Spec
+## Step-by-Step Invocation Playbook for Maximum Test Coverage
 
-### Step 1: Autonomous Exploration (`01-cli-explorer`)
-Prompt your IDE agent (Antigravity, Copilot, Claude Code, or Cursor):
-> *"Use `01-cli-explorer` to run the `multi-persona-auth` charter against SauceDemo using `.agents/domain/domain-memory.md`."*
+Use these exact prompts in **Google Antigravity, GitHub Copilot, Claude Code, or Cursor** to systematically drive your suite from 0% to full risk-based coverage.
 
-The agent:
-1. Reads `.agents/domain/domain-memory.md` for personas and invariants.
-2. Runs `npx playwright-cli -s=explore open https://www.saucedemo.com`.
-3. Inspects `.playwright-cli/page-*.yml` snapshots on disk, translating ephemeral refs (`e14`) into hierarchical parent-scoped locators (`#login_button_container` -> `getByPlaceholder('Username')`).
-4. Logs any anomalies to `defects/DEFECT-<timestamp>.md` (see example in [`defects/DEFECT-2026-10-25T12-00-00Z-problem-user-broken-images.md`](./defects/DEFECT-2026-10-25T12-00-00Z-problem-user-broken-images.md)).
-5. Emits a verified Session Tape to [`.exploratory/tapes/saucedemo-login-inventory.json`](./.exploratory/tapes/saucedemo-login-inventory.json).
+### Phase 0: Seed Your Domain Context (Once per project)
+Edit [`.agents/domain/domain-memory.md`](./.agents/domain/domain-memory.md) with your app's `Base URL` and `Global Personas`, or ask the agent:
+> **Prompt:** `"Read .agents/domain/domain-memory.md and update the Base URL to <https://your-app-url> and personas for our application."`
 
-### Step 2: SOLID Test Compilation (`02-solid-architect`)
-Prompt your IDE agent:
-> *"Use `02-solid-architect` to compile `.exploratory/tapes/saucedemo-login-inventory.json` into our SOLID test suite."*
+---
 
-The agent:
-1. Audits `src/components/`, `src/pages/`, `src/data/`, and `src/fixtures/` to prevent duplicate code.
-2. Generates/updates atomic components (`LoginFormComponent`, `InventoryListComponent`, `HeaderNavComponent`) exposing action methods and `readonly` semantic `Locator` properties.
-3. Wires dependencies into `src/fixtures/app.fixture.ts` and test data into `src/data/user.builder.ts`.
-4. Runs `npm run verify` until TypeScript, SOLID architecture rules, and headless Playwright tests pass.
+### Cycle 1: P0 Golden Path Discovery & Automation (`happy-path-baseline`)
+Start by letting `01-cli-explorer` analyze your coverage gaps and recommend the highest-risk uncovered core user journeys:
+
+1. **Trigger Gap Analysis & Recon:**
+   > **Prompt:** `"Activate 01-cli-explorer. Run coverage:gaps, open the app in --headed mode, and recommend the Top 3 uncovered P0 Golden Path scenarios."`
+2. **Confirm Scenario to Explore (Checkpoint 1):**
+   > **Prompt:** `"Proceed with Recommendation #1 (<e.g., End-to-End Checkout Flow>). Record the Session Tape and update the domain shard."`
+3. **Confirm SOLID Test Generation (Checkpoint 2):**
+   > **Prompt:** `"Confirmed—invoke 02-solid-architect to compile that Session Tape into our SOLID Playwright suite and run npm run verify."`
+
+---
+
+### Cycle 2: P1 Multi-Persona & Authorization Boundaries (`multi-persona-auth`)
+Once core happy paths are green, lock down access control and role-specific behaviours:
+
+> **Prompt:** `"Use 01-cli-explorer with the multi-persona-auth charter. Compare our personas against protected routes, log any defects to defects/, emit a Session Tape for valid role restrictions, and hand off to 02-solid-architect."`
+
+---
+
+### Cycle 3: P1 Form Validation & Edge Inputs (`boundary-analysis`)
+Target interactive forms (`textbox`, `combobox`, checkout/registration inputs) for negative and boundary coverage:
+
+> **Prompt:** `"Use 01-cli-explorer with the boundary-analysis charter on <Checkout / Registration Page>. Test empty fields, invalid formats, and boundary lengths, then compile the verified validation rules into SOLID specs via 02-solid-architect."`
+
+---
+
+### Cycle 4: P2 Session Resilience & Network Chaos (`state-interruption` & `chaos-network-500`)
+Harden multi-step workflows against browser refreshes, back-button navigation, and API 500 faults:
+
+> **Prompt:** `"Use 01-cli-explorer to run the state-interruption charter on our multi-step flow (reload and go-back mid-transaction) and recommend which resilience checks to codify via 02-solid-architect."`
 
 ---
 
