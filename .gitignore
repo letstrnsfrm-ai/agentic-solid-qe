@@ -4,6 +4,7 @@ playwright-report/
 blob-report/
 playwright/.cache/
 .playwright-cli/
+.auth/
 .env
 .DS_Store
 *.log

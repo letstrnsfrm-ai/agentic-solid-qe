@@ -3,6 +3,7 @@
   "scenarioId": "saucedemo-login-inventory",
   "title": "Standard User Login, Cart Mutation, and Locked-Out User Validation",
   "charter": "happy-path-baseline",
+  "tags": ["@p0", "@smoke", "@auth", "@inventory"],
   "recordedAt": "2026-10-25T12:00:00Z",
   "baseUrl": "https://www.saucedemo.com",
   "persona": {

@@ -3,8 +3,8 @@ import { UserBuilder } from '@data/user.builder';
 import { ProductBuilder } from '@data/product.builder';
 import { CheckoutBuilder } from '@data/checkout.builder';
 
-test.describe('Swag Labs End-to-End Checkout (Compiled from Session Tape: saucedemo-e2e-checkout)', () => {
-  test('Standard persona completes full checkout flow with accurate tax and order confirmation', async ({
+test.describe('Swag Labs End-to-End Checkout [@p0 @smoke @checkout] (Compiled from Session Tape: saucedemo-e2e-checkout)', () => {
+  test('Standard persona completes full checkout flow with accurate tax and order confirmation @p0 @smoke', async ({
     loginPage,
     inventoryPage,
     checkoutPage,

@@ -3,6 +3,7 @@
   "scenarioId": "saucedemo-e2e-checkout",
   "title": "Standard User End-to-End Checkout and Order Confirmation",
   "charter": "happy-path-baseline",
+  "tags": ["@p0", "@smoke", "@checkout", "@regression"],
   "recordedAt": "2026-10-25T14:12:00Z",
   "baseUrl": "https://www.saucedemo.com",
   "persona": {

@@ -57,6 +57,27 @@ for (const file of tapeFiles) {
     errors.push(`[${file}] Invalid charter '${tape.charter}'.`);
   }
 
+  if (tape.tags !== undefined) {
+    if (!Array.isArray(tape.tags) || tape.tags.some((t) => typeof t !== 'string' || !/^@[a-z0-9-]+$/.test(t))) {
+      errors.push(`[${file}] tags must be an array of '@kebab-case' strings (e.g. '@p0', '@smoke').`);
+    }
+  }
+
+  const declaredVars = new Set();
+  if (tape.capturedVariables !== undefined) {
+    if (!Array.isArray(tape.capturedVariables)) {
+      errors.push(`[${file}] capturedVariables must be an array when provided.`);
+    } else {
+      for (const cv of tape.capturedVariables) {
+        if (!cv.name || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(cv.name)) {
+          errors.push(`[${file}] capturedVariables entry has invalid name '${cv.name}'.`);
+        } else {
+          declaredVars.add(cv.name);
+        }
+      }
+    }
+  }
+
   if (!Array.isArray(tape.semanticSteps) || tape.semanticSteps.length === 0) {
     errors.push(`[${file}] semanticSteps must be a non-empty array.`);
   } else {
@@ -72,6 +93,11 @@ for (const file of tapeFiles) {
       if (/^e\d+$/.test(step.locatorContract?.value ?? '')) {
         errors.push(
           `[${file} step #${step.stepIndex}] Ephemeral CLI ref '${step.locatorContract.value}' leaked into locatorContract.value!`
+        );
+      }
+      if (step.capturesVariable && declaredVars.size > 0 && !declaredVars.has(step.capturesVariable)) {
+        errors.push(
+          `[${file} step #${step.stepIndex}] capturesVariable '${step.capturesVariable}' is not declared in root capturedVariables.`
         );
       }
     }

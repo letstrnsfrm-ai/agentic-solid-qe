@@ -2,8 +2,8 @@ import { test, expect } from '@fixtures/app.fixture';
 import { UserBuilder } from '@data/user.builder';
 import { ProductBuilder } from '@data/product.builder';
 
-test.describe('Swag Labs Authentication & Inventory (Compiled from Session Tape: saucedemo-login-inventory)', () => {
-  test('Standard persona authenticates, views full catalog, and mutates cart state', async ({
+test.describe('Swag Labs Authentication & Inventory [@p0 @smoke @auth] (Compiled from Session Tape: saucedemo-login-inventory)', () => {
+  test('Standard persona authenticates, views full catalog, and mutates cart state @p0 @smoke', async ({
     loginPage,
     inventoryPage,
   }) => {
@@ -23,7 +23,7 @@ test.describe('Swag Labs Authentication & Inventory (Compiled from Session Tape:
     await expect(inventoryPage.header.cartBadge).toBeHidden();
   });
 
-  test('Locked-out persona is blocked at login with a dismissible error banner', async ({
+  test('Locked-out persona is blocked at login with a dismissible error banner @p1 @regression', async ({
     loginPage,
   }) => {
     const lockedUser = UserBuilder.lockedOutUser();
@@ -38,7 +38,7 @@ test.describe('Swag Labs Authentication & Inventory (Compiled from Session Tape:
     await expect(loginPage.form.errorBanner).toBeHidden();
   });
 
-  test('Unauthenticated direct navigation to inventory redirects to login error gate', async ({
+  test('Unauthenticated direct navigation to inventory redirects to login error gate @p1 @regression', async ({
     loginPage,
     inventoryPage,
   }) => {

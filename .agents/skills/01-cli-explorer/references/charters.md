@@ -1,53 +1,60 @@
-# Exploratory Testing Charters & Risk Prioritization (`@playwright/cli`)
+# Exploratory Testing Charters, Multi-Oracle Heuristics & Coverage Selection Matrix (`@playwright/cli`)
 
-Use these charter playbooks when executing `01-cli-explorer`. Always run inside a named session (`-s=<charter_name>`).
+Use these playbooks when executing `01-cli-explorer` on unfamiliar or complex multi-page workflows. Always run inside a named session (`-s=<charter_name>`).
 
 ---
 
-## 0. Risk-Based Golden Path Prioritization Matrix
+## 0. Feature-Scoped Recon Mode (Unfamiliar Multi-Page Flows)
 
-When running Step 1 (`npm run coverage:gaps` + live `.playwright-cli/page-*.yml` recon), rank uncovered scenarios using this risk hierarchy before presenting recommendations to the engineer:
+When a Quality Engineer asks to explore a feature they do not know end-to-end yet:
+1. Start at the entry route (or reuse `.auth/<persona>.json` from `00-env-bootstrap`).
+2. Inspect `.playwright-cli/page-*.yml` at each step to map the **Multi-Page State Graph**:
+   - Entry controls, wizard steps (`Step 1` ➔ `Step 2` ➔ `Confirmation`), modals/drawers, and dynamic tables.
+   - Dynamic runtime values generated along the flow (e.g., Order ID, Quote Reference, Calculated Tax/Total) that must be verified on downstream pages (`capturedVariables`).
+   - Network/API requests (`GET`/`POST`/`PUT`/`DELETE`) triggered during page transitions (`networkContracts`).
+
+---
+
+## 1. Multi-Oracle Quality Checks (Executed During Exploration)
+
+While traversing any feature flow, automatically evaluate four quality dimensions:
+1. **Functional & Cross-Page State Integrity:** Do selections/inputs on Page 1 persist accurately on summary/review screens and survive `reload` / `go-back`?
+2. **API & Network Integration Telemetry:** Are background requests returning `2xx` within SLA, or are `4xx`/`5xx` statuses, GraphQL payload errors, or unhandled promise rejections firing (`npx playwright-cli -s=<session> console error`)?
+3. **Boundary & Negative Validation:** How do interactive forms (`textbox`, `combobox`, `spinbutton`) react to empty submissions, invalid formats, or duplicate clicks?
+4. **Semantic & Accessibility (a11y) Readiness:** Do interactive controls in `.playwright-cli/page-*.yml` expose clean ARIA roles and accessible names, or are unlabeled elements creating both usability defects and automation risk?
+
+---
+
+## 2. Risk-Based Prioritization Matrix & Charters
 
 | Priority | Risk Category | Target Charter | Selection Criteria |
 | :--- | :--- | :--- | :--- |
-| **P0 (Critical)** | Uncovered Golden Path Revenue/Core Flows | `happy-path-baseline` | Core user journeys (e.g., Checkout, Payment, Order Submission) visible in the app or domain memory with zero `.spec.ts` coverage. |
-| **P1 (High)** | Authorization & Persona Boundaries | `multi-persona-auth` | Unverified personas in `domain-memory.md` or direct URL access to protected routes. |
-| **P1 (High)** | Form Validation & Edge Inputs | `boundary-analysis` | Interactive forms (`textbox`, `combobox`) lacking negative/boundary test coverage. |
-| **P2 (Medium)** | Session & Navigation Resilience | `state-interruption` | Multi-step flows (cart -> checkout step 1 -> step 2) vulnerable to `reload` / `go-back` state loss. |
-| **P2 (Medium)** | API / Asset Fault Tolerance | `chaos-network-500` | Critical network calls that lack graceful UI error handling under 5xx/timeout faults. |
+| **P0 (Critical)** | Uncovered Golden Path Revenue/Core Flows | `happy-path-baseline` | Multi-page core business journeys (e.g., Checkout, Onboarding, Order Submission) with zero `.spec.ts` coverage. |
+| **P1 (High)** | Authorization & Persona Boundaries | `multi-persona-auth` | Role-based access boundaries or unauthenticated direct route access. |
+| **P1 (High)** | Form Validation & Edge Inputs | `boundary-analysis` | Interactive multi-step forms lacking negative/boundary validation coverage. |
+| **P2 (Medium)** | Session & Navigation Resilience | `state-interruption` | Multi-page wizards vulnerable to `reload` / `go-back` state loss or duplicate submission. |
+| **P2 (Medium)** | API / Asset Fault Tolerance | `chaos-network-500` | Critical API transitions lacking graceful fallback UI under `5xx`/timeout faults. |
 
 ---
 
-## 1. `happy-path-baseline`
-- **Goal:** Verify core business workflows end-to-end and record a baseline Session Tape for `02-solid-architect`.
-- **Execution:**
-  1. Authenticate using the primary persona from `domain-memory.md`.
-  2. Complete the core transaction while verifying zero console errors (`npx playwright-cli -s=baseline console error`).
-  3. Record all parent scopes and semantic locators into `.exploratory/tapes/<scenario>.json`.
+## 3. Checkpoint 2: Post-Exploration Session Debrief & Coverage Selection Matrix
 
-## 2. `boundary-analysis`
-- **Goal:** Probe input validation limits, empty submissions, whitespace strings, SQL/XSS payloads, and numeric boundaries.
-- **Execution:**
-  1. Identify all `textbox`, `spinbutton`, and `combobox` refs in `.playwright-cli/page-*.yml`.
-  2. Submit empty values, max-length strings, and negative/zero quantities.
-  3. Confirm inline validation banners appear and can be dismissed without page crashes.
+Once feature exploration finishes, present this structured debrief so the Quality Engineer can cherry-pick which flows become permanent CI/CD regression checks:
 
-## 3. `state-interruption`
-- **Goal:** Validate session resilience across browser navigation (`back`, `reload`) and storage mutations.
-- **Execution:**
-  1. Progress halfway through a multi-step flow (e.g., items in cart or checkout step 1).
-  2. Execute `npx playwright-cli -s=state reload` and `npx playwright-cli -s=state go-back`.
-  3. Verify state persistence (e.g., cart badge count remains intact, no duplicate submissions).
+### A. Discovered Multi-Page Flow Map
+- **Routes Traversed:** `/route-a` ➔ `/route-b` ➔ `/route-c`
+- **Key Components & Dynamic State:** `<ComponentCandidates>` + `<capturedVariables>`
+- **API Contracts Observed:** `<METHOD> <urlPattern> (<status>)`
 
-## 4. `chaos-network-500`
-- **Goal:** Verify graceful UI degradation when backend endpoints fail or time out.
-- **Execution:**
-  1. Intercept target API or asset patterns via CLI routing/network controls.
-  2. Trigger the UI action and inspect `npx playwright-cli -s=chaos console error` and network logs.
-  3. Ensure the application displays a user-facing fallback state rather than an unhandled white screen.
+### B. Defects & Observations Logged
+- List any bugs written to `defects/DEFECT-<timestamp>.md` and quirks appended to `.agents/domain/shards/<feature>.md`.
 
-## 5. `multi-persona-auth`
-- **Goal:** Verify authorization boundaries and persona-specific UI restrictions.
-- **Execution:**
-  1. Run parallel named sessions (`-s=standard`, `-s=locked_out`, `-s=problem`).
-  2. Compare `.playwright-cli/page-*.yml` trees across personas and test direct URL navigation (`/inventory.html`) without authentication.
+### C. Candidate Regression Coverage Matrix (QE Selection)
+
+| Option # | Priority & Tag | Candidate Scenario ID | Charter Type | Multi-Page Flow & Assertions | Recommendation |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **1** | `@p0 @smoke` | `<feature>-e2e-happy-path` | `happy-path-baseline` | Full multi-page completion + dynamic state verification | **Must Automate (CI Gate)** |
+| **2** | `@p1 @regression` | `<feature>-validation-bounds` | `boundary-analysis` | Negative/empty input guards & error banner dismissal | **Recommended** |
+| **3** | `@p2 @regression` | `<feature>-state-resilience` | `state-interruption` | Mid-wizard reload/back-button state retention | **Optional / Nightly** |
+
+Ask the engineer: *"Which candidate scenario(s) (`1`, `2`, `3`, or `all`) should I emit as Session Tapes and compile into SOLID Playwright specs via `/02-solid-architect`?"*

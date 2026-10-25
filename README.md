@@ -21,28 +21,40 @@ Current AI browser testing tools suffer from two major flaws:
 
 ---
 
-## System Architecture (4 Decoupled Layers)
+## System Architecture (5-Skill Closed-Loop QE Engine)
 
 ```
 agentic-solid-qe/
 ├── .agents/
 │   ├── domain/
-│   │   ├── domain-memory.md           # Layer 3: Living app rules, personas & discovered quirks
+│   │   ├── domain-memory.md           # Hub: Global app config, personas & Shard Router (<=150 lines)
+│   │   ├── shards/                    # Spoke: Feature-scoped routes, API rules & quirks (<=150 lines)
 │   │   └── session-tape.schema.json   # Strict JSON contract between Skill 01 & Skill 02
 │   └── skills/
-│       ├── 01-cli-explorer/           # Layer 1: @playwright/cli Explorer & Defect Triage
-│       │   ├── SKILL.md               # < 500 token routing index (Progressive Disclosure)
-│       │   └── references/            # Exploratory charters & Markdown defect templates
-│       └── 02-solid-architect/        # Layer 2: SOLID Playwright TypeScript Architect
-│           ├── SKILL.md               # < 500 token routing index (Progressive Disclosure)
-│           └── references/            # Canonical SOLID TypeScript patterns
+│       ├── 00-env-bootstrap/          # Skill 00: Auth (storageState) & Unfamiliar App Route Discovery
+│       │   ├── SKILL.md               # < 500 token routing index
+│       │   └── references/            # SSO/MFA auth persistence & app map discovery playbook
+│       ├── 01-cli-explorer/           # Skill 01: Multi-Page Explorer, Triage & Coverage Curator
+│       │   ├── SKILL.md               # < 500 token routing index
+│       │   └── references/            # Multi-oracle charters, Debrief Matrix & defect templates
+│       ├── 02-solid-architect/        # Skill 02: SOLID Playwright TypeScript Architect
+│       │   ├── SKILL.md               # < 500 token routing index
+│       │   └── references/            # Canonical multi-page SOLID TypeScript patterns
+│       ├── 03-drift-healer/           # Skill 03: Live Failure Triage & Self-Healing
+│       │   ├── SKILL.md               # < 500 token routing index
+│       │   └── references/            # Bug vs. UI/Flow Drift differential diagnosis matrix
+│       └── 04-ci-pipeline/            # Skill 04: Regression Tagging & Sharded CI/CD Architect
+│           ├── SKILL.md               # < 500 token routing index
+│           └── references/            # @p0/@smoke/@regression tagging & CI pipeline templates
 ├── .github/
-│   ├── copilot-instructions.md        # Auto-bridges skills for GitHub Copilot
+│   ├── copilot-instructions.md        # Auto-bridges all 5 skills for GitHub Copilot
+│   ├── prompts/                       # Slash prompt triggers (/00 through /04) for Copilot
 │   └── workflows/playwright-ci.yml    # Sharded GitHub Actions pipeline with SOLID gate
+├── .claude/commands/                  # Slash commands (/00 through /04) for Claude Code
 ├── .azure-pipelines/playwright-ci.yml # Sharded Azure DevOps pipeline template
 ├── defects/                           # Structured Markdown bug reports + evidence pointers
 ├── .exploratory/tapes/                # Validated JSON Session Tapes
-├── src/                               # Layer 4: Reference SOLID Playwright Framework
+├── src/                               # Reference SOLID Playwright Framework
 │   ├── contracts/                     # Shared TypeScript interfaces (LSP)
 │   ├── components/                    # Atomic UI components <= 150 lines, zero expect() (SRP)
 │   ├── pages/                         # Composed page workflows, zero expect() (SRP)
@@ -50,9 +62,10 @@ agentic-solid-qe/
 │   └── data/                          # Typed Data Builders — no magic strings in specs (DIP)
 ├── tests/                             # Clean, declarative web-first .spec.ts files
 ├── scripts/
+│   ├── analyze-coverage.mjs           # Coverage gap, shard, auth & tag readiness analyzer
 │   ├── audit-solid.mjs                # Deterministic AST/regex gate enforcing SOLID & token caps
 │   ├── validate-tapes.mjs             # Session Tape JSON schema validator
-│   └── sync-skills.mjs                # Upgrades Core Engine without overwriting domain-memory.md
+│   └── sync-skills.mjs                # Installer & upgrader preserving domain-memory.md
 ├── AGENTS.md                          # Universal entrypoint for Antigravity / Claude / Cursor
 └── playwright.config.ts               # Production config (parallelism, retries, traces)
 ```

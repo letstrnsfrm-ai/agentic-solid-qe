@@ -37,15 +37,22 @@ if (fs.existsSync(domainMemoryPath)) {
 }
 const needsTargetUrlConfig =
   baseUrl.includes('localhost:3000') || baseUrl.includes('your-app-url');
+const savedAuthSessions = walkFiles(path.join(ROOT, '.auth'), '.json').map((f) =>
+  path.relative(ROOT, f)
+);
 
 // 1. Automated Specs & Test Cases
 const specFiles = walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
 const specsWithContent = specFiles.map((f) => {
   const content = fs.readFileSync(f, 'utf8');
   const testTitles = [...content.matchAll(/\btest\s*\(\s*['"`]([^'"`]+)['"`]/g)].map((m) => m[1]);
+  const tags = [...new Set([...content.matchAll(/@[a-z0-9-]+/gi)].map((m) => m[0]))].filter(
+    (t) => !['@playwright', '@fixtures', '@components', '@pages', '@contracts', '@data'].includes(t)
+  );
   return {
     file: path.relative(ROOT, f),
     testCount: testTitles.length,
+    tags,
     tests: testTitles,
     rawContent: content,
   };
@@ -123,12 +130,12 @@ if (uncompiledTapes.length > 0) {
   recommendedNextAction = `Invoke /02-solid-architect to compile uncompiled Session Tape(s): ${uncompiledTapes.join(', ')}`;
 } else if (shards.length === 0 && specsWithContent.length === 0) {
   recommendedNextAction = needsTargetUrlConfig
-    ? `Update Base URL via 'npm run init:app -- --url <https://your-app> --name "<App Name>"' (or edit .agents/domain/domain-memory.md), then invoke /01-cli-explorer.`
-    : `Invoke /01-cli-explorer to open ${baseUrl} in --headed mode and discover Top 3 P0 Golden Path scenarios.`;
+    ? `Invoke /00-env-bootstrap (or run 'npm run init:app -- --url <https://your-app> --name "<App Name>"') to configure Base URL, capture auth state, and discover initial feature shards.`
+    : `Invoke /00-env-bootstrap to capture persona auth state and map unfamiliar app routes, or /01-cli-explorer to explore ${baseUrl} in --headed mode.`;
 } else if (uncoveredShards.length > 0) {
-  recommendedNextAction = `Invoke /01-cli-explorer to record Session Tapes for uncovered domain shard(s): ${uncoveredShards.join(', ')}`;
+  recommendedNextAction = `Invoke /01-cli-explorer to explore and curate Session Tapes for uncovered domain shard(s): ${uncoveredShards.join(', ')}`;
 } else {
-  recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /01-cli-explorer with P1/P2 charters (multi-persona-auth, boundary-analysis, state-interruption) to expand coverage.`;
+  recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /01-cli-explorer for P1/P2 charters, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
 }
 
 const report = {
@@ -136,6 +143,7 @@ const report = {
     appName,
     baseUrl,
     needsTargetUrlConfig,
+    savedAuthSessions,
   },
   domainShards: shards,
   uncoveredShards,
