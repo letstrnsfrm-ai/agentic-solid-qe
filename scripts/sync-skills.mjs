@@ -56,10 +56,15 @@ for (const relPath of coreEnginePaths) {
   });
 }
 
-// 2. Seed domain-memory.md ONLY if it does not already exist in target
+// 2. Seed domain-memory.md & shards ONLY if they do not already exist in target
 copyRecursive(
   path.join(SOURCE_ROOT, '.agents/domain/domain-memory.md'),
   path.join(TARGET_ROOT, '.agents/domain/domain-memory.md'),
+  { overwrite: false }
+);
+copyRecursive(
+  path.join(SOURCE_ROOT, '.agents/domain/shards'),
+  path.join(TARGET_ROOT, '.agents/domain/shards'),
   { overwrite: false }
 );
 

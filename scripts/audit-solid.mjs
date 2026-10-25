@@ -8,6 +8,7 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 const MAX_COMPONENT_LINES = 150;
+const MAX_DOMAIN_LINES = 150;
 const MAX_SKILL_TOKENS = 500;
 
 let violations = [];
@@ -42,6 +43,33 @@ for (const file of skillFiles) {
     violations.push(
       `[NFR Token Budget] ${rel(file)} is ~${estimatedTokens} tokens (max ${MAX_SKILL_TOKENS}). Move detailed templates to references/.`
     );
+  }
+}
+
+// 1b. Audit Domain Memory Scalability (Hub + Shards <= 150 lines each, no unindexed shards)
+const domainIndexFile = path.join(ROOT, '.agents/domain/domain-memory.md');
+const shardFiles = walkFiles(path.join(ROOT, '.agents/domain/shards'), '.md');
+if (fs.existsSync(domainIndexFile)) {
+  const indexContent = fs.readFileSync(domainIndexFile, 'utf8');
+  const indexLines = indexContent.split('\n').length;
+  if (indexLines > MAX_DOMAIN_LINES) {
+    violations.push(
+      `[Domain Memory Cap] ${rel(domainIndexFile)} has ${indexLines} lines (max ${MAX_DOMAIN_LINES}). Move feature details into .agents/domain/shards/*.md.`
+    );
+  }
+  for (const shard of shardFiles) {
+    const shardRel = rel(shard).replace(/\\/g, '/');
+    const shardLines = fs.readFileSync(shard, 'utf8').split('\n').length;
+    if (shardLines > MAX_DOMAIN_LINES) {
+      violations.push(
+        `[Domain Shard Cap] ${shardRel} has ${shardLines} lines (max ${MAX_DOMAIN_LINES}). Compact duplicates or split into sub-feature shards.`
+      );
+    }
+    if (!indexContent.includes(path.basename(shard))) {
+      violations.push(
+        `[Unindexed Domain Shard] ${shardRel} is not referenced in .agents/domain/domain-memory.md.`
+      );
+    }
   }
 }
 
@@ -126,5 +154,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `✅ SOLID Architecture Audit Passed (${skillFiles.length} skills < ${MAX_SKILL_TOKENS} tokens, ${componentFiles.length} components <= ${MAX_COMPONENT_LINES} lines, ${pageFiles.length} pages, ${specFiles.length} specs verified).`
+  `✅ SOLID & Memory Audit Passed (${skillFiles.length} skills < ${MAX_SKILL_TOKENS} tokens, 1 hub + ${shardFiles.length} domain shards <= ${MAX_DOMAIN_LINES} lines, ${componentFiles.length} components <= ${MAX_COMPONENT_LINES} lines, ${pageFiles.length} pages, ${specFiles.length} specs verified).`
 );
