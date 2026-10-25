@@ -13,6 +13,7 @@
     "test:ui": "playwright test --ui",
     "report": "playwright show-report",
     "typecheck": "tsc --noEmit",
+    "coverage:gaps": "node scripts/analyze-coverage.mjs",
     "audit:solid": "node scripts/audit-solid.mjs",
     "validate:tapes": "node scripts/validate-tapes.mjs",
     "verify": "npm run typecheck && npm run audit:solid && npm run validate:tapes && npm test",

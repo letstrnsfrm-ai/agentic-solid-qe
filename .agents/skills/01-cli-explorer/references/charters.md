@@ -1,6 +1,20 @@
-# Exploratory Testing Charters (`@playwright/cli`)
+# Exploratory Testing Charters & Risk Prioritization (`@playwright/cli`)
 
 Use these charter playbooks when executing `01-cli-explorer`. Always run inside a named session (`-s=<charter_name>`).
+
+---
+
+## 0. Risk-Based Golden Path Prioritization Matrix
+
+When running Step 1 (`npm run coverage:gaps` + live `.playwright-cli/page-*.yml` recon), rank uncovered scenarios using this risk hierarchy before presenting recommendations to the engineer:
+
+| Priority | Risk Category | Target Charter | Selection Criteria |
+| :--- | :--- | :--- | :--- |
+| **P0 (Critical)** | Uncovered Golden Path Revenue/Core Flows | `happy-path-baseline` | Core user journeys (e.g., Checkout, Payment, Order Submission) visible in the app or domain memory with zero `.spec.ts` coverage. |
+| **P1 (High)** | Authorization & Persona Boundaries | `multi-persona-auth` | Unverified personas in `domain-memory.md` or direct URL access to protected routes. |
+| **P1 (High)** | Form Validation & Edge Inputs | `boundary-analysis` | Interactive forms (`textbox`, `combobox`) lacking negative/boundary test coverage. |
+| **P2 (Medium)** | Session & Navigation Resilience | `state-interruption` | Multi-step flows (cart -> checkout step 1 -> step 2) vulnerable to `reload` / `go-back` state loss. |
+| **P2 (Medium)** | API / Asset Fault Tolerance | `chaos-network-500` | Critical network calls that lack graceful UI error handling under 5xx/timeout faults. |
 
 ---
 

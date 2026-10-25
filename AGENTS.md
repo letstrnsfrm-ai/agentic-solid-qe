@@ -9,6 +9,12 @@ This repository uses a two-stage, token-efficient Quality Engineering workflow p
 | Explore a feature, run heuristics, triage bugs, update `domain-memory.md`, or record a Session Tape | `01-cli-explorer` | `.agents/skills/01-cli-explorer/SKILL.md` |
 | Generate, refactor, or heal Playwright TypeScript Components, Pages, Fixtures, Data Builders, or `.spec.ts` files | `02-solid-architect` | `.agents/skills/02-solid-architect/SKILL.md` |
 
+## Closed-Loop QE Workflow (Explore ➔ Confirm ➔ Automate)
+
+1. **Gap Analysis & Risk Recommendation (`01-cli-explorer`):** Runs `npm run coverage:gaps`, inspects `domain-memory.md` + live app routes via `@playwright/cli --headed`, and recommends the **Top 3 Uncovered Golden Path / High-Risk Scenarios** to the engineer.
+2. **Human-Confirmed Exploration (`01-cli-explorer`):** Executes the engineer-approved charter in `--headed` mode, logs defects to `defects/`, updates `.agents/domain/shards/<feature>.md`, and emits a validated `.exploratory/tapes/<scenario>.json`.
+3. **Human-Confirmed SOLID Automation (`02-solid-architect`):** Once the engineer confirms automating the recorded Session Tape, `02-solid-architect` scaffolds/reuses SOLID Components, Pages, Fixtures, and Data Builders, and runs `npm run verify`.
+
 ## Non-Negotiable Repository Guardrails
 
 1. **Always read `.agents/domain/domain-memory.md` first** before opening a browser or generating test code.
