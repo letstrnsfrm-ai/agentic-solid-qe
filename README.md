@@ -116,7 +116,9 @@ Inside **any existing TypeScript/Playwright repository**, run:
 npx github:letstrnsfrm-ai/agentic-solid-qe init
 
 # Upgrade only the Core Engine (.agents/skills, schema, audit scripts) while preserving domain-memory.md & src/:
-npx github:letstrnsfrm-ai/agentic-solid-qe sync
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync
+# Or, if you started from this template:
+npm run upgrade:skills
 ```
 
 ### Option B: Start a Brand-New Repository from the GitHub Template

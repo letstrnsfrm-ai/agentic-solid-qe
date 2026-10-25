@@ -16,7 +16,8 @@
     "audit:solid": "node scripts/audit-solid.mjs",
     "validate:tapes": "node scripts/validate-tapes.mjs",
     "verify": "npm run typecheck && npm run audit:solid && npm run validate:tapes && npm test",
-    "sync:skills": "node scripts/sync-skills.mjs"
+    "sync:skills": "node scripts/sync-skills.mjs",
+    "upgrade:skills": "npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync"
   },
   "keywords": [
     "playwright",
