@@ -8,7 +8,7 @@
     "agentic-solid-qe": "./scripts/sync-skills.mjs"
   },
   "scripts": {
-    "test": "playwright test --project=chromium",
+    "test": "playwright test --project=chromium --pass-with-no-tests",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
     "report": "playwright show-report",
@@ -17,6 +17,7 @@
     "audit:solid": "node scripts/audit-solid.mjs",
     "validate:tapes": "node scripts/validate-tapes.mjs",
     "verify": "npm run typecheck && npm run audit:solid && npm run validate:tapes && npm test",
+    "init:app": "node scripts/sync-skills.mjs init --reset",
     "sync:skills": "node scripts/sync-skills.mjs",
     "upgrade:skills": "npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync"
   },

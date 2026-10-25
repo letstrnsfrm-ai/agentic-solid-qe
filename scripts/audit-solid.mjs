@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Deterministic SOLID & Skill Token Budget Gate (FR-3.2, FR-3.3, Section 6).
- * Zero external runtime dependencies.
+ * App-agnostic: dynamically extracts Data Builder values from src/data/*.builder.ts
+ * to enforce DIP across any consumer application. Zero external runtime dependencies.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -117,29 +118,64 @@ for (const file of pageFiles) {
   }
 }
 
-// 4. Audit Specs (OCP/ISP Fixture injection + DIP Data Builder usage)
+// 4. Dynamically extract domain constants from src/data/*.builder.ts for App-Agnostic DIP auditing
+const builderFiles = walkFiles(path.join(ROOT, 'src/data'), '.builder.ts');
+const dynamicBuilderLiterals = new Map(); // literal -> source builder file
+
+for (const bFile of builderFiles) {
+  const bCode = stripComments(fs.readFileSync(bFile, 'utf8'))
+    .replace(/^\s*import\s+.*$/gm, '')
+    .replace(/\brole\s*:\s*[^,\n}]+/g, '');
+  const stringMatches = bCode.matchAll(/(['"])((?:\\.|(?!\1).)+)\1/g);
+  for (const match of stringMatches) {
+    const val = match[2].trim();
+    if (val.length >= 5) {
+      dynamicBuilderLiterals.set(val, rel(bFile));
+    }
+  }
+}
+
+// 5. Audit Specs (OCP/ISP Fixture injection + App-Agnostic DIP Data Builder & URL rules)
 const specFiles = walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
-const BANNED_SPEC_STRINGS = ['secret_sauce', 'standard_user', 'locked_out_user', 'problem_user'];
 
 for (const file of specFiles) {
   const content = fs.readFileSync(file, 'utf8');
+  const codeWithoutComments = stripComments(content);
 
-  if (/from\s+['"]@playwright\/test['"]/.test(content)) {
+  if (/from\s+['"]@playwright\/test['"]/.test(codeWithoutComments)) {
     violations.push(
       `[OCP/ISP Fixture Rule] ${rel(file)} imports directly from '@playwright/test'. Import { test, expect } from '@fixtures/app.fixture' instead.`
     );
   }
 
-  if (!/from\s+['"]@data\//.test(content) && !/from\s+['"].*\/data\//.test(content)) {
+  if (
+    !/from\s+['"]@data\//.test(codeWithoutComments) &&
+    !/from\s+['"].*\/data\//.test(codeWithoutComments)
+  ) {
     violations.push(
       `[DIP Data Builder Rule] ${rel(file)} does not import any Data Builder from src/data/.`
     );
   }
 
-  for (const magic of BANNED_SPEC_STRINGS) {
-    if (content.includes(magic)) {
+  // Strip import lines and test/describe title strings before checking spec body literals
+  const specBodyOnly = codeWithoutComments
+    .replace(/^\s*import\s+.*$/gm, '')
+    .replace(/\btest(?:\.describe)?\s*\(\s*(['"`])(?:\\.|(?!\1).)*\1/g, 'test(');
+
+  if (/['"`]https?:\/\/[^'"`]+['"`]/.test(specBodyOnly)) {
+    violations.push(
+      `[DIP Hardcoded URL Ban] ${rel(file)} contains a hardcoded http(s):// URL. Use baseURL via Page objects or Data Builders.`
+    );
+  }
+
+  const specLiterals = new Set(
+    [...specBodyOnly.matchAll(/(['"`])((?:\\.|(?!\1).)+)\1/g)].map((m) => m[2].trim())
+  );
+
+  for (const [builderVal, sourceBuilder] of dynamicBuilderLiterals.entries()) {
+    if (specLiterals.has(builderVal)) {
       violations.push(
-        `[DIP Magic String Ban] ${rel(file)} contains hardcoded credential '${magic}'. Use UserBuilder instead.`
+        `[DIP Magic String Ban] ${rel(file)} hardcodes '${builderVal}' which is already defined in ${sourceBuilder}. Consume the Data Builder method instead.`
       );
     }
   }
@@ -154,5 +190,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `✅ SOLID & Memory Audit Passed (${skillFiles.length} skills < ${MAX_SKILL_TOKENS} tokens, 1 hub + ${shardFiles.length} domain shards <= ${MAX_DOMAIN_LINES} lines, ${componentFiles.length} components <= ${MAX_COMPONENT_LINES} lines, ${pageFiles.length} pages, ${specFiles.length} specs verified).`
+  `✅ SOLID & Memory Audit Passed (${skillFiles.length} skills < ${MAX_SKILL_TOKENS} tokens, 1 hub + ${shardFiles.length} domain shards <= ${MAX_DOMAIN_LINES} lines, ${componentFiles.length} components <= ${MAX_COMPONENT_LINES} lines, ${pageFiles.length} pages, ${specFiles.length} specs verified against ${dynamicBuilderLiterals.size} Data Builder literals).`
 );

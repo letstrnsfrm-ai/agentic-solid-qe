@@ -86,7 +86,11 @@ npx playwright test      # Runs the SOLID Playwright test suite
 Use these exact prompts in **Google Antigravity, GitHub Copilot, Claude Code, or Cursor** to systematically drive your suite from 0% to full risk-based coverage.
 
 ### Phase 0: Seed Your Domain Context (Once per project)
-Edit [`.agents/domain/domain-memory.md`](./.agents/domain/domain-memory.md) with your app's `Base URL` and `Global Personas`, or ask the agent:
+Run the one-command initializer to point the framework at your application (this resets demo files if you cloned the template, updates `playwright.config.ts`, and seeds `.agents/domain/domain-memory.md`):
+```bash
+npm run init:app -- --url https://your-app-url.com --name "Your App Name"
+```
+Or ask the agent directly:
 > **Prompt:** `"Read .agents/domain/domain-memory.md and update the Base URL to <https://your-app-url> and personas for our application."`
 
 ---
@@ -130,8 +134,11 @@ Harden multi-step workflows against browser refreshes, back-button navigation, a
 Inside **any existing TypeScript/Playwright repository**, run:
 
 ```bash
-# Scaffold skills, domain-memory.md, and starter SOLID directories (never overwrites existing files):
-npx github:letstrnsfrm-ai/agentic-solid-qe init
+# Scaffold a clean, app-agnostic SOLID skeleton, merge package.json scripts & tsconfig @* aliases, and configure Base URL:
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --url https://your-app-url.com --name "Your App"
+
+# (Optional) Include the SauceDemo reference suite when initializing:
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --demo
 
 # Upgrade only the Core Engine (.agents/skills, schema, audit scripts) while preserving domain-memory.md & src/:
 npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync
@@ -146,6 +153,12 @@ gh repo create my-app-e2e --template letstrnsfrm-ai/agentic-solid-qe --public --
 cd my-app-e2e
 npm install
 npx playwright install chromium
+
+# Verify the pre-loaded SauceDemo reference suite:
+npm run verify
+
+# Reset the repo to a clean, app-agnostic SOLID skeleton pointed at your own app:
+npm run init:app -- --url https://your-app-url.com --name "Your App"
 npm run verify
 ```
 
