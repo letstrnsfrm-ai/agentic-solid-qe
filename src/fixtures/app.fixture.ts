@@ -1,6 +1,7 @@
 import { test as base, expect } from '@playwright/test';
 import { LoginPage } from '@pages/login.page';
 import { InventoryPage } from '@pages/inventory.page';
+import { CheckoutPage } from '@pages/checkout.page';
 
 /**
  * Segregated Fixture Contract (OCP & ISP).
@@ -9,6 +10,7 @@ import { InventoryPage } from '@pages/inventory.page';
 export interface AppFixtures {
   loginPage: LoginPage;
   inventoryPage: InventoryPage;
+  checkoutPage: CheckoutPage;
 }
 
 export const test = base.extend<AppFixtures>({
@@ -17,6 +19,9 @@ export const test = base.extend<AppFixtures>({
   },
   inventoryPage: async ({ page }, use) => {
     await use(new InventoryPage(page));
+  },
+  checkoutPage: async ({ page }, use) => {
+    await use(new CheckoutPage(page));
   },
 });
 

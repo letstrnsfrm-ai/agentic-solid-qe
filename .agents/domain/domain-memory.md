@@ -32,6 +32,7 @@
 | :--- | :--- | :--- | :--- |
 | **Authentication & Access Control** | `/` | `.agents/domain/shards/auth.md` | Login form locators, error banner rules, unauthenticated route guards. |
 | **Inventory & Shopping Cart** | `/inventory.html`, `/cart.html` | `.agents/domain/shards/inventory-cart.md` | 6-item catalog, card parent-scoping rules, sorting, cart badge sync. |
+| **Checkout & Order Completion** | `/checkout-step-one.html`, `/checkout-step-two.html`, `/checkout-complete.html` | `.agents/domain/shards/checkout.md` | Customer info form, tax/total calculation overview, order confirmation. |
 
 ---
 

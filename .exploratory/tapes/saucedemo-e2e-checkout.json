@@ -1,0 +1,237 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "saucedemo-e2e-checkout",
+  "title": "Standard User End-to-End Checkout and Order Confirmation",
+  "charter": "happy-path-baseline",
+  "recordedAt": "2026-10-25T14:12:00Z",
+  "baseUrl": "https://www.saucedemo.com",
+  "persona": {
+    "role": "standard",
+    "dataBuilderRef": "UserBuilder.standardUser"
+  },
+  "preconditions": [
+    "Application is reachable at https://www.saucedemo.com",
+    "Standard user credentials and customer checkout profile exist in src/data/"
+  ],
+  "semanticSteps": [
+    {
+      "stepIndex": 1,
+      "intent": "Open Swag Labs login page",
+      "action": "goto",
+      "componentCandidate": "LoginPage",
+      "locatorContract": {
+        "strategy": "url",
+        "value": "/"
+      }
+    },
+    {
+      "stepIndex": 2,
+      "intent": "Authenticate as standard_user",
+      "cliRefSource": "e11",
+      "action": "fill",
+      "inputDataRef": "UserBuilder.standardUser().username",
+      "componentCandidate": "LoginFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#login_button_container"
+        },
+        "strategy": "getByPlaceholder",
+        "value": "Username",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 3,
+      "intent": "Enter standard_user password",
+      "cliRefSource": "e13",
+      "action": "fill",
+      "inputDataRef": "UserBuilder.standardUser().password",
+      "componentCandidate": "LoginFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#login_button_container"
+        },
+        "strategy": "getByPlaceholder",
+        "value": "Password",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 4,
+      "intent": "Submit login credentials",
+      "cliRefSource": "e15",
+      "action": "click",
+      "componentCandidate": "LoginFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#login_button_container"
+        },
+        "strategy": "getByRole",
+        "role": "button",
+        "value": "Login",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 5,
+      "intent": "Add Sauce Labs Backpack to cart",
+      "cliRefSource": "e53",
+      "action": "click",
+      "inputDataRef": "ProductBuilder.backpack().name",
+      "componentCandidate": "InventoryListComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "getByTestId",
+          "value": "inventory-item"
+        },
+        "strategy": "getByRole",
+        "role": "button",
+        "value": "Add to cart",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 6,
+      "intent": "Open shopping cart view",
+      "cliRefSource": "e123",
+      "action": "click",
+      "componentCandidate": "HeaderNavComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#header_container"
+        },
+        "strategy": "getByTestId",
+        "value": "shopping-cart-link"
+      }
+    },
+    {
+      "stepIndex": 7,
+      "intent": "Proceed from cart to Checkout Step One",
+      "cliRefSource": "e156",
+      "action": "click",
+      "componentCandidate": "CartPage",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#cart_contents_container"
+        },
+        "strategy": "getByRole",
+        "role": "button",
+        "value": "Checkout",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 8,
+      "intent": "Fill customer First Name",
+      "cliRefSource": "e185",
+      "action": "fill",
+      "inputDataRef": "CheckoutBuilder.defaultCustomer().firstName",
+      "componentCandidate": "CheckoutFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#checkout_info_container"
+        },
+        "strategy": "getByPlaceholder",
+        "value": "First Name",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 9,
+      "intent": "Fill customer Last Name",
+      "cliRefSource": "e187",
+      "action": "fill",
+      "inputDataRef": "CheckoutBuilder.defaultCustomer().lastName",
+      "componentCandidate": "CheckoutFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#checkout_info_container"
+        },
+        "strategy": "getByPlaceholder",
+        "value": "Last Name",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 10,
+      "intent": "Fill customer Zip/Postal Code",
+      "cliRefSource": "e189",
+      "action": "fill",
+      "inputDataRef": "CheckoutBuilder.defaultCustomer().postalCode",
+      "componentCandidate": "CheckoutFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#checkout_info_container"
+        },
+        "strategy": "getByPlaceholder",
+        "value": "Zip/Postal Code",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 11,
+      "intent": "Continue to Checkout Step Two Overview",
+      "cliRefSource": "e193",
+      "action": "click",
+      "componentCandidate": "CheckoutFormComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#checkout_info_container"
+        },
+        "strategy": "getByRole",
+        "role": "button",
+        "value": "Continue",
+        "nameExact": true
+      }
+    },
+    {
+      "stepIndex": 12,
+      "intent": "Finish checkout order on Overview screen",
+      "cliRefSource": "e241",
+      "action": "click",
+      "componentCandidate": "CheckoutSummaryComponent",
+      "locatorContract": {
+        "parentScope": {
+          "strategy": "locator",
+          "value": "#checkout_summary_container"
+        },
+        "strategy": "getByRole",
+        "role": "button",
+        "value": "Finish",
+        "nameExact": true
+      }
+    }
+  ],
+  "networkContracts": [
+    {
+      "urlPattern": "https://www.saucedemo.com/**",
+      "method": "GET",
+      "expectedStatus": 200
+    }
+  ],
+  "expectedStates": [
+    {
+      "description": "Checkout Overview displays calculated total with tax ($32.39)",
+      "assertionType": "toContainText",
+      "targetComponent": "checkoutPage.summary",
+      "targetProperty": "totalLabel",
+      "expectedValueRef": "CheckoutBuilder.backpackOrderSummary().totalText"
+    },
+    {
+      "description": "Order completion screen renders Thank you for your order! heading",
+      "assertionType": "toHaveText",
+      "targetComponent": "checkoutPage.complete",
+      "targetProperty": "confirmationHeading",
+      "expectedValueRef": "CheckoutBuilder.confirmationHeading()"
+    }
+  ]
+}
