@@ -9,6 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -16,6 +17,37 @@ const __dirname = path.dirname(__filename);
 const SOURCE_ROOT = path.resolve(__dirname, '..');
 
 const rawArgs = process.argv.slice(2);
+
+if (rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help') {
+  console.log(`
+🧠 Cortex / ASQE — Agentic-SOLID-QE Unified CLI (cortex | asqe | agentic-solid-qe)
+
+Usage:
+  cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo]
+  cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>]
+  cortex migrate <legacy-path> [--name <skill-id>] [--squad <squad>] [--apply]
+  cortex graph                 Compile 3-Tier Federated Brain (.agents/domain/domain-graph.json)
+  cortex gaps                  Run Coverage, Staleness & Traceability Analyzer
+  cortex audit                 Run SOLID, Token Budget & Domain Shard Gate
+`);
+  process.exit(0);
+}
+
+const subcommandDelegateMap = {
+  migrate: 'migrate-skill.mjs',
+  graph: 'build-domain-graph.mjs',
+  gaps: 'analyze-coverage.mjs',
+  audit: 'audit-solid.mjs',
+};
+
+if (rawArgs[0] && subcommandDelegateMap[rawArgs[0]]) {
+  const scriptFile = path.join(__dirname, subcommandDelegateMap[rawArgs[0]]);
+  const res = spawnSync(process.execPath, [scriptFile, ...rawArgs.slice(1)], {
+    stdio: 'inherit',
+  });
+  process.exit(res.status ?? 0);
+}
+
 let command = 'sync';
 let targetArg = '.';
 let appUrl = '';

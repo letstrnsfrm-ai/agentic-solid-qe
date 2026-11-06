@@ -1,6 +1,6 @@
-# Agentic-SOLID-QE (`agentic-solid-qe`)
+# Agentic-SOLID-QE (`agentic-solid-qe` · CLI: `cortex` / `asqe`)
 
-> **Zero-API-key, open-source agent skill framework bridging Autonomous Exploratory Testing (`@playwright/cli`), an Enterprise 3-Tier Organizational Domain Brain, and SOLID Playwright TypeScript Architecture (`@playwright/test`).**
+> **Zero-API-key, open-source agent skill framework bridging Autonomous Exploratory Testing (`@playwright/cli`), an Enterprise 3-Tier Organizational Domain Brain (`cortex`), and SOLID Playwright TypeScript Architecture (`@playwright/test`).**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Playwright CLI](https://img.shields.io/badge/Engine-%40playwright%2Fcli-2EAD33)](https://www.npmjs.com/package/@playwright/cli)
@@ -243,15 +243,16 @@ flowchart TD
 
 ## Quality Gates & Verification Scripts
 
-| Command | Description |
+| Command (`npm run` or `npx cortex` / `npx asqe`) | Description |
 | :--- | :--- |
 | `npm run verify` | **Full Gate:** Runs `typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `playwright test`. |
-| `npm run domain:graph` | Compiles `.agents/domain/domain-graph.json` (routes, squad owners, published capabilities, stale shards). |
-| `npm run coverage:gaps` | Outputs JSON snapshot of uncovered shards, stale shards, uncompiled Session Tapes, and recommended next skill. |
-| `npm run audit:solid` | Enforces `< 500`-token skills, `≤ 150`-line hubs/shards/components, zero `expect()` in `src/`, LSP contracts, and scoped DIP builders. |
+| `npx cortex init --url <url> --name "<App>"` | Initializes or resets a repository with a clean SOLID skeleton (`npm run init:app`). |
+| `npx cortex sync --squad <squad> [--org-brain <path>]` | Scaffolds a Tier 1 Squad Sub-Hub & `src/domains/<squad>/` module or syncs an Org Brain. |
+| `npx cortex migrate <path> [--name <id>] [--apply]` | Analyzes and scaffolds legacy team skills, prompts, and helper scripts (`npm run migrate:skill`). |
+| `npx cortex graph` / `npm run domain:graph` | Compiles `.agents/domain/domain-graph.json` (routes, squad owners, published capabilities, stale shards). |
+| `npx cortex gaps` / `npm run coverage:gaps` | Outputs JSON snapshot of uncovered shards, stale shards, uncompiled Session Tapes, and recommended next skill. |
+| `npx cortex audit` / `npm run audit:solid` | Enforces `< 500`-token skills, `≤ 150`-line hubs/shards/components, zero `expect()` in `src/`, LSP contracts, and scoped DIP builders. |
 | `npm run validate:tapes` | Validates all `.exploratory/tapes/*.json` files against `.agents/domain/session-tape.schema.json`. |
-| `npm run migrate:skill` | Analyzes and scaffolds legacy team skills, prompts, and helper scripts into `< 500`-token skill bundles. |
-| `npm run init:app` | Resets demo artifacts and initializes a clean consumer app configuration (`--url`, `--name`). |
 | `npm run upgrade:skills` | Upgrades core skills and scripts from `github:letstrnsfrm-ai/agentic-solid-qe` while preserving your domain brain. |
 
 ---

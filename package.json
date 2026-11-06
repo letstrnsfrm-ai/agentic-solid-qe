@@ -5,9 +5,13 @@
   "license": "MIT",
   "type": "module",
   "bin": {
+    "cortex": "./scripts/sync-skills.mjs",
+    "asqe": "./scripts/sync-skills.mjs",
     "agentic-solid-qe": "./scripts/sync-skills.mjs"
   },
   "scripts": {
+    "cortex": "node scripts/sync-skills.mjs",
+    "asqe": "node scripts/sync-skills.mjs",
     "test": "playwright test --project=chromium --pass-with-no-tests",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
