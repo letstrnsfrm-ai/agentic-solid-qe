@@ -1,6 +1,6 @@
 # AGENTS.md — Universal Agent Instructions (`agentic-solid-qe`)
 
-This repository uses a five-skill, token-efficient Quality Engineering workflow powered by `@playwright/cli` and `@playwright/test`.
+This repository uses a six-skill, token-efficient Quality Engineering workflow powered by `@playwright/cli` and `@playwright/test`.
 
 ## Skill Routing Table
 
@@ -11,6 +11,7 @@ This repository uses a five-skill, token-efficient Quality Engineering workflow 
 | Compile Session Tapes into SOLID Playwright TypeScript Components, Pages, Fixtures, Data Builders, and `.spec.ts` files | `02-solid-architect` | `.agents/skills/02-solid-architect/SKILL.md` |
 | Diagnose failing `.spec.ts` tests against live deployed environments to separate real regressions from UI/locator drift | `03-drift-healer` | `.agents/skills/03-drift-healer/SKILL.md` |
 | Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and configure sharded CI/CD pipelines | `04-ci-pipeline` | `.agents/skills/04-ci-pipeline/SKILL.md` |
+| Onboard legacy/unorganized team skills, prompts, and helper scripts into `<500`-token `SKILL.md` bundles and 3-Tier Domain Shards | `05-skill-migrator` | `.agents/skills/05-skill-migrator/SKILL.md` |
 
 ## Closed-Loop QE Workflow (Bootstrap ➔ Explore & Curate ➔ Automate ➔ Heal & Run in CI)
 

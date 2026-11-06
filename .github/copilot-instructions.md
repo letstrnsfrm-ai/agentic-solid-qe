@@ -24,3 +24,7 @@ When assisting in this repository, route your workflow through the five core ski
 5. **CI/CD Pipeline & Regression Suite Curation (`04-ci-pipeline`):**
    - Follow `.agents/skills/04-ci-pipeline/SKILL.md`.
    - Ensure specs carry `@p0`/`@smoke`/`@regression` tags and configure sharded CI/CD execution pipelines.
+
+6. **Legacy Skill & Script Onboarding Migrator (`05-skill-migrator`):**
+   - Follow `.agents/skills/05-skill-migrator/SKILL.md` and `.agents/skills/05-skill-migrator/references/migration-starter-guide.md`.
+   - Run `npm run migrate:skill -- <source-path>` to decompose oversized prompts and legacy helper scripts into `<500`-token `SKILL.md` bundles, co-located `scripts/`, `references/`, and 3-Tier Domain Brain shards.
