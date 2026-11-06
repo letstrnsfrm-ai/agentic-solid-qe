@@ -1,10 +1,12 @@
 # Domain Shard: Checkout & Order Completion (`/checkout-step-one.html`, `/checkout-step-two.html`, `/checkout-complete.html`)
 
 > **Parent Index:** `.agents/domain/domain-memory.md` | **Max Lines:** 150
+> **Owner Squad:** `@org/checkout-squad` | **Last Verified:** `2026-11-06`
+> **Published Capabilities:** `CheckoutPage`, `CheckoutFormComponent`, `OrderSummaryComponent`, `CheckoutBuilder`
 
 ---
 
-## 1. Business Invariants
+## 1. Business Invariants & State Transitions
 
 1. **Step One Customer Information (`/checkout-step-one.html`):**
    - Header title renders `Checkout: Your Information`.
@@ -17,7 +19,14 @@
 
 ---
 
-## 2. Discovered Behaviours & Locator Quirks
+## 2. API, Session & Storage Contracts (Cross-Squad Preconditions)
+
+- **Upstream Preconditions:** Requires authenticated session (`@org/identity-squad`) and non-empty `cart-contents` state (`@org/catalog-squad`).
+- **Completion Side Effect:** Submitting `/checkout-step-two.html` clears `window.localStorage['cart-contents']`.
+
+---
+
+## 3. Discovered Behaviours & Locator Quirks
 
 - **[2026-10-25 | 01-cli-explorer]:** On `/cart.html`, the primary progression button is `getByRole('button', { name: 'Checkout', exact: true })` (`[data-test="checkout"]`).
 - **[2026-10-25 | 01-cli-explorer]:** On `/checkout-step-one.html`, the shipping form exposes semantic placeholders `First Name`, `Last Name`, and `Zip/Postal Code` inside `form "Checkout information"` (`#checkout_info_container`), with submit control `getByRole('button', { name: 'Continue', exact: true })`.

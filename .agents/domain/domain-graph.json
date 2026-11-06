@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "2.0.0",
+  "architecture": "3-tier-federated-brain",
+  "targetApp": {
+    "appName": "Swag Labs (SauceDemo Reference Sandbox)",
+    "baseUrl": "https://www.saucedemo.com"
+  },
+  "summary": {
+    "totalDomainHubs": 0,
+    "totalShards": 3,
+    "staleShards": []
+  },
+  "domainHubs": [],
+  "shards": [
+    {
+      "id": "auth",
+      "squad": "global",
+      "path": ".agents/domain/shards/auth.md",
+      "title": "Domain Shard: Authentication & Access Control (`/`)",
+      "routes": [
+        "/",
+        "/inventory.html",
+        "/cart.html"
+      ],
+      "lines": 29,
+      "ownerSquad": "@org/identity-squad",
+      "lastVerified": "2026-11-06",
+      "isStale": false,
+      "publishedCapabilities": [
+        "LoginPage",
+        "LoginFormComponent",
+        "ErrorBannerContract",
+        "UserBuilder"
+      ]
+    },
+    {
+      "id": "checkout",
+      "squad": "global",
+      "path": ".agents/domain/shards/checkout.md",
+      "title": "Domain Shard: Checkout & Order Completion (`/checkout-step-one.html`, `/checkout-step-two.html`, `/checkout-complete.html`)",
+      "routes": [
+        "/checkout-step-one.html",
+        "/checkout-step-two.html",
+        "/checkout-complete.html",
+        "/cart.html"
+      ],
+      "lines": 35,
+      "ownerSquad": "@org/checkout-squad",
+      "lastVerified": "2026-11-06",
+      "isStale": false,
+      "publishedCapabilities": [
+        "CheckoutPage",
+        "CheckoutFormComponent",
+        "OrderSummaryComponent",
+        "CheckoutBuilder"
+      ]
+    },
+    {
+      "id": "inventory-cart",
+      "squad": "global",
+      "path": ".agents/domain/shards/inventory-cart.md",
+      "title": "Domain Shard: Inventory & Shopping Cart (`/inventory.html`, `/cart.html`)",
+      "routes": [
+        "/inventory.html",
+        "/cart.html",
+        "/static/media/sl-404.168b1cce.jpg"
+      ],
+      "lines": 28,
+      "ownerSquad": "@org/catalog-squad",
+      "lastVerified": "2026-11-06",
+      "isStale": false,
+      "publishedCapabilities": [
+        "InventoryPage",
+        "InventoryItemCard",
+        "HeaderCartBadgeComponent",
+        "ProductBuilder"
+      ]
+    }
+  ],
+  "routeIndex": {
+    "/": [
+      ".agents/domain/shards/auth.md"
+    ],
+    "/inventory.html": [
+      ".agents/domain/shards/auth.md",
+      ".agents/domain/shards/inventory-cart.md"
+    ],
+    "/cart.html": [
+      ".agents/domain/shards/auth.md",
+      ".agents/domain/shards/checkout.md",
+      ".agents/domain/shards/inventory-cart.md"
+    ],
+    "/checkout-step-one.html": [
+      ".agents/domain/shards/checkout.md"
+    ],
+    "/checkout-step-two.html": [
+      ".agents/domain/shards/checkout.md"
+    ],
+    "/checkout-complete.html": [
+      ".agents/domain/shards/checkout.md"
+    ],
+    "/static/media/sl-404.168b1cce.jpg": [
+      ".agents/domain/shards/inventory-cart.md"
+    ]
+  },
+  "codeownersRules": []
+}

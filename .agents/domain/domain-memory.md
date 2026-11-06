@@ -1,6 +1,6 @@
-# Domain Memory Index (Global Context & Shard Router)
+# Domain Memory Index (Tier 0 Org Global Context & Federated Router)
 
-> **Scalability Rule (Hub-and-Spoke):** Keep this index file **≤ 150 lines (< 600 tokens)**. Store only global environment config, personas, and the **Feature Shard Index**. Load and append feature-specific rules and discovered quirks inside `.agents/domain/shards/<feature>.md`.
+> **Scalability Rule (3-Tier Federated Brain):** Keep this Tier 0 index **≤ 150 lines (< 600 tokens)**. Store only global environment config, org personas, the **Domain Sub-Hub Index** (`.agents/domain/domains/<squad>/index.md`), and top-level Feature Shards. Machine-readable routing is compiled to `.agents/domain/domain-graph.json` via `npm run domain:graph`.
 
 ---
 
@@ -24,20 +24,20 @@
 
 ---
 
-## 3. Feature Shard Index (Progressive Disclosure)
+## 3. Federated Domain & Feature Shard Index (Progressive Disclosure)
 
-> **Agent Instruction:** Read **only** the shard(s) matching the route or feature under test. When discovering new behaviours, append them to the matching shard (or create a new `.agents/domain/shards/<feature>.md` ≤ 150 lines and register it below).
+> **Agent Instruction:** Inspect `.agents/domain/domain-graph.json` or the table below to load **only** the Domain Sub-Hub (`.agents/domain/domains/<squad>/index.md`) and Feature Shard(s) matching the route or bounded context under test.
 
-| Feature / Domain Area | Routes | Shard Path | Summary |
-| :--- | :--- | :--- | :--- |
-| **Authentication & Access Control** | `/` | `.agents/domain/shards/auth.md` | Login form locators, error banner rules, unauthenticated route guards. |
-| **Inventory & Shopping Cart** | `/inventory.html`, `/cart.html` | `.agents/domain/shards/inventory-cart.md` | 6-item catalog, card parent-scoping rules, sorting, cart badge sync. |
-| **Checkout & Order Completion** | `/checkout-step-one.html`, `/checkout-step-two.html`, `/checkout-complete.html` | `.agents/domain/shards/checkout.md` | Customer info form, tax/total calculation overview, order confirmation. |
+| Bounded Context / Feature | Owner Squad | Routes | Shard / Sub-Hub Path | Published Capabilities & Summary |
+| :--- | :--- | :--- | :--- | :--- |
+| **Authentication & Access Control** | `@org/identity-squad` | `/` | `.agents/domain/shards/auth.md` | `LoginPage`, `ErrorBannerContract`, `session-username` cookie guard. |
+| **Inventory & Shopping Cart** | `@org/catalog-squad` | `/inventory.html`, `/cart.html` | `.agents/domain/shards/inventory-cart.md` | `InventoryPage`, `InventoryItemCard`, `cart-contents` state seeder. |
+| **Checkout & Order Completion** | `@org/checkout-squad` | `/checkout-step-one.html`, `/checkout-step-two.html`, `/checkout-complete.html` | `.agents/domain/shards/checkout.md` | `CheckoutPage`, `CheckoutBuilder`, tax/total invariants. |
 
 ---
 
-## 4. Memory Hygiene & Auto-Sharding Protocol
+## 4. Enterprise Memory Governance & Auto-Sharding Protocol
 
-1. **Line Cap:** Neither `domain-memory.md` nor any `.agents/domain/shards/*.md` file may exceed **150 lines** (enforced by `npm run audit:solid`).
-2. **Deduplication & Compaction:** Before appending to a shard, merge duplicate observations and remove outdated quirks.
-3. **Auto-Splitting:** When a shard exceeds 120 lines, split it into sub-domain shards (e.g., `checkout-shipping.md`, `checkout-payment.md`) and update the table in Section 3.
+1. **Line Cap:** Tier 0 (`domain-memory.md`), Tier 1 (`domains/<squad>/index.md`), and Tier 2 (`shards/*.md`) files must not exceed **150 lines** (enforced by `npm run audit:solid`).
+2. **Provenance & Ownership:** Every shard declares `**Owner Squad:**`, `**Last Verified:** YYYY-MM-DD`, and `**Published Capabilities:**` for cross-squad preconditions and `CODEOWNERS` enforcement.
+3. **3-Tier Promotion:** When an organization scales beyond 10 flat shards, partition by squad under `.agents/domain/domains/<squad>/index.md` + `.agents/domain/domains/<squad>/shards/<feature>.md` and run `npm run domain:graph`.

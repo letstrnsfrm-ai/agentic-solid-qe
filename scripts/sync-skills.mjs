@@ -20,6 +20,8 @@ let command = 'sync';
 let targetArg = '.';
 let appUrl = '';
 let appName = '';
+let squadName = '';
+let orgBrainSource = '';
 let resetDemo = false;
 let includeDemo = false;
 
@@ -38,6 +40,14 @@ for (let i = 0; i < rawArgs.length; i++) {
     appName = rawArgs[++i];
   } else if (arg.startsWith('--name=')) {
     appName = arg.slice('--name='.length);
+  } else if (arg === '--squad' && rawArgs[i + 1]) {
+    squadName = rawArgs[++i];
+  } else if (arg.startsWith('--squad=')) {
+    squadName = arg.slice('--squad='.length);
+  } else if (arg === '--org-brain' && rawArgs[i + 1]) {
+    orgBrainSource = rawArgs[++i];
+  } else if (arg.startsWith('--org-brain=')) {
+    orgBrainSource = arg.slice('--org-brain='.length);
   } else if (!arg.startsWith('-')) {
     positional.push(arg);
   }
@@ -246,10 +256,11 @@ function mergeConsumerPackageJson() {
     'test:ui': 'playwright test --ui',
     report: 'playwright show-report',
     typecheck: 'tsc --noEmit',
+    'domain:graph': 'node scripts/build-domain-graph.mjs',
     'coverage:gaps': 'node scripts/analyze-coverage.mjs',
     'audit:solid': 'node scripts/audit-solid.mjs',
     'validate:tapes': 'node scripts/validate-tapes.mjs',
-    verify: 'npm run typecheck && npm run audit:solid && npm run validate:tapes && npm test',
+    verify: 'npm run typecheck && npm run domain:graph && npm run audit:solid && npm run validate:tapes && npm test',
     'init:app': 'node scripts/sync-skills.mjs init --reset',
     'sync:skills': 'node scripts/sync-skills.mjs',
     'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync',
@@ -311,6 +322,8 @@ function mergeConsumerTsConfig() {
     '@pages/*': ['src/pages/*'],
     '@fixtures/*': ['src/fixtures/*'],
     '@data/*': ['src/data/*'],
+    '@domains/*': ['src/domains/*'],
+    '@shared/*': ['src/shared/*'],
   };
 
   if (!fs.existsSync(tsconfigPath)) {
@@ -373,6 +386,7 @@ const coreEnginePaths = [
   '.github/copilot-instructions.md',
   '.github/prompts',
   '.claude/commands',
+  'scripts/build-domain-graph.mjs',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',
   'scripts/validate-tapes.mjs',
@@ -466,6 +480,73 @@ if (command === 'init') {
       console.log(
         `✨ Upgraded .agents/domain/domain-memory.md with a 'Feature Shard Index' table (existing content preserved).`
       );
+    }
+  }
+}
+
+// Optional: Federated Org Brain sync (--org-brain <path>)
+if (orgBrainSource) {
+  const resolvedBrainRoot = path.resolve(process.cwd(), orgBrainSource);
+  if (fs.existsSync(resolvedBrainRoot)) {
+    for (const sharedRel of [
+      '.agents/domain/domain-memory.md',
+      '.agents/domain/domain-graph.json',
+      'src/contracts',
+      'src/shared',
+    ]) {
+      const srcPath = path.join(resolvedBrainRoot, sharedRel);
+      if (fs.existsSync(srcPath)) {
+        copyRecursive(srcPath, path.join(TARGET_ROOT, sharedRel), { overwrite: true });
+      }
+    }
+    console.log(`🌐 Synced Federated Org Brain from: ${resolvedBrainRoot}`);
+  } else {
+    console.warn(`⚠️  --org-brain path not found: ${resolvedBrainRoot}`);
+  }
+}
+
+// Optional: Scaffold a Tier 1 Squad Domain Sub-Hub & SOLID Module (--squad <squad-name>)
+if (squadName) {
+  const cleanSquad = squadName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const squadHubDir = path.join(TARGET_ROOT, '.agents/domain/domains', cleanSquad);
+  fs.mkdirSync(path.join(squadHubDir, 'shards'), { recursive: true });
+  for (const sub of ['components', 'pages', 'data', 'fixtures']) {
+    fs.mkdirSync(path.join(TARGET_ROOT, 'src/domains', cleanSquad, sub), { recursive: true });
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const hubFile = path.join(squadHubDir, 'index.md');
+  writeFileSafe(
+    hubFile,
+    `# Domain Sub-Hub: ${cleanSquad} (Tier 1 Bounded Context)
+
+> **Parent Index:** \`.agents/domain/domain-memory.md\` | **Max Lines:** 150
+> **Owner Squad:** \`@org/${cleanSquad}-squad\` | **Last Verified:** \`${today}\`
+> **Published Capabilities:** \`${cleanSquad}Fixture\`
+
+---
+
+## 1. Bounded Context & Upstream/Downstream Contracts
+
+- **Owned Routes:** \`/${cleanSquad}\`
+- **Upstream Preconditions:** Global persona session from \`.auth/<persona>.json\`.
+
+---
+
+## 2. Squad Feature Shard Index
+
+| Feature Shard | Routes | Shard Path | Summary |
+| :--- | :--- | :--- | :--- |
+`,
+    { overwrite: false }
+  );
+
+  if (fs.existsSync(targetDomainMemory)) {
+    const mem = fs.readFileSync(targetDomainMemory, 'utf8');
+    const relHub = `.agents/domain/domains/${cleanSquad}/index.md`;
+    if (!mem.includes(relHub)) {
+      const row = `| **${cleanSquad} Domain** | \`@org/${cleanSquad}-squad\` | \`/${cleanSquad}\` | \`${relHub}\` | Tier 1 Squad Sub-Hub |\n`;
+      fs.appendFileSync(targetDomainMemory, row, 'utf8');
+      console.log(`🧭 Registered Tier 1 Squad Sub-Hub in .agents/domain/domain-memory.md: ${relHub}`);
     }
   }
 }

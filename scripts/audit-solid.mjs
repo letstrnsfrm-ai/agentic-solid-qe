@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * Deterministic SOLID & Skill Token Budget Gate (FR-3.2, FR-3.3, Section 6).
- * App-agnostic: dynamically extracts Data Builder values from src/data/*.builder.ts
- * to enforce DIP across any consumer application. Zero external runtime dependencies.
+ * Deterministic SOLID, 3-Tier Federated Brain & Skill Token Budget Gate (FR-3.2, FR-3.3, Section 6).
+ * Supports both single-team flat layout and 100+ engineer Federated Domain layout
+ * (.agents/domain/domains/<squad>/, src/domains/<squad>/, and composed @fixtures/*.fixture).
+ * Zero external runtime dependencies.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -30,7 +31,7 @@ function walkFiles(dir, extFilter) {
 }
 
 function rel(filePath) {
-  return path.relative(ROOT, filePath);
+  return path.relative(ROOT, filePath).replace(/\\/g, '/');
 }
 
 // 1. Audit SKILL.md Token Budget (< 500 tokens per SKILL.md)
@@ -47,19 +48,50 @@ for (const file of skillFiles) {
   }
 }
 
-// 1b. Audit Domain Memory Scalability (Hub + Shards <= 150 lines each, no unindexed shards)
+// 1b. Audit 3-Tier Federated Domain Memory (Tier 0 Hub + Tier 1 Squad Hubs + Tier 2 Shards <= 150 lines)
 const domainIndexFile = path.join(ROOT, '.agents/domain/domain-memory.md');
-const shardFiles = walkFiles(path.join(ROOT, '.agents/domain/shards'), '.md');
+const globalShardFiles = walkFiles(path.join(ROOT, '.agents/domain/shards'), '.md');
+const domainsRoot = path.join(ROOT, '.agents/domain/domains');
+const squadHubFiles = [];
+const squadShardFiles = [];
+
+if (fs.existsSync(domainsRoot)) {
+  for (const entry of fs.readdirSync(domainsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const hubFile = path.join(domainsRoot, entry.name, 'index.md');
+    if (fs.existsSync(hubFile)) squadHubFiles.push(hubFile);
+    squadShardFiles.push(...walkFiles(path.join(domainsRoot, entry.name, 'shards'), '.md'));
+  }
+}
+
 if (fs.existsSync(domainIndexFile)) {
   const indexContent = fs.readFileSync(domainIndexFile, 'utf8');
   const indexLines = indexContent.split('\n').length;
   if (indexLines > MAX_DOMAIN_LINES) {
     violations.push(
-      `[Domain Memory Cap] ${rel(domainIndexFile)} has ${indexLines} lines (max ${MAX_DOMAIN_LINES}). Move feature details into .agents/domain/shards/*.md.`
+      `[Domain Memory Cap] ${rel(domainIndexFile)} has ${indexLines} lines (max ${MAX_DOMAIN_LINES}). Move squad details into .agents/domain/domains/<squad>/index.md.`
     );
   }
-  for (const shard of shardFiles) {
-    const shardRel = rel(shard).replace(/\\/g, '/');
+
+  for (const hub of squadHubFiles) {
+    const hubRel = rel(hub);
+    const hubContent = fs.readFileSync(hub, 'utf8');
+    const hubLines = hubContent.split('\n').length;
+    if (hubLines > MAX_DOMAIN_LINES) {
+      violations.push(
+        `[Domain Sub-Hub Cap] ${hubRel} has ${hubLines} lines (max ${MAX_DOMAIN_LINES}). Split into feature shards.`
+      );
+    }
+    const squadName = path.basename(path.dirname(hub));
+    if (!indexContent.includes(hubRel) && !indexContent.includes(`domains/${squadName}`)) {
+      violations.push(
+        `[Unindexed Domain Sub-Hub] ${hubRel} is not referenced in .agents/domain/domain-memory.md.`
+      );
+    }
+  }
+
+  for (const shard of globalShardFiles) {
+    const shardRel = rel(shard);
     const shardLines = fs.readFileSync(shard, 'utf8').split('\n').length;
     if (shardLines > MAX_DOMAIN_LINES) {
       violations.push(
@@ -72,6 +104,27 @@ if (fs.existsSync(domainIndexFile)) {
       );
     }
   }
+
+  for (const shard of squadShardFiles) {
+    const shardRel = rel(shard);
+    const shardLines = fs.readFileSync(shard, 'utf8').split('\n').length;
+    if (shardLines > MAX_DOMAIN_LINES) {
+      violations.push(
+        `[Domain Shard Cap] ${shardRel} has ${shardLines} lines (max ${MAX_DOMAIN_LINES}). Compact duplicates or split into sub-feature shards.`
+      );
+    }
+    const squadDir = path.dirname(path.dirname(shard));
+    const parentHub = path.join(squadDir, 'index.md');
+    const parentHubContent = fs.existsSync(parentHub) ? fs.readFileSync(parentHub, 'utf8') : '';
+    if (
+      !parentHubContent.includes(path.basename(shard)) &&
+      !indexContent.includes(path.basename(shard))
+    ) {
+      violations.push(
+        `[Unindexed Squad Shard] ${shardRel} is not referenced in ${rel(parentHub)} or .agents/domain/domain-memory.md.`
+      );
+    }
+  }
 }
 
 function stripComments(code) {
@@ -80,8 +133,12 @@ function stripComments(code) {
     .replace(/\/\/.*$/gm, '');
 }
 
-// 2. Audit Components (SRP <= 150 lines, Zero expect(), LSP contract implementation)
-const componentFiles = walkFiles(path.join(ROOT, 'src/components'), '.ts');
+// 2. Audit Components across src/components, src/shared/components, and src/domains/*/components
+const componentFiles = [
+  ...walkFiles(path.join(ROOT, 'src/components'), '.ts'),
+  ...walkFiles(path.join(ROOT, 'src/shared/components'), '.ts'),
+  ...walkFiles(path.join(ROOT, 'src/domains'), '.component.ts'),
+];
 for (const file of componentFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const codeOnly = stripComments(content);
@@ -106,8 +163,11 @@ for (const file of componentFiles) {
   }
 }
 
-// 3. Audit Pages (SRP Zero expect())
-const pageFiles = walkFiles(path.join(ROOT, 'src/pages'), '.ts');
+// 3. Audit Pages across src/pages and src/domains/*/pages (SRP Zero expect())
+const pageFiles = [
+  ...walkFiles(path.join(ROOT, 'src/pages'), '.ts'),
+  ...walkFiles(path.join(ROOT, 'src/domains'), '.page.ts'),
+];
 for (const file of pageFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const codeOnly = stripComments(content);
@@ -118,42 +178,58 @@ for (const file of pageFiles) {
   }
 }
 
-// 4. Dynamically extract domain constants from src/data/*.builder.ts for App-Agnostic DIP auditing
-const builderFiles = walkFiles(path.join(ROOT, 'src/data'), '.builder.ts');
-const dynamicBuilderLiterals = new Map(); // literal -> source builder file
-
-for (const bFile of builderFiles) {
-  const bCode = stripComments(fs.readFileSync(bFile, 'utf8'))
-    .replace(/^\s*import\s+.*$/gm, '')
-    .replace(/\brole\s*:\s*[^,\n}]+/g, '');
-  const stringMatches = bCode.matchAll(/(['"])((?:\\.|(?!\1).)+)\1/g);
-  for (const match of stringMatches) {
-    const val = match[2].trim();
-    if (val.length >= 5) {
-      dynamicBuilderLiterals.set(val, rel(bFile));
+// 4. Extract domain constants from global src/data/*.builder.ts and squad-scoped src/domains/<squad>/data/*.builder.ts
+function extractBuilderLiterals(files) {
+  const map = new Map();
+  for (const bFile of files) {
+    const bCode = stripComments(fs.readFileSync(bFile, 'utf8'))
+      .replace(/^\s*import\s+.*$/gm, '')
+      .replace(/\brole\s*:\s*[^,\n}]+/g, '');
+    const stringMatches = bCode.matchAll(/(['"])((?:\\.|(?!\1).)+)\1/g);
+    for (const match of stringMatches) {
+      const val = match[2].trim();
+      if (val.length >= 5) {
+        map.set(val, rel(bFile));
+      }
     }
+  }
+  return map;
+}
+
+const globalBuilderFiles = walkFiles(path.join(ROOT, 'src/data'), '.builder.ts');
+const globalBuilderLiterals = extractBuilderLiterals(globalBuilderFiles);
+
+const squadBuilderLiterals = new Map(); // squad -> Map(literal -> sourceFile)
+const srcDomainsDir = path.join(ROOT, 'src/domains');
+if (fs.existsSync(srcDomainsDir)) {
+  for (const entry of fs.readdirSync(srcDomainsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const sFiles = walkFiles(path.join(srcDomainsDir, entry.name, 'data'), '.builder.ts');
+    squadBuilderLiterals.set(entry.name, extractBuilderLiterals(sFiles));
   }
 }
 
-// 5. Audit Specs (OCP/ISP Fixture injection + App-Agnostic DIP Data Builder & URL rules)
+// 5. Audit Specs (OCP/ISP Fixture injection + Scoped DIP Data Builder & URL rules)
 const specFiles = walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
 
 for (const file of specFiles) {
+  const specRel = rel(file);
   const content = fs.readFileSync(file, 'utf8');
   const codeWithoutComments = stripComments(content);
 
   if (/from\s+['"]@playwright\/test['"]/.test(codeWithoutComments)) {
     violations.push(
-      `[OCP/ISP Fixture Rule] ${rel(file)} imports directly from '@playwright/test'. Import { test, expect } from '@fixtures/app.fixture' instead.`
+      `[OCP/ISP Fixture Rule] ${specRel} imports directly from '@playwright/test'. Import { test, expect } from '@fixtures/app.fixture' (or a mergeTests domain fixture) instead.`
     );
   }
 
   if (
     !/from\s+['"]@data\//.test(codeWithoutComments) &&
+    !/from\s+['"]@domains\/[^'"]+\/data\//.test(codeWithoutComments) &&
     !/from\s+['"].*\/data\//.test(codeWithoutComments)
   ) {
     violations.push(
-      `[DIP Data Builder Rule] ${rel(file)} does not import any Data Builder from src/data/.`
+      `[DIP Data Builder Rule] ${specRel} does not import any Data Builder from src/data/ or src/domains/<squad>/data/.`
     );
   }
 
@@ -164,7 +240,7 @@ for (const file of specFiles) {
 
   if (/['"`]https?:\/\/[^'"`]+['"`]/.test(specBodyOnly)) {
     violations.push(
-      `[DIP Hardcoded URL Ban] ${rel(file)} contains a hardcoded http(s):// URL. Use baseURL via Page objects or Data Builders.`
+      `[DIP Hardcoded URL Ban] ${specRel} contains a hardcoded http(s):// URL. Use baseURL via Page objects or Data Builders.`
     );
   }
 
@@ -172,10 +248,19 @@ for (const file of specFiles) {
     [...specBodyOnly.matchAll(/(['"`])((?:\\.|(?!\1).)+)\1/g)].map((m) => m[2].trim())
   );
 
-  for (const [builderVal, sourceBuilder] of dynamicBuilderLiterals.entries()) {
+  // Check global builder literals + matching squad builder literals (if spec is inside tests/<squad>/)
+  const applicableLiterals = new Map(globalBuilderLiterals);
+  const specParts = specRel.split('/');
+  if (specParts.length > 2 && squadBuilderLiterals.has(specParts[1])) {
+    for (const [k, v] of squadBuilderLiterals.get(specParts[1]).entries()) {
+      applicableLiterals.set(k, v);
+    }
+  }
+
+  for (const [builderVal, sourceBuilder] of applicableLiterals.entries()) {
     if (specLiterals.has(builderVal)) {
       violations.push(
-        `[DIP Magic String Ban] ${rel(file)} hardcodes '${builderVal}' which is already defined in ${sourceBuilder}. Consume the Data Builder method instead.`
+        `[DIP Magic String Ban] ${specRel} hardcodes '${builderVal}' which is already defined in ${sourceBuilder}. Consume the Data Builder method instead.`
       );
     }
   }
@@ -189,6 +274,7 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
+const totalShards = globalShardFiles.length + squadShardFiles.length;
 console.log(
-  `✅ SOLID & Memory Audit Passed (${skillFiles.length} skills < ${MAX_SKILL_TOKENS} tokens, 1 hub + ${shardFiles.length} domain shards <= ${MAX_DOMAIN_LINES} lines, ${componentFiles.length} components <= ${MAX_COMPONENT_LINES} lines, ${pageFiles.length} pages, ${specFiles.length} specs verified against ${dynamicBuilderLiterals.size} Data Builder literals).`
+  `✅ SOLID & Federated Brain Audit Passed (${skillFiles.length} skills < ${MAX_SKILL_TOKENS} tokens, 1 root hub + ${squadHubFiles.length} domain hub(s) + ${totalShards} shard(s) <= ${MAX_DOMAIN_LINES} lines, ${componentFiles.length} components <= ${MAX_COMPONENT_LINES} lines, ${pageFiles.length} pages, ${specFiles.length} specs verified against ${globalBuilderLiterals.size} global Data Builder literals).`
 );
