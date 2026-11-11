@@ -96,6 +96,34 @@ const TARGET_ROOT = path.resolve(process.cwd(), targetArg);
 const resolvedUrl = appUrl || process.env.BASE_URL || 'http://localhost:3000';
 const resolvedAppName = appName || 'Target Web Application';
 
+function assertSafeHttpUrl(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    console.error(`❌ Invalid URL '${rawUrl}'. Must be a valid http:// or https:// URL.`);
+    process.exit(1);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    console.error(`❌ Unsupported URL protocol '${parsed.protocol}' in '${rawUrl}'. Only http: and https: are allowed.`);
+    process.exit(1);
+  }
+  return parsed.toString().replace(/\/$/, '') || rawUrl;
+}
+
+function assertSafeSlug(value, flagName) {
+  if (!/^[a-z0-9][a-z0-9-]*$/i.test(value) || value.includes('..')) {
+    console.error(`❌ Invalid ${flagName} '${value}'. Must be a kebab-case identifier ([a-z0-9-]) with no path separators.`);
+    process.exit(1);
+  }
+  return value.toLowerCase();
+}
+
+assertSafeHttpUrl(resolvedUrl);
+if (squadName) {
+  squadName = assertSafeSlug(squadName, '--squad');
+}
+
 function rel(dest) {
   return path.relative(TARGET_ROOT, dest) || '.';
 }
@@ -241,8 +269,13 @@ export interface ErrorBannerContract extends IdentifiableComponent {
   readonly expectedErrorBanner?: string;
 }
 
-const DEFAULT_USERNAME = process.env.TEST_USERNAME ?? 'test.user@example.com';
-const DEFAULT_PASSWORD = process.env.TEST_PASSWORD ?? 'ChangeMe123!';
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(\`Missing required environment variable: \${name}. Set it in .env or CI secrets.\`);
+  }
+  return value;
+}
 
 /**
  * Typed Data Builder (DIP) centralizing persona credentials and expected validation messages.
@@ -252,8 +285,8 @@ export class UserBuilder {
   static standardUser(): UserPersona {
     return {
       role: 'standard',
-      username: DEFAULT_USERNAME,
-      password: DEFAULT_PASSWORD,
+      username: process.env.TEST_USERNAME ?? 'test.user@example.com',
+      password: requireEnv('TEST_PASSWORD'),
     };
   }
 }
@@ -296,13 +329,13 @@ function mergeConsumerPackageJson() {
     verify: 'npm run typecheck && npm run domain:graph && npm run audit:solid && npm run validate:tapes && npm test',
     'init:app': 'node scripts/sync-skills.mjs init --reset',
     'sync:skills': 'node scripts/sync-skills.mjs',
-    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync',
+    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.2.0 sync',
   };
   const requiredDevDeps = {
-    '@playwright/cli': '^0.1.0',
-    '@playwright/test': '^1.51.0',
-    '@types/node': '^22.10.0',
-    typescript: '^5.7.0',
+    '@playwright/cli': '0.1.22',
+    '@playwright/test': '1.64.1',
+    '@types/node': '22.20.5',
+    typescript: '5.9.3',
   };
 
   if (!fs.existsSync(pkgPath)) {
@@ -390,11 +423,12 @@ function mergeConsumerTsConfig() {
 
 function configurePlaywrightConfig() {
   const pwConfigPath = path.join(TARGET_ROOT, 'playwright.config.ts');
+  const serializedUrl = JSON.stringify(resolvedUrl);
   if (!fs.existsSync(pwConfigPath)) {
     const templateConfig = fs.readFileSync(path.join(SOURCE_ROOT, 'playwright.config.ts'), 'utf8');
     const customized = templateConfig.replace(
       /baseURL:\s*process\.env\.BASE_URL\s*\|\|\s*['"][^'"]+['"]/,
-      `baseURL: process.env.BASE_URL || '${resolvedUrl}'`
+      `baseURL: process.env.BASE_URL || ${serializedUrl}`
     );
     fs.writeFileSync(pwConfigPath, customized, 'utf8');
     console.log(`🌱 Created: playwright.config.ts (baseURL -> ${resolvedUrl})`);
@@ -402,7 +436,7 @@ function configurePlaywrightConfig() {
     const existing = fs.readFileSync(pwConfigPath, 'utf8');
     const updated = existing.replace(
       /baseURL:\s*process\.env\.BASE_URL\s*\|\|\s*['"][^'"]+['"]/,
-      `baseURL: process.env.BASE_URL || '${resolvedUrl}'`
+      `baseURL: process.env.BASE_URL || ${serializedUrl}`
     );
     if (updated !== existing) {
       fs.writeFileSync(pwConfigPath, updated, 'utf8');

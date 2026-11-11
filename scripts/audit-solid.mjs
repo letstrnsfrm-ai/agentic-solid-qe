@@ -266,6 +266,32 @@ for (const file of specFiles) {
   }
 }
 
+// 6. Audit src/ and tests/ for leaked secret tokens or insecure placeholder passwords
+const SECRET_PATTERNS = [
+  { name: 'GitHub Token', regex: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/ },
+  { name: 'GitHub Fine-Grained PAT', regex: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/ },
+  { name: 'API Secret Key (sk-*)', regex: /\bsk-[A-Za-z0-9_-]{20,}\b/ },
+  { name: 'AWS Access Key ID', regex: /\bAKIA[0-9A-Z]{16}\b/ },
+  { name: 'Private Key Block', regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  { name: 'Raw JWT Bearer Token', regex: /\bBearer\s+eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
+  { name: 'Insecure Default Password Placeholder', regex: /['"`]ChangeMe123!['"`]/ },
+];
+
+const allCodeFiles = [
+  ...walkFiles(path.join(ROOT, 'src'), '.ts'),
+  ...walkFiles(path.join(ROOT, 'tests'), '.ts'),
+];
+for (const codeFile of allCodeFiles) {
+  const codeContent = stripComments(fs.readFileSync(codeFile, 'utf8'));
+  for (const pattern of SECRET_PATTERNS) {
+    if (pattern.regex.test(codeContent)) {
+      violations.push(
+        `[Secret Hygiene Gate] ${rel(codeFile)} contains a ${pattern.name}. Inject sensitive values via environment variables in src/data/*.builder.ts.`
+      );
+    }
+  }
+}
+
 if (violations.length > 0) {
   console.error('\n❌ SOLID Architecture Audit Failed:\n');
   for (const v of violations) {

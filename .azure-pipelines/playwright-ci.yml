@@ -18,6 +18,8 @@ stages:
               versionSpec: '22.x'
           - script: npm ci
             displayName: 'Install dependencies'
+          - script: npm audit --audit-level=high
+            displayName: 'Audit dependencies for high/critical vulnerabilities'
           - script: npm run typecheck && npm run audit:solid && npm run validate:tapes
             displayName: 'Run TypeScript, SOLID Audit & Tape Validator'
 

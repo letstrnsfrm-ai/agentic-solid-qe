@@ -12,6 +12,7 @@
  *   node scripts/generate-release-notes.mjs --output .release-notes.md --json-meta .release-meta.json
  */
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -370,8 +371,8 @@ function generateMarkdown({
   sections.push('');
   sections.push('```bash');
   sections.push('npm run upgrade:skills');
-  sections.push('# or directly via npx:');
-  sections.push(`npx --yes github:${repoSlug} sync`);
+  sections.push('# or directly via npx (pinned to this release tag):');
+  sections.push(`npx --yes github:${repoSlug}#${nextTag} sync`);
   sections.push('```');
   sections.push('');
 
@@ -391,25 +392,44 @@ function generateMarkdown({
   };
 }
 
+function assertValidSha(sha, sourceLabel) {
+  if (!/^[0-9a-f]{40}$/i.test(sha)) {
+    console.error(`❌ Invalid git commit SHA from ${sourceLabel}: '${sha}'. Expected 40-character hex SHA.`);
+    process.exit(1);
+  }
+  return sha;
+}
+
+function resolveSafeRepoOutputPath(targetPath, flagName) {
+  const resolved = path.resolve(ROOT, targetPath);
+  const relToRoot = path.relative(ROOT, resolved);
+  if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
+    console.error(`❌ Invalid ${flagName} path '${targetPath}'. Output path must reside within the repository root.`);
+    process.exit(1);
+  }
+  return resolved;
+}
+
 function parseCliArgs(argv) {
+  const envBefore = process.env.GITHUB_EVENT_BEFORE || null;
   const options = {
     dryRun: false,
     output: null,
     jsonMeta: null,
-    beforeSha: process.env.GITHUB_EVENT_BEFORE || null,
+    beforeSha: envBefore ? assertValidSha(envBefore, 'GITHUB_EVENT_BEFORE') : null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') {
       options.dryRun = true;
     } else if (arg === '--output' && argv[i + 1]) {
-      options.output = argv[i + 1];
+      options.output = resolveSafeRepoOutputPath(argv[i + 1], '--output');
       i += 1;
     } else if (arg === '--json-meta' && argv[i + 1]) {
-      options.jsonMeta = argv[i + 1];
+      options.jsonMeta = resolveSafeRepoOutputPath(argv[i + 1], '--json-meta');
       i += 1;
     } else if (arg === '--before' && argv[i + 1]) {
-      options.beforeSha = argv[i + 1];
+      options.beforeSha = assertValidSha(argv[i + 1], '--before');
       i += 1;
     }
   }
@@ -430,7 +450,7 @@ function main() {
       existingTag: existingHeadTags[0],
     };
     if (options.jsonMeta) {
-      fs.writeFileSync(path.resolve(ROOT, options.jsonMeta), JSON.stringify(meta, null, 2), 'utf8');
+      fs.writeFileSync(options.jsonMeta, JSON.stringify(meta, null, 2), 'utf8');
     }
     if (process.env.GITHUB_OUTPUT) {
       fs.appendFileSync(process.env.GITHUB_OUTPUT, `should_release=false\n`, 'utf8');
@@ -494,7 +514,7 @@ function main() {
   });
 
   if (options.output) {
-    fs.writeFileSync(path.resolve(ROOT, options.output), markdown, 'utf8');
+    fs.writeFileSync(options.output, markdown, 'utf8');
   }
 
   const meta = {
@@ -508,17 +528,19 @@ function main() {
   };
 
   if (options.jsonMeta) {
-    fs.writeFileSync(path.resolve(ROOT, options.jsonMeta), JSON.stringify(meta, null, 2), 'utf8');
+    fs.writeFileSync(options.jsonMeta, JSON.stringify(meta, null, 2), 'utf8');
   }
 
   if (process.env.GITHUB_OUTPUT && !options.dryRun) {
+    const delimiter = `GH_EOF_${randomUUID()}`;
+    const safeTitle = String(releaseTitle).replace(/\r?\n/g, ' ').trim();
     const outputLines = [
       `should_release=true`,
       `next_tag=${nextTag}`,
       `bump_type=${bumpType}`,
-      `release_title<<EOF`,
-      releaseTitle,
-      `EOF`,
+      `release_title<<${delimiter}`,
+      safeTitle,
+      delimiter,
     ];
     fs.appendFileSync(process.env.GITHUB_OUTPUT, `${outputLines.join('\n')}\n`, 'utf8');
   }

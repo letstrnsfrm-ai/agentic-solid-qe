@@ -100,7 +100,26 @@ for (const file of tapeFiles) {
           `[${file} step #${step.stepIndex}] capturesVariable '${step.capturesVariable}' is not declared in root capturedVariables.`
         );
       }
+      const isPasswordTarget =
+        /password|secret|token|api[_-]?key/i.test(step.intent ?? '') ||
+        /password|secret|token|api[_-]?key/i.test(step.locatorContract?.value ?? '');
+      if (step.action === 'fill' && isPasswordTarget && step.inputData !== undefined) {
+        errors.push(
+          `[${file} step #${step.stepIndex}] Raw secret 'inputData' is forbidden on password/secret fields. Use 'inputDataRef' referencing a Data Builder method (e.g. 'UserBuilder.standardUser().password').`
+        );
+      }
     }
+  }
+
+  const rawTapeText = JSON.stringify(tape);
+  if (
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\bAKIA[0-9A-Z]{16}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+eyJ[A-Za-z0-9_-]{10,}\./.test(
+      rawTapeText
+    )
+  ) {
+    errors.push(
+      `[${file}] Session Tape contains a raw credential/token pattern. Reference environment-backed Data Builders via 'inputDataRef' instead.`
+    );
   }
 
   if (!Array.isArray(tape.expectedStates) || tape.expectedStates.length === 0) {

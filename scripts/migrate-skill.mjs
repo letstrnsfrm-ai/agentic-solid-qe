@@ -112,6 +112,23 @@ const rawDoc = primaryDocPath && fs.existsSync(primaryDocPath)
   ? fs.readFileSync(primaryDocPath, 'utf8')
   : '';
 
+function assertSafeSlug(value, flagName) {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(value) || value.includes('..')) {
+    console.error(
+      `❌ Invalid ${flagName} '${value}'. Must be a lowercase kebab-case identifier ([a-z0-9-]) with no path separators.`
+    );
+    process.exit(1);
+  }
+  return value;
+}
+
+if (skillNameArg) {
+  assertSafeSlug(skillNameArg, '--name');
+}
+if (squadArg) {
+  squadArg = assertSafeSlug(squadArg.toLowerCase(), '--squad');
+}
+
 const defaultSkillId =
   skillNameArg ||
   path
@@ -289,9 +306,15 @@ if (applyChanges) {
     // Sanitize hardcoded http(s) URLs in JS/TS/MJS scripts to use process.env.BASE_URL fallback
     if (/\.(?:js|mjs|ts)$/.test(s.fileName) && s.hardcodedUrls.length > 0) {
       for (const u of s.hardcodedUrls) {
+        try {
+          const parsedUrl = new URL(u);
+          if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') continue;
+        } catch {
+          continue;
+        }
         scriptBody = scriptBody.replace(
           new RegExp(`(['"\`])${u.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\1`, 'g'),
-          `(process.env.BASE_URL || '${u}')`
+          `(process.env.BASE_URL || ${JSON.stringify(u)})`
         );
       }
     }

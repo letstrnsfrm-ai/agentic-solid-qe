@@ -6,6 +6,8 @@ playwright/.cache/
 .playwright-cli/
 .auth/
 .env
+.env.*
+!.env.example
 .DS_Store
 *.log
 .release-notes.md
