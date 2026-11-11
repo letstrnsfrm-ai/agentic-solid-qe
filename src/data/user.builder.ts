@@ -37,6 +37,14 @@ export class UserBuilder {
     };
   }
 
+  static performanceGlitchUser(): UserPersona {
+    return {
+      role: 'performance_glitch',
+      username: 'performance_glitch_user',
+      password: DEFAULT_SECRET,
+    };
+  }
+
   static unauthenticatedRouteError(): string {
     return "Epic sadface: You can only access '/inventory.html' when you are logged in.";
   }

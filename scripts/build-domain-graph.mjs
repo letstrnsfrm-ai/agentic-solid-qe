@@ -142,10 +142,10 @@ export function buildDomainGraph({ writeToDisk = true } = {}) {
   }
 
   // 3. Build Route -> Shard Lookup Table for O(1) Agent Token Routing
-  const routeIndex = {};
+  const routeIndex = Object.create(null);
   for (const shard of allShards) {
     for (const route of shard.routes) {
-      if (!routeIndex[route]) routeIndex[route] = [];
+      if (!Object.hasOwn(routeIndex, route)) routeIndex[route] = [];
       routeIndex[route].push(shard.path);
     }
   }

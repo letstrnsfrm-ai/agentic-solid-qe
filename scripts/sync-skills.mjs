@@ -358,6 +358,17 @@ export { expect };
 `,
     { overwrite }
   );
+
+  writeFileSafe(
+    path.join(TARGET_ROOT, '.env.example'),
+    `# Agentic-SOLID-QE Environment & Persona Credentials Template
+# Copy this file to .env (git-ignored) and supply values for your environment.
+BASE_URL=${resolvedUrl}
+TEST_USERNAME=test.user@example.com
+TEST_PASSWORD=
+`,
+    { overwrite: false }
+  );
 }
 
 function mergeConsumerPackageJson() {

@@ -2,7 +2,7 @@
 
 > **Parent Index:** `.agents/domain/domain-memory.md` | **Max Lines:** 150
 > **Owner Squad:** `@org/checkout-squad` | **Last Verified:** `2026-11-06`
-> **Published Capabilities:** `CheckoutPage`, `CheckoutFormComponent`, `OrderSummaryComponent`, `CheckoutBuilder`
+> **Published Capabilities:** `CheckoutPage`, `CheckoutFormComponent`, `CheckoutSummaryComponent`, `CheckoutBuilder`
 
 ---
 

@@ -114,7 +114,7 @@
       "intent": "Proceed from cart to Checkout Step One",
       "cliRefSource": "e156",
       "action": "click",
-      "componentCandidate": "CartPage",
+      "componentCandidate": "CartListComponent",
       "locatorContract": {
         "parentScope": {
           "strategy": "locator",
@@ -230,7 +230,7 @@
     {
       "description": "Order completion screen renders Thank you for your order! heading",
       "assertionType": "toHaveText",
-      "targetComponent": "checkoutPage.complete",
+      "targetComponent": "checkoutPage.summary",
       "targetProperty": "confirmationHeading",
       "expectedValueRef": "CheckoutBuilder.confirmationHeading()"
     }

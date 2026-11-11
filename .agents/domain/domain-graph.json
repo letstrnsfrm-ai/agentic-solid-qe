@@ -51,7 +51,7 @@
       "publishedCapabilities": [
         "CheckoutPage",
         "CheckoutFormComponent",
-        "OrderSummaryComponent",
+        "CheckoutSummaryComponent",
         "CheckoutBuilder"
       ]
     },
@@ -71,8 +71,9 @@
       "isStale": false,
       "publishedCapabilities": [
         "InventoryPage",
-        "InventoryItemCard",
-        "HeaderCartBadgeComponent",
+        "InventoryListComponent",
+        "CartListComponent",
+        "HeaderNavComponent",
         "ProductBuilder"
       ]
     }

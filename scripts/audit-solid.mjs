@@ -179,6 +179,35 @@ for (const file of pageFiles) {
   }
 }
 
+// 3b. Verify Published Capabilities in Domain Shards match exported classes/interfaces in src/
+const allSrcTsFiles = walkFiles(path.join(ROOT, 'src'), '.ts');
+const exportedSymbols = new Set();
+for (const srcFile of allSrcTsFiles) {
+  const srcCode = stripComments(fs.readFileSync(srcFile, 'utf8'));
+  for (const m of srcCode.matchAll(/\bexport\s+(?:class|interface|type|const)\s+([A-Za-z0-9_]+)/g)) {
+    exportedSymbols.add(m[1]);
+  }
+}
+
+if (exportedSymbols.size > 0) {
+  for (const shard of [...globalShardFiles, ...squadShardFiles]) {
+    const shardContent = fs.readFileSync(shard, 'utf8');
+    const capMatch = shardContent.match(/\*\*Published Capabilities:\*\*\s*(.+)/i);
+    if (!capMatch) continue;
+    const declaredCaps = capMatch[1]
+      .split(',')
+      .map((s) => s.trim().replace(/^`|`$/g, ''))
+      .filter((s) => /^[A-Z][A-Za-z0-9_]*$/.test(s));
+    for (const cap of declaredCaps) {
+      if (!exportedSymbols.has(cap)) {
+        violations.push(
+          `[Shard Capability Drift] ${rel(shard)} declares Published Capability '${cap}' which is not exported anywhere in src/.`
+        );
+      }
+    }
+  }
+}
+
 // 4. Extract domain constants from global src/data/*.builder.ts and squad-scoped src/domains/<squad>/data/*.builder.ts
 function extractBuilderLiterals(files) {
   const map = new Map();

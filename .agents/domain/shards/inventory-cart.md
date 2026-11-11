@@ -2,7 +2,7 @@
 
 > **Parent Index:** `.agents/domain/domain-memory.md` | **Max Lines:** 150
 > **Owner Squad:** `@org/catalog-squad` | **Last Verified:** `2026-11-06`
-> **Published Capabilities:** `InventoryPage`, `InventoryItemCard`, `HeaderCartBadgeComponent`, `ProductBuilder`
+> **Published Capabilities:** `InventoryPage`, `InventoryListComponent`, `CartListComponent`, `HeaderNavComponent`, `ProductBuilder`
 
 ---
 

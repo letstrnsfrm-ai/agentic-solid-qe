@@ -31,7 +31,7 @@
 | Bounded Context / Feature | Owner Squad | Routes | Shard / Sub-Hub Path | Published Capabilities & Summary |
 | :--- | :--- | :--- | :--- | :--- |
 | **Authentication & Access Control** | `@org/identity-squad` | `/` | `.agents/domain/shards/auth.md` | `LoginPage`, `ErrorBannerContract`, `session-username` cookie guard. |
-| **Inventory & Shopping Cart** | `@org/catalog-squad` | `/inventory.html`, `/cart.html` | `.agents/domain/shards/inventory-cart.md` | `InventoryPage`, `InventoryItemCard`, `cart-contents` state seeder. |
+| **Inventory & Shopping Cart** | `@org/catalog-squad` | `/inventory.html`, `/cart.html` | `.agents/domain/shards/inventory-cart.md` | `InventoryPage`, `InventoryListComponent`, `CartListComponent`, `cart-contents` state seeder. |
 | **Checkout & Order Completion** | `@org/checkout-squad` | `/checkout-step-one.html`, `/checkout-step-two.html`, `/checkout-complete.html` | `.agents/domain/shards/checkout.md` | `CheckoutPage`, `CheckoutBuilder`, tax/total invariants. |
 
 ---
