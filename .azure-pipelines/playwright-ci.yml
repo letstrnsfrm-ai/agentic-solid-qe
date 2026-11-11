@@ -16,7 +16,7 @@ stages:
           - task: NodeTool@0
             inputs:
               versionSpec: '22.x'
-          - script: npm ci
+          - script: npm ci --ignore-scripts
             displayName: 'Install dependencies'
           - script: npm audit --audit-level=high
             displayName: 'Audit dependencies for high/critical vulnerabilities'
@@ -34,7 +34,7 @@ stages:
           - task: NodeTool@0
             inputs:
               versionSpec: '22.x'
-          - script: npm ci
+          - script: npm ci --ignore-scripts
             displayName: 'Install dependencies'
           - script: npx playwright install --with-deps chromium
             displayName: 'Install Playwright Chromium'

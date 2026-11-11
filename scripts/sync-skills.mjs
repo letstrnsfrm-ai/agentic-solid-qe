@@ -92,9 +92,18 @@ if (positional[0] && ['init', 'sync'].includes(positional[0])) {
   targetArg = positional[0];
 }
 
+function sanitizeAppName(rawName) {
+  const cleaned = String(rawName || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[\x00-\x1F\x7F|`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || 'Target Web Application';
+}
+
 const TARGET_ROOT = path.resolve(process.cwd(), targetArg);
 const resolvedUrl = appUrl || process.env.BASE_URL || 'http://localhost:3000';
-const resolvedAppName = appName || 'Target Web Application';
+const resolvedAppName = sanitizeAppName(appName);
 
 function assertSafeHttpUrl(rawUrl) {
   let parsed;
@@ -130,7 +139,8 @@ function rel(dest) {
 
 function copyRecursive(src, dest, { overwrite = true } = {}) {
   if (!fs.existsSync(src)) return;
-  const stat = fs.statSync(src);
+  const stat = fs.lstatSync(src);
+  if (stat.isSymbolicLink()) return;
   if (stat.isDirectory()) {
     fs.mkdirSync(dest, { recursive: true });
     for (const entry of fs.readdirSync(src)) {
@@ -162,6 +172,7 @@ function writeFileSafe(dest, content, { overwrite = false } = {}) {
 function clearDirectoryFiles(dirPath, extFilter) {
   if (!fs.existsSync(dirPath)) return;
   for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) continue;
     const fullPath = path.join(dirPath, entry.name);
     if (entry.isDirectory()) {
       clearDirectoryFiles(fullPath, extFilter);

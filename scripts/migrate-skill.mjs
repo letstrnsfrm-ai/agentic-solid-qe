@@ -72,11 +72,17 @@ function rel(p) {
   return path.relative(ROOT, p).replace(/\\/g, '/');
 }
 
+function isWithinDir(targetPath, baseDir) {
+  const relPath = path.relative(baseDir, targetPath);
+  return relPath === '' || (!relPath.startsWith('..') && !path.isAbsolute(relPath));
+}
+
 function walkFiles(dir, extList) {
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const out = [];
   for (const e of entries) {
+    if (e.isSymbolicLink()) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
       out.push(...walkFiles(full, extList));
@@ -88,7 +94,11 @@ function walkFiles(dir, extList) {
 }
 
 // 1. Locate primary markdown/prompt file & associated scripts
-const stat = fs.statSync(resolvedSource);
+const stat = fs.lstatSync(resolvedSource);
+if (stat.isSymbolicLink()) {
+  console.error(`❌ Refusing to migrate symbolic link source: ${resolvedSource}`);
+  process.exit(1);
+}
 let primaryDocPath = '';
 let sourceDir = '';
 let candidateScriptPaths = [];
@@ -122,6 +132,16 @@ function assertSafeSlug(value, flagName) {
   return value;
 }
 
+function sanitizeSingleLineText(value, fallback) {
+  const cleaned = String(value || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[\x00-\x1F\x7F]/g, '')
+    .replace(/---+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || fallback;
+}
+
 if (skillNameArg) {
   assertSafeSlug(skillNameArg, '--name');
 }
@@ -129,14 +149,15 @@ if (squadArg) {
   squadArg = assertSafeSlug(squadArg.toLowerCase(), '--squad');
 }
 
-const defaultSkillId =
+const derivedSkillId =
   skillNameArg ||
   path
     .basename(primaryDocPath || resolvedSource, path.extname(primaryDocPath || resolvedSource))
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-|-$/g, '') ||
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '') ||
   'custom-migrated-skill';
+const defaultSkillId = assertSafeSlug(derivedSkillId, 'skill ID');
 
 // 2. Discover scripts referenced in the markdown + co-located scripts
 const scriptRegex = /(?:node|bash|sh|python3?|npx\s+tsx|ts-node)?\s*([./a-zA-Z0-9_-]+\.(?:sh|mjs|js|ts|py))\b/g;
@@ -163,27 +184,42 @@ const resolvedScripts = new Map();
 for (const refToken of referencedScriptTokens) {
   const fromSourceDir = path.resolve(sourceDir, refToken);
   const fromRoot = path.resolve(ROOT, refToken);
-  if (fs.existsSync(fromSourceDir)) {
+  if (
+    isWithinDir(fromSourceDir, sourceDir) &&
+    fs.existsSync(fromSourceDir) &&
+    !fs.lstatSync(fromSourceDir).isSymbolicLink()
+  ) {
     resolvedScripts.set(fromSourceDir, refToken);
-  } else if (fs.existsSync(fromRoot)) {
+  } else if (
+    isWithinDir(fromRoot, ROOT) &&
+    fs.existsSync(fromRoot) &&
+    !fs.lstatSync(fromRoot).isSymbolicLink()
+  ) {
     resolvedScripts.set(fromRoot, refToken);
   }
 }
 for (const sp of candidateScriptPaths) {
-  if (!resolvedScripts.has(sp)) {
+  if (!resolvedScripts.has(sp) && isWithinDir(sp, sourceDir)) {
     resolvedScripts.set(sp, path.relative(sourceDir, sp));
   }
 }
 
 // 3. Classify each script & scan for hardcoded URLs/secrets/UI anti-patterns
+const HARDCODED_SECRET_ASSIGN_REGEX =
+  /((?:password|secret|api[_-]?key|token)\s*[:=]\s*)(['"`])([^'"`$]{4,})\2/gi;
+const KNOWN_TOKEN_LITERAL_REGEX =
+  /(['"`])((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|Bearer\s+eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}[^'"`]*)\1/g;
+
 const analyzedScripts = [];
 for (const [absPath, originalRef] of resolvedScripts.entries()) {
   const content = fs.readFileSync(absPath, 'utf8');
   const fileName = path.basename(absPath);
   const hardcodedUrls = [...new Set([...content.matchAll(/https?:\/\/[^\s'"`)]+/g)].map((m) => m[0]))];
-  const hasHardcodedSecrets = /(?:password|secret|api[_-]?key|token)\s*[:=]\s*['"`][^'"`$]{4,}['"`]/i.test(
-    content
-  );
+  const hasHardcodedSecrets =
+    /(?:password|secret|api[_-]?key|token)\s*[:=]\s*['"`][^'"`$]{4,}['"`]/i.test(content) ||
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\bAKIA[0-9A-Z]{16}\b/.test(
+      content
+    );
   const hasLegacyUiAntiPatterns =
     /\b(?:waitForTimeout|xpath|puppeteer|selenium|cy\.visit|cy\.get)\b/.test(content) ||
     (/\bpage\.locator\b/.test(content) && /\bexpect\s*\(/.test(content));
@@ -240,11 +276,16 @@ const targetDomainShard = squadArg
 // 5. Decompose Markdown into <500-token SKILL.md + references/legacy-reference.md
 const originalTokens = estimateTokens(rawDoc);
 const titleMatch = rawDoc.match(/^#\s+(.+)$/m);
-const skillTitle = titleMatch ? titleMatch[1].trim() : `Skill: ${defaultSkillId}`;
+const skillTitle = sanitizeSingleLineText(
+  titleMatch ? titleMatch[1] : '',
+  `Skill: ${defaultSkillId}`
+);
 const descMatch = rawDoc.match(/description:\s*(.+)/i);
-const skillDescription = descMatch
-  ? descMatch[1].trim()
-  : `Onboarded team workflow for ${skillTitle}. Invoke /${defaultSkillId} to execute.`;
+const skillDescription = sanitizeSingleLineText(
+  descMatch ? descMatch[1] : '',
+  `Onboarded team workflow for ${skillTitle}. Invoke /${defaultSkillId} to execute.`
+);
+const yamlSafeDescription = JSON.stringify(skillDescription);
 
 const scriptSectionLines =
   analyzedScripts.length > 0
@@ -256,7 +297,7 @@ const scriptSectionLines =
 
 const synthesizedSkillMd = `---
 name: ${defaultSkillId}
-description: ${skillDescription}
+description: ${yamlSafeDescription}
 ---
 
 # ${skillTitle}
@@ -279,6 +320,17 @@ const synthesizedTokens = estimateTokens(synthesizedSkillMd);
 const targetSkillDir = path.join(ROOT, '.agents/skills', defaultSkillId);
 const targetSkillFile = path.join(targetSkillDir, 'SKILL.md');
 const targetRefFile = path.join(targetSkillDir, 'references/legacy-reference.md');
+
+function redactHardcodedSecrets(scriptBody, fileName) {
+  const envReplacement = fileName.endsWith('.sh')
+    ? '"${REDACTED_SECRET:?Set REDACTED_SECRET in env}"'
+    : fileName.endsWith('.py')
+      ? 'os.environ["REDACTED_SECRET"]'
+      : 'process.env.REDACTED_SECRET';
+  return scriptBody
+    .replace(HARDCODED_SECRET_ASSIGN_REGEX, `$1${envReplacement}`)
+    .replace(KNOWN_TOKEN_LITERAL_REGEX, envReplacement);
+}
 
 // 6. Apply changes if --apply is passed
 const appliedFiles = [];
@@ -318,6 +370,9 @@ if (applyChanges) {
         );
       }
     }
+    if (s.hasHardcodedSecrets) {
+      scriptBody = redactHardcodedSecrets(scriptBody, s.fileName);
+    }
     fs.writeFileSync(absDest, scriptBody, 'utf8');
     appliedFiles.push(rel(absDest));
   }
@@ -338,7 +393,7 @@ if (applyChanges) {
     ghPromptPath,
     `---
 mode: agent
-description: ${skillDescription}
+description: ${yamlSafeDescription}
 ---
 Activate \`.agents/skills/${defaultSkillId}/SKILL.md\` and execute its **Zero-Prompt Auto-Start** workflow (read \`.agents/domain/domain-memory.md\` ➔ run standardized scripts in \`.agents/skills/${defaultSkillId}/scripts/\` ➔ update domain shard \`${targetDomainShard}\` ➔ verify via \`npm run verify\`).\n`,
     'utf8'

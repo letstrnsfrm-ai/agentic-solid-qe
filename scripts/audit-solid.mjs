@@ -20,6 +20,7 @@ function walkFiles(dir, extFilter) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...walkFiles(fullPath, extFilter));
@@ -57,7 +58,7 @@ const squadShardFiles = [];
 
 if (fs.existsSync(domainsRoot)) {
   for (const entry of fs.readdirSync(domainsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+    if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
     const hubFile = path.join(domainsRoot, entry.name, 'index.md');
     if (fs.existsSync(hubFile)) squadHubFiles.push(hubFile);
     squadShardFiles.push(...walkFiles(path.join(domainsRoot, entry.name, 'shards'), '.md'));
@@ -203,7 +204,7 @@ const squadBuilderLiterals = new Map(); // squad -> Map(literal -> sourceFile)
 const srcDomainsDir = path.join(ROOT, 'src/domains');
 if (fs.existsSync(srcDomainsDir)) {
   for (const entry of fs.readdirSync(srcDomainsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+    if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
     const sFiles = walkFiles(path.join(srcDomainsDir, entry.name, 'data'), '.builder.ts');
     squadBuilderLiterals.set(entry.name, extractBuilderLiterals(sFiles));
   }
@@ -266,7 +267,7 @@ for (const file of specFiles) {
   }
 }
 
-// 6. Audit src/ and tests/ for leaked secret tokens or insecure placeholder passwords
+// 6. Audit src/, tests/, .agents/skills/, .agents/domain/, and defects/ for leaked secret tokens
 const SECRET_PATTERNS = [
   { name: 'GitHub Token', regex: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/ },
   { name: 'GitHub Fine-Grained PAT', regex: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/ },
@@ -277,18 +278,32 @@ const SECRET_PATTERNS = [
   { name: 'Insecure Default Password Placeholder', regex: /['"`]ChangeMe123!['"`]/ },
 ];
 
-const allCodeFiles = [
+const allCodeAndArtifactFiles = [
   ...walkFiles(path.join(ROOT, 'src'), '.ts'),
   ...walkFiles(path.join(ROOT, 'tests'), '.ts'),
+  ...walkFiles(path.join(ROOT, '.agents/skills')),
+  ...walkFiles(path.join(ROOT, '.agents/domain'), '.md'),
+  ...walkFiles(path.join(ROOT, 'defects'), '.md'),
 ];
-for (const codeFile of allCodeFiles) {
-  const codeContent = stripComments(fs.readFileSync(codeFile, 'utf8'));
+for (const targetFile of allCodeAndArtifactFiles) {
+  const rawText = fs.readFileSync(targetFile, 'utf8');
+  const inspectText = targetFile.endsWith('.ts') ? stripComments(rawText) : rawText;
   for (const pattern of SECRET_PATTERNS) {
-    if (pattern.regex.test(codeContent)) {
+    if (pattern.regex.test(inspectText)) {
       violations.push(
-        `[Secret Hygiene Gate] ${rel(codeFile)} contains a ${pattern.name}. Inject sensitive values via environment variables in src/data/*.builder.ts.`
+        `[Secret Hygiene Gate] ${rel(targetFile)} contains a ${pattern.name}. Inject sensitive values via environment variables in src/data/*.builder.ts.`
       );
     }
+  }
+  const relTarget = rel(targetFile);
+  if (
+    relTarget.startsWith('.agents/skills/') &&
+    relTarget.includes('/scripts/') &&
+    /(?:password|secret|api[_-]?key|token)\s*[:=]\s*['"`][^'"`$]{4,}['"`]/i.test(rawText)
+  ) {
+    violations.push(
+      `[Secret Hygiene Gate] ${relTarget} contains a hardcoded credential assignment. Parameterize secrets via process.env.`
+    );
   }
 }
 

@@ -21,6 +21,7 @@ function walkFiles(dir, extFilter) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...walkFiles(fullPath, extFilter));
@@ -107,7 +108,7 @@ export function buildDomainGraph({ writeToDisk = true } = {}) {
 
   if (fs.existsSync(domainsRoot)) {
     for (const entry of fs.readdirSync(domainsRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
+      if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
       const squadId = entry.name;
       const hubIndex = path.join(domainsRoot, squadId, 'index.md');
       const squadShardsDir = path.join(domainsRoot, squadId, 'shards');

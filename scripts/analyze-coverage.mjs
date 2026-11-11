@@ -15,6 +15,7 @@ function walkFiles(dir, extFilter) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...walkFiles(fullPath, extFilter));
