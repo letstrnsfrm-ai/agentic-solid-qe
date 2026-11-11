@@ -25,12 +25,50 @@ const VALID_ASSERTIONS = new Set(
   schema.properties.expectedStates.items.properties.assertionType.enum
 );
 
+const VALID_ROOT_KEYS = new Set(Object.keys(schema.properties));
+const VALID_PERSONA_KEYS = new Set(Object.keys(schema.properties.persona.properties));
+const VALID_STEP_KEYS = new Set(Object.keys(schema.properties.semanticSteps.items.properties));
+const VALID_LOCATOR_KEYS = new Set(
+  Object.keys(schema.properties.semanticSteps.items.properties.locatorContract.properties)
+);
+const VALID_PARENT_SCOPE_KEYS = new Set(
+  Object.keys(
+    schema.properties.semanticSteps.items.properties.locatorContract.properties.parentScope.properties
+  )
+);
+const VALID_STATE_KEYS = new Set(Object.keys(schema.properties.expectedStates.items.properties));
+
+const SAFE_MEMBER_REF_REGEX = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*(\(\))?)*$/;
+const SAFE_CLASS_NAME_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const SAFE_STORAGE_STATE_REGEX = /^\.auth\/[a-z0-9_-]+\.json$/;
+
+function isValidHttpUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function checkUnknownKeys(obj, allowedSet, contextLabel, errorsList) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+  for (const key of Object.keys(obj)) {
+    if (!allowedSet.has(key)) {
+      errorsList.push(`${contextLabel} Unknown property '${key}' is not allowed by session-tape.schema.json.`);
+    }
+  }
+}
+
 if (!fs.existsSync(TAPES_DIR)) {
   console.log('ℹ️ No .exploratory/tapes directory found. Skipping tape validation.');
   process.exit(0);
 }
 
-const tapeFiles = fs.readdirSync(TAPES_DIR).filter((f) => f.endsWith('.json'));
+const tapeFiles = fs
+  .readdirSync(TAPES_DIR, { withFileTypes: true })
+  .filter((e) => !e.isSymbolicLink() && e.isFile() && e.name.endsWith('.json'))
+  .map((e) => e.name);
 let errors = [];
 
 for (const file of tapeFiles) {
@@ -43,6 +81,8 @@ for (const file of tapeFiles) {
     continue;
   }
 
+  checkUnknownKeys(tape, VALID_ROOT_KEYS, `[${file}]`, errors);
+
   for (const reqField of schema.required) {
     if (tape[reqField] === undefined) {
       errors.push(`[${file}] Missing required root field '${reqField}'.`);
@@ -53,8 +93,42 @@ for (const file of tapeFiles) {
     errors.push(`[${file}] Unsupported schemaVersion '${tape.schemaVersion}' (expected '1.0.0').`);
   }
 
+  const expectedScenarioId = path.basename(file, '.json');
+  if (typeof tape.scenarioId !== 'string' || !/^[a-z0-9-]+$/.test(tape.scenarioId)) {
+    errors.push(`[${file}] Invalid scenarioId '${tape.scenarioId}'. Must match ^[a-z0-9-]+$.`);
+  } else if (tape.scenarioId !== expectedScenarioId) {
+    errors.push(
+      `[${file}] scenarioId '${tape.scenarioId}' must match filename '${expectedScenarioId}'.`
+    );
+  }
+
+  if (typeof tape.baseUrl !== 'string' || !isValidHttpUrl(tape.baseUrl)) {
+    errors.push(`[${file}] Invalid baseUrl '${tape.baseUrl}'. Must be an http:// or https:// URL.`);
+  }
+
   if (!VALID_CHARTERS.has(tape.charter)) {
     errors.push(`[${file}] Invalid charter '${tape.charter}'.`);
+  }
+
+  if (tape.persona && typeof tape.persona === 'object') {
+    checkUnknownKeys(tape.persona, VALID_PERSONA_KEYS, `[${file} persona]`, errors);
+    if (
+      typeof tape.persona.dataBuilderRef !== 'string' ||
+      !SAFE_MEMBER_REF_REGEX.test(tape.persona.dataBuilderRef)
+    ) {
+      errors.push(
+        `[${file}] Invalid persona.dataBuilderRef '${tape.persona.dataBuilderRef}'. Must be a valid Data Builder reference.`
+      );
+    }
+    if (
+      tape.persona.storageStatePath !== undefined &&
+      (typeof tape.persona.storageStatePath !== 'string' ||
+        !SAFE_STORAGE_STATE_REGEX.test(tape.persona.storageStatePath))
+    ) {
+      errors.push(
+        `[${file}] Invalid persona.storageStatePath '${tape.persona.storageStatePath}'. Must reside in .auth/<persona>.json.`
+      );
+    }
   }
 
   if (tape.tags !== undefined) {
@@ -82,30 +156,76 @@ for (const file of tapeFiles) {
     errors.push(`[${file}] semanticSteps must be a non-empty array.`);
   } else {
     for (const step of tape.semanticSteps) {
-      if (!VALID_ACTIONS.has(step.action)) {
-        errors.push(`[${file} step #${step.stepIndex}] Invalid action '${step.action}'.`);
-      }
-      if (!step.locatorContract || !VALID_STRATEGIES.has(step.locatorContract.strategy)) {
-        errors.push(
-          `[${file} step #${step.stepIndex}] Invalid or missing locatorContract.strategy.`
-        );
-      }
-      if (/^e\d+$/.test(step.locatorContract?.value ?? '')) {
-        errors.push(
-          `[${file} step #${step.stepIndex}] Ephemeral CLI ref '${step.locatorContract.value}' leaked into locatorContract.value!`
-        );
-      }
-      if (step.capturesVariable && declaredVars.size > 0 && !declaredVars.has(step.capturesVariable)) {
-        errors.push(
-          `[${file} step #${step.stepIndex}] capturesVariable '${step.capturesVariable}' is not declared in root capturedVariables.`
-        );
-      }
+      const stepLabel = `[${file} step #${step.stepIndex}]`;
       const isPasswordTarget =
         /password|secret|token|api[_-]?key/i.test(step.intent ?? '') ||
         /password|secret|token|api[_-]?key/i.test(step.locatorContract?.value ?? '');
       if (step.action === 'fill' && isPasswordTarget && step.inputData !== undefined) {
         errors.push(
-          `[${file} step #${step.stepIndex}] Raw secret 'inputData' is forbidden on password/secret fields. Use 'inputDataRef' referencing a Data Builder method (e.g. 'UserBuilder.standardUser().password').`
+          `${stepLabel} Raw secret 'inputData' is forbidden on password/secret fields. Use 'inputDataRef' referencing a Data Builder method (e.g. 'UserBuilder.standardUser().password').`
+        );
+      }
+
+      checkUnknownKeys(step, VALID_STEP_KEYS, stepLabel, errors);
+
+      if (!VALID_ACTIONS.has(step.action)) {
+        errors.push(`${stepLabel} Invalid action '${step.action}'.`);
+      }
+      if (
+        typeof step.componentCandidate !== 'string' ||
+        !SAFE_CLASS_NAME_REGEX.test(step.componentCandidate)
+      ) {
+        errors.push(
+          `${stepLabel} Invalid componentCandidate '${step.componentCandidate}'. Must be a valid class identifier.`
+        );
+      }
+      if (
+        step.inputDataRef !== undefined &&
+        (typeof step.inputDataRef !== 'string' || !SAFE_MEMBER_REF_REGEX.test(step.inputDataRef))
+      ) {
+        errors.push(
+          `${stepLabel} Invalid inputDataRef '${step.inputDataRef}'. Must be a safe Data Builder member reference.`
+        );
+      }
+      if (!step.locatorContract || !VALID_STRATEGIES.has(step.locatorContract.strategy)) {
+        errors.push(`${stepLabel} Invalid or missing locatorContract.strategy.`);
+      } else {
+        checkUnknownKeys(step.locatorContract, VALID_LOCATOR_KEYS, `${stepLabel} locatorContract`, errors);
+        if (step.locatorContract.parentScope) {
+          checkUnknownKeys(
+            step.locatorContract.parentScope,
+            VALID_PARENT_SCOPE_KEYS,
+            `${stepLabel} parentScope`,
+            errors
+          );
+          if (
+            step.locatorContract.parentScope.filterTextRef !== undefined &&
+            (typeof step.locatorContract.parentScope.filterTextRef !== 'string' ||
+              !SAFE_MEMBER_REF_REGEX.test(step.locatorContract.parentScope.filterTextRef))
+          ) {
+            errors.push(
+              `${stepLabel} Invalid parentScope.filterTextRef '${step.locatorContract.parentScope.filterTextRef}'.`
+            );
+          }
+        }
+        if (step.action === 'goto' || step.locatorContract.strategy === 'url') {
+          const navVal = String(step.locatorContract.value ?? '');
+          const isSafeRelative = navVal.startsWith('/') && !navVal.startsWith('//');
+          if (!isSafeRelative && !isValidHttpUrl(navVal)) {
+            errors.push(
+              `${stepLabel} Unsafe navigation URL '${navVal}'. Must be a root-relative path ('/...') or http(s):// URL.`
+            );
+          }
+        }
+      }
+      if (/^e\d+$/.test(step.locatorContract?.value ?? '')) {
+        errors.push(
+          `${stepLabel} Ephemeral CLI ref '${step.locatorContract.value}' leaked into locatorContract.value!`
+        );
+      }
+      if (step.capturesVariable && declaredVars.size > 0 && !declaredVars.has(step.capturesVariable)) {
+        errors.push(
+          `${stepLabel} capturesVariable '${step.capturesVariable}' is not declared in root capturedVariables.`
         );
       }
     }
@@ -126,8 +246,30 @@ for (const file of tapeFiles) {
     errors.push(`[${file}] expectedStates must be a non-empty array.`);
   } else {
     for (const state of tape.expectedStates) {
+      checkUnknownKeys(state, VALID_STATE_KEYS, `[${file} expectedStates]`, errors);
       if (!VALID_ASSERTIONS.has(state.assertionType)) {
         errors.push(`[${file}] Invalid assertionType '${state.assertionType}'.`);
+      }
+      if (
+        typeof state.targetComponent !== 'string' ||
+        !SAFE_MEMBER_REF_REGEX.test(state.targetComponent)
+      ) {
+        errors.push(`[${file}] Invalid expectedStates.targetComponent '${state.targetComponent}'.`);
+      }
+      if (
+        typeof state.targetProperty !== 'string' ||
+        !SAFE_MEMBER_REF_REGEX.test(state.targetProperty)
+      ) {
+        errors.push(`[${file}] Invalid expectedStates.targetProperty '${state.targetProperty}'.`);
+      }
+      const isCapturedVarRef =
+        typeof state.expectedValueRef === 'string' &&
+        /^capturedVariable:[a-zA-Z][a-zA-Z0-9_]*$/.test(state.expectedValueRef);
+      if (
+        typeof state.expectedValueRef !== 'string' ||
+        (!isCapturedVarRef && !SAFE_MEMBER_REF_REGEX.test(state.expectedValueRef))
+      ) {
+        errors.push(`[${file}] Invalid expectedStates.expectedValueRef '${state.expectedValueRef}'.`);
       }
     }
   }

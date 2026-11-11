@@ -12,6 +12,7 @@ stages:
     displayName: 'SOLID Architecture & Session Tape Gate'
     jobs:
       - job: Audit
+        timeoutInMinutes: 10
         steps:
           - task: NodeTool@0
             inputs:
@@ -28,6 +29,7 @@ stages:
     dependsOn: ArchitectureGate
     jobs:
       - job: E2E
+        timeoutInMinutes: 15
         strategy:
           parallel: 2
         steps:

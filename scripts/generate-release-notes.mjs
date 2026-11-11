@@ -66,12 +66,13 @@ function bumpSemver(base, bumpType) {
 }
 
 function detectRepoSlug() {
-  if (process.env.GITHUB_REPOSITORY) {
-    return process.env.GITHUB_REPOSITORY;
+  const safeSlugRegex = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+  if (process.env.GITHUB_REPOSITORY && safeSlugRegex.test(process.env.GITHUB_REPOSITORY.trim())) {
+    return process.env.GITHUB_REPOSITORY.trim();
   }
   const remoteUrl = git(['config', '--get', 'remote.origin.url'], { allowFailure: true });
-  const match = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+)(?:\.git)?$/);
-  return match ? match[1] : 'letstrnsfrm-ai/agentic-solid-qe';
+  const match = remoteUrl.match(/github\.com[:/]([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/);
+  return match && safeSlugRegex.test(match[1]) ? match[1] : 'letstrnsfrm-ai/agentic-solid-qe';
 }
 
 function getLatestVersionTag() {

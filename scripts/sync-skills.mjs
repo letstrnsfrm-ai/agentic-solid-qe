@@ -8,6 +8,7 @@
  *   npm run init:app -- --url https://your-app.com --name "Your App"
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -105,6 +106,40 @@ const TARGET_ROOT = path.resolve(process.cwd(), targetArg);
 const resolvedUrl = appUrl || process.env.BASE_URL || 'http://localhost:3000';
 const resolvedAppName = sanitizeAppName(appName);
 
+function assertSafeTargetDirectory(resolvedTarget) {
+  const normalized = path.resolve(resolvedTarget);
+  const homeDir = path.resolve(os.homedir());
+  const forbiddenExact = new Set([
+    '/',
+    homeDir,
+    '/root',
+    '/etc',
+    '/usr',
+    '/var',
+    '/bin',
+    '/sbin',
+    '/lib',
+    '/lib64',
+    '/opt',
+    '/proc',
+    '/sys',
+    '/dev',
+    '/tmp',
+  ]);
+  const forbiddenPrefixes = ['/etc/', '/usr/', '/var/', '/bin/', '/sbin/', '/lib/', '/proc/', '/sys/', '/dev/'];
+  if (
+    forbiddenExact.has(normalized) ||
+    forbiddenPrefixes.some((prefix) => normalized.startsWith(prefix))
+  ) {
+    console.error(`❌ Refusing to run against protected system or home directory: '${normalized}'.`);
+    process.exit(1);
+  }
+  if (fs.existsSync(normalized) && fs.lstatSync(normalized).isSymbolicLink()) {
+    console.error(`❌ Refusing to run against symbolic link target directory: '${normalized}'.`);
+    process.exit(1);
+  }
+}
+
 function assertSafeHttpUrl(rawUrl) {
   let parsed;
   try {
@@ -128,6 +163,7 @@ function assertSafeSlug(value, flagName) {
   return value.toLowerCase();
 }
 
+assertSafeTargetDirectory(TARGET_ROOT);
 assertSafeHttpUrl(resolvedUrl);
 if (squadName) {
   squadName = assertSafeSlug(squadName, '--squad');
@@ -349,6 +385,11 @@ function mergeConsumerPackageJson() {
     typescript: '5.9.3',
   };
 
+  const requiredOverrides = {
+    playwright: '1.64.1',
+    'playwright-core': '1.64.1',
+  };
+
   if (!fs.existsSync(pkgPath)) {
     const newPkg = {
       name: path.basename(TARGET_ROOT) || 'my-app-e2e',
@@ -357,6 +398,7 @@ function mergeConsumerPackageJson() {
       type: 'module',
       scripts: requiredScripts,
       devDependencies: requiredDevDeps,
+      overrides: requiredOverrides,
     };
     fs.writeFileSync(pkgPath, JSON.stringify(newPkg, null, 2) + '\n', 'utf8');
     console.log(`🌱 Created: package.json`);
@@ -367,6 +409,7 @@ function mergeConsumerPackageJson() {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     pkg.scripts = pkg.scripts || {};
     pkg.devDependencies = pkg.devDependencies || {};
+    pkg.overrides = pkg.overrides || {};
     const allDeps = { ...(pkg.dependencies || {}), ...pkg.devDependencies };
 
     let modified = false;
@@ -379,6 +422,12 @@ function mergeConsumerPackageJson() {
     for (const [dep, ver] of Object.entries(requiredDevDeps)) {
       if (!allDeps[dep]) {
         pkg.devDependencies[dep] = ver;
+        modified = true;
+      }
+    }
+    for (const [ovKey, ovVer] of Object.entries(requiredOverrides)) {
+      if (!pkg.overrides[ovKey]) {
+        pkg.overrides[ovKey] = ovVer;
         modified = true;
       }
     }
@@ -566,7 +615,7 @@ if (command === 'init') {
 // Optional: Federated Org Brain sync (--org-brain <path>)
 if (orgBrainSource) {
   const resolvedBrainRoot = path.resolve(process.cwd(), orgBrainSource);
-  if (fs.existsSync(resolvedBrainRoot)) {
+  if (fs.existsSync(resolvedBrainRoot) && !fs.lstatSync(resolvedBrainRoot).isSymbolicLink()) {
     for (const sharedRel of [
       '.agents/domain/domain-memory.md',
       '.agents/domain/domain-graph.json',
