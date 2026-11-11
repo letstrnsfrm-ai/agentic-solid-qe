@@ -26,6 +26,7 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help
 Usage:
   cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo]
   cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>]
+  cortex migrate --discover
   cortex migrate <legacy-path> [--name <skill-id>] [--squad <squad>] [--apply]
   cortex graph                 Compile 3-Tier Federated Brain (.agents/domain/domain-graph.json)
   cortex gaps                  Run Coverage, Staleness & Traceability Analyzer
@@ -244,12 +245,12 @@ function buildCleanDomainMemory(name, url) {
 
 ---
 
-## 3. Feature Shard Index (Progressive Disclosure)
+## 3. Federated Domain & Feature Shard Index (Progressive Disclosure)
 
 > **Agent Instruction:** Read **only** the shard(s) matching the route or feature under test. When discovering new behaviours, append them to the matching shard (or create a new \`.agents/domain/shards/<feature>.md\` ≤ 150 lines and register it below).
 
-| Feature / Domain Area | Routes | Shard Path | Summary |
-| :--- | :--- | :--- | :--- |
+| Bounded Context / Feature | Owner Squad | Routes | Shard / Sub-Hub Path | Published Capabilities & Summary |
+| :--- | :--- | :--- | :--- | :--- |
 
 ---
 
@@ -516,6 +517,28 @@ function configurePlaywrightConfig() {
   }
 }
 
+function backupPreExistingInstructionFiles() {
+  if (path.resolve(SOURCE_ROOT) === path.resolve(TARGET_ROOT)) return;
+  const candidateBackups = [
+    { relPath: 'AGENTS.md', backupName: 'AGENTS.legacy.md' },
+    { relPath: '.github/copilot-instructions.md', backupName: 'copilot-instructions.legacy.md' },
+  ];
+  for (const item of candidateBackups) {
+    const existingPath = path.join(TARGET_ROOT, item.relPath);
+    if (!fs.existsSync(existingPath) || fs.lstatSync(existingPath).isSymbolicLink()) continue;
+    const content = fs.readFileSync(existingPath, 'utf8');
+    if (content.includes('agentic-solid-qe')) continue;
+    const backupDest = path.join(TARGET_ROOT, '.agents/legacy-backups', item.backupName);
+    if (!fs.existsSync(backupDest)) {
+      fs.mkdirSync(path.dirname(backupDest), { recursive: true });
+      fs.copyFileSync(existingPath, backupDest);
+      console.log(
+        `📦 Backed up pre-existing instructions: ${item.relPath} -> ${rel(backupDest)} (discoverable via 'npm run migrate:skill -- --discover')`
+      );
+    }
+  }
+}
+
 // 1. Always sync static Core Engine layers
 const coreEnginePaths = [
   '.agents/skills',
@@ -533,6 +556,8 @@ const coreEnginePaths = [
 ];
 
 console.log(`\n🚀 Running agentic-solid-qe (${command}${resetDemo ? ' --reset' : ''}${includeDemo ? ' --demo' : ''}) -> ${TARGET_ROOT}\n`);
+
+backupPreExistingInstructionFiles();
 
 for (const relPath of coreEnginePaths) {
   copyRecursive(path.join(SOURCE_ROOT, relPath), path.join(TARGET_ROOT, relPath), {

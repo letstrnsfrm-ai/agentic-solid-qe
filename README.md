@@ -100,6 +100,37 @@ agentic-solid-qe/
 
 ---
 
+## AI-Guided Installation & Skill Migration Playbook (Ask Your Agent)
+
+Any IDE AI agent (**Google Antigravity, Claude Code, GitHub Copilot, Cursor, or Windsurf**) can read this `README.md` (and [`AGENTS.md`](./AGENTS.md)) to interactively install `agentic-solid-qe` into an existing project and migrate your existing skills, prompts, and scripts under the repository's SOLID and `< 500`-token guardrails.
+
+### Copy-Paste Prompts for Users
+
+- **Prompt 1 — Install into an Existing Project & Discover Legacy Skills:**
+  > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md` and `AGENTS.md`). Inspect my current repository, explain how `agentic-solid-qe` fits my setup, run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe init .` non-destructively, and run `npm run migrate:skill -- --discover` to inventory my existing skills, prompts, scripts, and Playwright tests."*
+- **Prompt 2 — Migrate Existing Skills & Scripts with Full Guardrails (`/05-skill-migrator`):**
+  > *"Run `/05-skill-migrator` (`npm run migrate:skill -- --discover`), walk me through the 4-Part Migration Triage Matrix for each of my existing skills/rules/scripts, migrate them with `--apply`, and verify all guardrails pass with `npm run verify`."*
+
+### 4-Step Execution Protocol for AI Agents Reading This File
+
+When a user asks you (the AI Agent) to help them understand, install, or migrate skills into `agentic-solid-qe`, execute these four steps interactively:
+
+1. **Step 1 — Assess the Existing Project & Recommend an Onboarding Track:**
+   - Inspect `package.json`, `playwright.config.ts`, `tsconfig.json`, and existing test folders (`tests/`, `e2e/`).
+   - Recommend **Track 1** (single-app setup), **Track 2** (if `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.claude/commands/`, `.github/prompts/`, or custom helper scripts exist), or **Track 3** (if multiple engineering squads share the repo).
+2. **Step 2 — Run Non-Destructive Initialization (`init` / `sync`):**
+   - Execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --url <app-url> --name "<App Name>"`.
+   - This safely merges `package.json` scripts and `tsconfig.json` `@*` path aliases without deleting existing tests, and automatically backs up any pre-existing custom `AGENTS.md` or `.github/copilot-instructions.md` into `.agents/legacy-backups/` so nothing is lost.
+3. **Step 3 — Auto-Discover Legacy Skills, Prompts, Scripts & Spec Gaps (`--discover`):**
+   - Execute `npm run migrate:skill -- --discover` (`npx cortex migrate --discover`).
+   - Present the JSON discovery report to the user:
+     - `discoveredLegacySkillsAndPrompts`: Every `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.agents/legacy-backups/*.md`, `.cursor/rules/*.mdc`, custom `.claude/commands/*.md`, `.github/prompts/*.md`, and oversized/unregistered skill with its token count and ready-to-run migration command.
+     - `existingPlaywrightSuiteAudit`: Existing `.spec.ts` files that import directly from `@playwright/test` instead of `@fixtures/app.fixture` or lack `@data/*` Data Builders.
+4. **Step 4 — Run Guarded Migration (`--apply`) & Verification (`npm run verify`):**
+   - For each legacy skill or prompt, run dry-run (`npm run migrate:skill -- <path> --name <skill-id> [--squad <squad>]`), present the **4-Part Migration Triage Matrix** for user confirmation, then run with `--apply` and `npm run verify`.
+
+---
+
 ## Onboarding Tracks (Choose Your Starting Point)
 
 - **[Track 1: Greenfield / Single-App Quick Start (5 Minutes)](#track-1-greenfield--single-app-quick-start-5-minutes)** — Start from scratch or drop into an existing Playwright repo.
@@ -155,10 +186,17 @@ Open your IDE agent (**Antigravity, Claude Code, GitHub Copilot, or Cursor**) an
 
 ## Track 2: Onboarding Existing Team Skills & Helper Scripts (`/05-skill-migrator`)
 
-Already have team skills, `.cursorrules`, `.claude/commands`, or ad-hoc helper scripts (`.sh`, `.js`, `.mjs`, `.ts`, `.py`) that aren't structured for `agentic-solid-qe`? Use **`/05-skill-migrator`** (backed by [`scripts/migrate-skill.mjs`](./scripts/migrate-skill.mjs) and the [Migration Starter Guide](./.agents/skills/05-skill-migrator/references/migration-starter-guide.md)).
+Already have team skills, `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.claude/commands`, `.github/prompts`, or ad-hoc helper scripts (`.sh`, `.js`, `.mjs`, `.ts`, `.py`) that aren't structured for `agentic-solid-qe`? Use **`/05-skill-migrator`** (backed by [`scripts/migrate-skill.mjs`](./scripts/migrate-skill.mjs) and the [Migration Starter Guide](./.agents/skills/05-skill-migrator/references/migration-starter-guide.md)).
 
-### 1. Run a Dry-Run Migration Scan
-Point the migrator at any legacy markdown prompt or folder containing a skill and its scripts:
+### 1. Auto-Discover All Legacy Skills, Prompts & Spec Guardrail Gaps (`--discover`)
+Scan your entire workspace to inventory unmigrated AI rules, skills, helper scripts, and existing `.spec.ts` files needing SOLID alignment:
+
+```bash
+npm run migrate:skill -- --discover
+```
+
+### 2. Run a Dry-Run Migration Scan for a Specific Skill
+Point the migrator at any discovered markdown prompt or folder containing a skill and its scripts:
 
 ```bash
 npm run migrate:skill -- ./path/to/legacy-skill-or-folder --name 06-billing-seeder --squad billing
@@ -168,19 +206,27 @@ Or inside your IDE chat:
 > **Prompt:** `"/05-skill-migrator ./path/to/legacy-skill-or-folder"`
 
 The analyzer inspects your files without modifying them and presents a **4-Part Migration Triage Matrix**:
-1. **Token Budget Audit:** Compares original token count against the strict `< 500`-token `SKILL.md` cap and previews what will move to `.agents/skills/<skill-id>/references/legacy-reference.md`.
+1. **Token Budget Audit:** Compares original token count against the strict `< 500`-token `SKILL.md` cap and previews what will move to secret-sanitized `.agents/skills/<skill-id>/references/legacy-reference.md`.
 2. **Script Discovery & Classification:**
-   - `utility-or-api-seeder` scripts (API callers, DB seeders, schema tools) are slated for `.agents/skills/<skill-id>/scripts/` with hardcoded `http(s)://` URLs automatically parameterized via `process.env.BASE_URL`.
-   - `legacy-ui-automation` scripts (raw Puppeteer/Playwright files using `waitForTimeout` or XPath) are flagged to bridge into **Session Tapes** (`.exploratory/tapes/<scenario>.json`) for `/02-solid-architect`.
+   - `utility-or-api-seeder` scripts (API callers, DB seeders, schema tools) are slated for `.agents/skills/<skill-id>/scripts/` with hardcoded `http(s)://` URLs parameterized via `process.env.BASE_URL` and secrets redacted.
+   - `legacy-ui-automation` scripts (raw Puppeteer/Playwright/Cypress files using `waitForTimeout` or XPath) are archived in `references/` and bridged into schema-valid **Session Tapes** (`.exploratory/tapes/<skill-id>.json`) for `/02-solid-architect`.
 3. **Rewritten Root-Relative Commands:** Fragile relative invocations (`bash ../scripts/seed.sh`) are rewritten to canonical commands (`bash .agents/skills/06-billing-seeder/scripts/seed.sh`).
-4. **Domain Brain Extraction:** Embedded `/routes` and `data-testid` attributes are extracted for your squad's domain shard.
+4. **Domain Brain Extraction & Indexing:** Embedded `/routes` and `data-testid` attributes are extracted into a `≤ 150`-line Domain Shard and indexed in `.agents/domain/domain-memory.md` (or `.agents/domain/domains/<squad>/index.md`).
 
-### 2. Apply & Verify
+### 3. Apply & Verify All Guardrails
 ```bash
 npm run migrate:skill -- ./path/to/legacy-skill-or-folder --name 06-billing-seeder --squad billing --apply
 npm run verify
 ```
-This scaffolds `.agents/skills/<skill-id>/{SKILL.md,references/,scripts/}` plus `.claude/commands/<skill-id>.md` and `.github/prompts/<skill-id>.prompt.md` wrappers in one step.
+This scaffolds `.agents/skills/<skill-id>/{SKILL.md,references/,scripts/}`, bridges any UI script into `.exploratory/tapes/<skill-id>.json`, scaffolds & indexes the `≤ 150`-line Domain Shard, registers the skill in `AGENTS.md` and `.github/copilot-instructions.md`, and creates `.claude/commands/<skill-id>.md` + `.github/prompts/<skill-id>.prompt.md` wrappers in one step.
+
+| Legacy Pattern | `agentic-solid-qe` Guardrail Standard | Verification Gate |
+| :--- | :--- | :--- |
+| Monolithic prompt (`> 500` tokens) | `< 500`-token `SKILL.md` + `references/legacy-reference.md` | `npm run audit:solid` |
+| Unindexed or `> 150`-line domain notes | Indexed Tier 0/1/2 Domain Shard (`≤ 150` lines) + `**Last Verified:**` | `npm run audit:solid` & `npm run domain:graph` |
+| Hardcoded secrets (`sk-*`, `ghp_*`, `password=...`) | Redacted in `references/` & `scripts/`; read from `process.env` / `src/data/*.builder.ts` | `npm run audit:solid` |
+| Raw UI script (`waitForTimeout`, XPath) | Archived in `references/`, bridged to `.exploratory/tapes/<id>.json`, compiled via `/02-solid-architect` | `npm run validate:tapes` & `npm run audit:solid` |
+| Existing `.spec.ts` importing `@playwright/test` | Import `{ test, expect }` from `@fixtures/app.fixture` and builders from `@data/*` | `npm run audit:solid` |
 
 ---
 
@@ -248,6 +294,7 @@ flowchart TD
 | `npm run verify` | **Full Gate:** Runs `typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `playwright test`. |
 | `npx cortex init --url <url> --name "<App>"` | Initializes or resets a repository with a clean SOLID skeleton (`npm run init:app`). |
 | `npx cortex sync --squad <squad> [--org-brain <path>]` | Scaffolds a Tier 1 Squad Sub-Hub & `src/domains/<squad>/` module or syncs an Org Brain. |
+| `npx cortex migrate --discover` | Inventories legacy AI rules (`.cursorrules`, `CLAUDE.md`, backups), skills, helper scripts, and non-SOLID `.spec.ts` files. |
 | `npx cortex migrate <path> [--name <id>] [--apply]` | Analyzes and scaffolds legacy team skills, prompts, and helper scripts (`npm run migrate:skill`). |
 | `npx cortex graph` / `npm run domain:graph` | Compiles `.agents/domain/domain-graph.json` (routes, squad owners, published capabilities, stale shards). |
 | `npx cortex gaps` / `npm run coverage:gaps` | Outputs JSON snapshot of uncovered shards, stale shards, uncompiled Session Tapes, and recommended next skill. |

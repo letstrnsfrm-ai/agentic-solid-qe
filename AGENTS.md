@@ -13,6 +13,14 @@ This repository uses a six-skill, token-efficient Quality Engineering workflow p
 | Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and configure sharded CI/CD pipelines | `04-ci-pipeline` | `.agents/skills/04-ci-pipeline/SKILL.md` |
 | Onboard legacy/unorganized team skills, prompts, and helper scripts into `<500`-token `SKILL.md` bundles and 3-Tier Domain Shards | `05-skill-migrator` | `.agents/skills/05-skill-migrator/SKILL.md` |
 
+## AI-Guided Project Installation & Legacy Skill Migration Protocol
+
+When a user asks how to install or adopt `agentic-solid-qe` in an existing project or migrate their existing skills/prompts/scripts:
+1. **Assess & Install Non-Destructively:** Run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --url <app-url> --name "<App Name>"` (which merges `package.json` & `tsconfig.json` and preserves any pre-existing `AGENTS.md` or `.github/copilot-instructions.md` in `.agents/legacy-backups/`). For multi-squad repos, run `npx cortex sync --squad <squad>`.
+2. **Auto-Discover Legacy Artifacts & SOLID Gaps:** Run `npm run migrate:skill -- --discover` (`npx cortex migrate --discover`) to inventory `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.agents/legacy-backups/*`, `.cursor/rules/*`, custom `.claude/commands/*`, `.github/prompts/*`, helper scripts, and non-SOLID `.spec.ts` files.
+3. **Dry-Run & Guarded Apply (`/05-skill-migrator`):** For each discovered skill, run `npm run migrate:skill -- <path> --name <skill-id> [--squad <squad>]`, present the **4-Part Migration Triage Matrix**, then run with `--apply` to enforce `<500`-token `SKILL.md` caps, secret redaction in `references/` & `scripts/`, Session Tape bridging (`.exploratory/tapes/<id>.json`) for legacy UI scripts, `≤ 150`-line Domain Shard indexing, and `AGENTS.md` routing registration.
+4. **Verify All Guardrails:** Run `npm run verify` (`typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `playwright test`).
+
 ## Closed-Loop QE Workflow (Bootstrap ➔ Explore & Curate ➔ Automate ➔ Heal & Run in CI)
 
 1. **Environment & Auth Bootstrap (`00-env-bootstrap`):** Configures `baseUrl`, captures reusable `.auth/<persona>.json` sessions for apps behind SSO/MFA, and seeds top-level feature shards in `.agents/domain/domain-memory.md`.

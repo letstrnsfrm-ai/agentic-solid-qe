@@ -1,6 +1,6 @@
 # GitHub Copilot Instructions — `agentic-solid-qe`
 
-When assisting in this repository, route your workflow through the five core skills in `.agents/skills/`:
+When assisting in this repository, route your workflow through the six core skills in `.agents/skills/`:
 
 1. **Environment, Auth & App Map Bootstrap (`00-env-bootstrap`):**
    - Follow `.agents/skills/00-env-bootstrap/SKILL.md`.
@@ -27,4 +27,4 @@ When assisting in this repository, route your workflow through the five core ski
 
 6. **Legacy Skill & Script Onboarding Migrator (`05-skill-migrator`):**
    - Follow `.agents/skills/05-skill-migrator/SKILL.md` and `.agents/skills/05-skill-migrator/references/migration-starter-guide.md`.
-   - Run `npm run migrate:skill -- <source-path>` to decompose oversized prompts and legacy helper scripts into `<500`-token `SKILL.md` bundles, co-located `scripts/`, `references/`, and 3-Tier Domain Brain shards.
+   - Run `npm run migrate:skill -- --discover` to inventory all existing rules/prompts/scripts and SOLID spec gaps across a project, then run `npm run migrate:skill -- <source-path> --name <skill-id> [--squad <squad>] [--apply]` to decompose oversized prompts and legacy helper scripts into `<500`-token `SKILL.md` bundles, secret-sanitized `references/` & `scripts/`, Session Tapes for UI scripts, and `≤ 150`-line 3-Tier Domain Brain shards.
