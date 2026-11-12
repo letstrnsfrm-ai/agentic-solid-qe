@@ -363,7 +363,7 @@ export { expect };
   writeFileSafe(
     path.join(TARGET_ROOT, '.env.example'),
     `# Agentic-SOLID-QE Environment & Persona Credentials Template
-# Copy this file to .env (git-ignored) and supply values for your environment.
+# Copy this file to .env (git-ignored by init) and supply values for your environment.
 BASE_URL=${resolvedUrl}
 TEST_USERNAME=test.user@example.com
 TEST_PASSWORD=
@@ -517,6 +517,34 @@ function configurePlaywrightConfig() {
   }
 }
 
+const REQUIRED_GITIGNORE_ENTRIES = [
+  'node_modules/',
+  'test-results/',
+  'playwright-report/',
+  'blob-report/',
+  '.playwright-cli/',
+  '.auth/',
+  '.env',
+  '.env.*',
+  '!.env.example',
+];
+
+/**
+ * Ensures consumer repos never commit secrets or session tokens (.env, .auth/*.json).
+ * Creates .gitignore if missing; otherwise appends only the missing entries (non-destructive).
+ */
+function mergeConsumerGitignore() {
+  const ignorePath = path.join(TARGET_ROOT, '.gitignore');
+  const existing = fs.existsSync(ignorePath) ? fs.readFileSync(ignorePath, 'utf8') : '';
+  const present = new Set(existing.split(/\r?\n/).map((line) => line.trim()));
+  const missing = REQUIRED_GITIGNORE_ENTRIES.filter((entry) => !present.has(entry));
+  if (missing.length === 0) return;
+  const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+  const header = existing ? '\n# Added by agentic-solid-qe (secrets, session tokens, artifacts)\n' : '';
+  fs.writeFileSync(ignorePath, `${existing}${prefix}${header}${missing.join('\n')}\n`, 'utf8');
+  console.log(`${existing ? '🔧 Updated' : '🌱 Created'}: .gitignore (+${missing.length} entries: ${missing.join(', ')})`);
+}
+
 function backupPreExistingInstructionFiles() {
   if (path.resolve(SOURCE_ROOT) === path.resolve(TARGET_ROOT)) return;
   const candidateBackups = [
@@ -627,6 +655,7 @@ if (command === 'init') {
   mergeConsumerPackageJson();
   mergeConsumerTsConfig();
   configurePlaywrightConfig();
+  mergeConsumerGitignore();
 } else {
   // sync mode: preserve consumer domain-memory.md and src/
   if (!fs.existsSync(targetDomainMemory)) {
@@ -715,4 +744,4 @@ if (squadName) {
   }
 }
 
-console.log(`\n✅ Agentic-SOLID-QE (${command}) complete! Next step: run 'npm run coverage:gaps' or invoke '/01-cli-explorer'.\n`);
+console.log(`\n✅ Agentic-SOLID-QE (${command}) complete! Next steps: run 'npm install && npx playwright install chromium', then 'npm run coverage:gaps' or invoke '/01-cli-explorer'.\n`);
