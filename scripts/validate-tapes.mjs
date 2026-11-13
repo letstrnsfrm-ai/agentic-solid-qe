@@ -24,6 +24,9 @@ const VALID_STRATEGIES = new Set(
 const VALID_ASSERTIONS = new Set(
   schema.properties.expectedStates.items.properties.assertionType.enum
 );
+const VALID_CAPTURE_SOURCES = new Set(
+  schema.properties.capturedVariables.items.properties.source.enum
+);
 
 const VALID_ROOT_KEYS = new Set(Object.keys(schema.properties));
 const VALID_PERSONA_KEYS = new Set(Object.keys(schema.properties.persona.properties));
@@ -105,6 +108,14 @@ for (const file of tapeFiles) {
   if (typeof tape.baseUrl !== 'string' || !isValidHttpUrl(tape.baseUrl)) {
     errors.push(`[${file}] Invalid baseUrl '${tape.baseUrl}'. Must be an http:// or https:// URL.`);
   }
+  if (
+    tape.apiBaseUrl !== undefined &&
+    (typeof tape.apiBaseUrl !== 'string' || !isValidHttpUrl(tape.apiBaseUrl))
+  ) {
+    errors.push(
+      `[${file}] Invalid apiBaseUrl '${tape.apiBaseUrl}'. Must be an http:// or https:// URL.`
+    );
+  }
 
   if (!VALID_CHARTERS.has(tape.charter)) {
     errors.push(`[${file}] Invalid charter '${tape.charter}'.`);
@@ -148,6 +159,9 @@ for (const file of tapeFiles) {
         } else {
           declaredVars.add(cv.name);
         }
+        if (!VALID_CAPTURE_SOURCES.has(cv.source)) {
+          errors.push(`[${file}] capturedVariables '${cv.name}' has invalid source '${cv.source}'.`);
+        }
       }
     }
   }
@@ -170,6 +184,9 @@ for (const file of tapeFiles) {
 
       if (!VALID_ACTIONS.has(step.action)) {
         errors.push(`${stepLabel} Invalid action '${step.action}'.`);
+      }
+      if (step.action === 'press' && (typeof step.key !== 'string' || !step.key.trim())) {
+        errors.push(`${stepLabel} Action 'press' requires a non-empty 'key' (e.g., 'Enter', 'Tab').`);
       }
       if (
         typeof step.componentCandidate !== 'string' ||

@@ -5,6 +5,7 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,8 +27,37 @@ jobs:
       - run: npm run audit:solid
       - run: npm run validate:tapes
 
+  playwright-smoke:
+    name: Playwright PR Smoke Gate (@smoke | @p0)
+    if: github.event_name == 'pull_request'
+    needs: architecture-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - name: Run Smoke / P0 Suite
+        env:
+          BASE_URL: ${{ vars.BASE_URL }}
+          TEST_USERNAME: ${{ secrets.TEST_USERNAME }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+        run: npx playwright test --project=chromium --grep "@smoke|@p0" --pass-with-no-tests
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        if: failure()
+        with:
+          name: playwright-report-smoke
+          path: playwright-report/
+          include-hidden-files: false
+          retention-days: 7
+
   playwright-e2e:
     name: Playwright E2E (Shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+    if: github.event_name != 'pull_request'
     needs: architecture-gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -45,6 +75,10 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium
       - name: Run Sharded Playwright Suite
+        env:
+          BASE_URL: ${{ vars.BASE_URL }}
+          TEST_USERNAME: ${{ secrets.TEST_USERNAME }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
         run: npx playwright test --project=chromium --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: failure()

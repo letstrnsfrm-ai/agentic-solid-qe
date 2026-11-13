@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { defineConfig, devices } from '@playwright/test';
 
 // Load .env for local runs (Node >= 20.12); CI supplies env vars directly.
@@ -6,6 +7,8 @@ try {
 } catch {
   /* no .env present */
 }
+
+const hasAuthSetup = fs.existsSync('tests/auth.setup.ts');
 
 export default defineConfig({
   testDir: './tests',
@@ -29,9 +32,11 @@ export default defineConfig({
     navigationTimeout: 15_000,
   },
   projects: [
+    ...(hasAuthSetup ? [{ name: 'setup', testMatch: /.*\.setup\.ts/ }] : []),
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      ...(hasAuthSetup ? { dependencies: ['setup'] } : {}),
     },
     {
       name: 'firefox',

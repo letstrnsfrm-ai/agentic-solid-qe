@@ -59,6 +59,12 @@
       "format": "uri",
       "pattern": "^https?://"
     },
+    "apiBaseUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://",
+      "description": "Optional separate-origin API base URL when backend endpoints live on a different domain than baseUrl."
+    },
     "persona": {
       "type": "object",
       "required": ["role", "dataBuilderRef"],
@@ -94,7 +100,7 @@
           "capturedAtStep": { "type": "integer", "minimum": 1 },
           "source": {
             "type": "string",
-            "enum": ["textContent", "inputValue", "urlParam", "attribute"]
+            "enum": ["textContent", "inputValue", "urlParam", "urlPathSegment", "attribute"]
           },
           "description": { "type": "string" }
         }
@@ -139,6 +145,11 @@
               "waitFor",
               "route"
             ]
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Key name for 'press' actions (e.g., Enter, Tab, Escape)."
           },
           "inputDataRef": {
             "type": "string",

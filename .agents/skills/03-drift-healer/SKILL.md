@@ -11,12 +11,9 @@ When invoked as `/03-drift-healer`, immediately execute:
 2. Extract the failing `scenarioId`, step, locator, and error stack trace, then cross-reference `.exploratory/tapes/<scenarioId>.json` and `.agents/domain/shards/<feature>.md`.
 
 ## 2. Live `@playwright/cli` Differential Inspection (`references/healing-playbook.md`)
-1. Open the target environment in headed mode:
-   ```bash
-   npx playwright-cli -s=heal open <baseUrl> --headed
-   ```
-2. Replay steps up to the failure point and inspect `.playwright-cli/page-*.yml` + `npx playwright-cli -s=heal console error`.
-3. Compare the live accessibility snapshot and API responses against the recorded Session Tape.
+1. Open the target app: `npx playwright-cli -s=heal open <baseUrl> --headed` (or `--browser=chromium`; reopen idle sessions via `.playwright/cli.config.json` `storageState`).
+2. Replay to failure, run `snapshot --filename=.playwright-cli/page-heal.yml` after SPA nav, check `eval "() => location.href"`, and run `console error`.
+3. Compare live UI/API against the Session Tape (separate expected negative-flow `4xx` from `5xx`/errors).
 
 ## 3. Root-Cause Classification & Action (Checkpoint)
 Present the diagnosis to the engineer:

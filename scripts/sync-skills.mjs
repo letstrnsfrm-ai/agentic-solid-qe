@@ -370,6 +370,35 @@ TEST_PASSWORD=
 `,
     { overwrite: false }
   );
+
+  writeFileSafe(
+    path.join(TARGET_ROOT, 'tests/auth.setup.ts'),
+    `import fs from 'node:fs';
+import path from 'node:path';
+import { test as setup } from '@playwright/test';
+
+const authFile = '.auth/standard.json';
+
+/**
+ * Global Persona Auth Setup (wired automatically by playwright.config.ts).
+ * Customize the login steps below or run /00-env-bootstrap to capture .auth/standard.json.
+ */
+setup('authenticate standard persona', async ({ page }) => {
+  const username = process.env.TEST_USERNAME;
+  const password = process.env.TEST_PASSWORD;
+  if (!username || !password) {
+    setup.skip(true, 'Set TEST_USERNAME and TEST_PASSWORD in .env or CI secrets to mint .auth/standard.json');
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(authFile), { recursive: true });
+  await page.goto('/');
+  // TODO: Replace with your app login steps (or capture via /00-env-bootstrap), then save storageState:
+  await page.context().storageState({ path: authFile });
+});
+`,
+    { overwrite }
+  );
 }
 
 function mergeConsumerPackageJson() {
@@ -656,6 +685,11 @@ if (command === 'init') {
   mergeConsumerTsConfig();
   configurePlaywrightConfig();
   mergeConsumerGitignore();
+  copyRecursive(
+    path.join(SOURCE_ROOT, '.github/workflows/playwright-ci.yml'),
+    path.join(TARGET_ROOT, '.github/workflows/playwright-ci.yml'),
+    { overwrite: false }
+  );
 } else {
   // sync mode: preserve consumer domain-memory.md and src/
   if (!fs.existsSync(targetDomainMemory)) {

@@ -26,8 +26,12 @@
 25. `.github/copilot-instructions.md`, `.claude/commands/*`, `AGENTS.md` all synced OK on init (positive).
 
 ---
-## Addressed in this PR
+## Addressed in PR #1
 - #2 (next steps now mention `npx playwright install chromium`), #9 (init now creates/merges `.gitignore`), #20a/#20d (config template loads `.env`, env-gated `IGNORE_HTTPS_ERRORS`), #20c (comment on `testIdAttribute`).
 
-## Open follow-ups (not in this PR)
-#3/#6/#7/#10/#11 skill guidance (browser fallback, re-snapshot after SPA nav, `--filename`, reopen with storageState, `location.href`), #14/#16 tape schema (multi-origin API, `press` key, path-segment capture), #20b auth `setup` project scaffold, #23 ship adopter CI workflow with secrets wiring, #24 shard seeding from explored routes.
+## Addressed in follow-up hardening
+- #3/#6/#7/#10/#11/#13 skill guidance (`00-env-bootstrap`, `01-cli-explorer`, `03-drift-healer`: `--browser=chromium` fallback, `snapshot --filename`, `storageState` reopen, `location.href` truth, expected negative-flow `4xx` vs `5xx` distinction).
+- #14/#16a/#16b/#16c tape schema & validator (`apiBaseUrl`, `key` on `press` steps, `urlPathSegment` capture source).
+- #20b conditional `setup` project in `playwright.config.ts` + `tests/auth.setup.ts` scaffold on `init`.
+- #23 upgraded `.github/workflows/playwright-ci.yml` (PR `@smoke|@p0` gate + push sharded regression + `BASE_URL`/`TEST_USERNAME`/`TEST_PASSWORD` wiring) copied on `init`.
+- #24 mandatory shard seeding in `00`/`01` skills + `npm run domain:graph -- --seed-from-tapes`.

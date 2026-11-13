@@ -178,7 +178,77 @@ export function buildDomainGraph({ writeToDisk = true } = {}) {
   return graph;
 }
 
+export function seedShardsFromTapes() {
+  const tapesDir = path.join(ROOT, '.exploratory/tapes');
+  if (!fs.existsSync(tapesDir)) return [];
+
+  const existingGraph = buildDomainGraph({ writeToDisk: false });
+  const indexedRoutes = new Set(Object.keys(existingGraph.routeIndex));
+  const shardsDir = path.join(DOMAIN_DIR, 'shards');
+  fs.mkdirSync(shardsDir, { recursive: true });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const createdShards = [];
+
+  for (const entry of fs.readdirSync(tapesDir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink() || !entry.isFile() || !entry.name.endsWith('.json')) continue;
+    let tape;
+    try {
+      tape = JSON.parse(fs.readFileSync(path.join(tapesDir, entry.name), 'utf8'));
+    } catch {
+      continue;
+    }
+    const scenarioId = tape.scenarioId || path.basename(entry.name, '.json');
+    const shardPath = path.join(shardsDir, `${scenarioId}.md`);
+    if (fs.existsSync(shardPath)) continue;
+
+    const routes = new Set();
+    const components = new Set();
+    for (const step of tape.semanticSteps ?? []) {
+      if (step.componentCandidate) components.add(step.componentCandidate);
+      for (const candidate of [step.pageRoute, step.waitForUrl, step.action === 'goto' ? step.locatorContract?.value : null]) {
+        if (typeof candidate === 'string' && candidate.startsWith('/') && !candidate.startsWith('//')) {
+          routes.add(candidate.split('?')[0]);
+        }
+      }
+    }
+    const unindexed = [...routes].filter((r) => !indexedRoutes.has(r));
+    if (unindexed.length === 0 && existingGraph.summary.totalShards > 0) continue;
+
+    const routeLines = (unindexed.length > 0 ? unindexed : ['/']).map((r) => `- \`${r}\``).join('\n');
+    const compLines = [...components].map((c) => `- \`${c}\``).join('\n') || '- _TBD_';
+    const apiLine = tape.apiBaseUrl ? `\n- **API Base URL:** \`${tape.apiBaseUrl}\`` : '';
+
+    const content = `# Feature Shard: ${tape.title || scenarioId}
+
+- **Owner Squad:** \`@org/unassigned\`
+- **Last Verified:** \`${today}\`
+- **Source Tape:** \`.exploratory/tapes/${entry.name}\`${apiLine}
+
+## Routes
+${routeLines}
+
+## Component Candidates
+${compLines}
+`;
+    fs.writeFileSync(shardPath, content, 'utf8');
+    createdShards.push(rel(shardPath));
+    for (const r of unindexed) indexedRoutes.add(r);
+  }
+
+  return createdShards;
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
+  const seedFromTapes = process.argv.includes('--seed-from-tapes');
+  if (seedFromTapes) {
+    const seeded = seedShardsFromTapes();
+    if (seeded.length > 0) {
+      console.log(`🌱 Seeded ${seeded.length} shard(s) from Session Tapes: ${seeded.join(', ')}`);
+    } else {
+      console.log('ℹ️  No new shards needed from Session Tapes.');
+    }
+  }
   const graph = buildDomainGraph({ writeToDisk: true });
   console.log(
     `🧠 Compiled Federated Domain Graph -> .agents/domain/domain-graph.json (${graph.summary.totalDomainHubs} domain hub(s), ${graph.summary.totalShards} shard(s), ${Object.keys(graph.routeIndex).length} indexed route(s)).`
