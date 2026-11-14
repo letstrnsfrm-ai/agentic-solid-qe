@@ -4,7 +4,9 @@ playwright-report/
 blob-report/
 playwright/.cache/
 .playwright-cli/
+.playwright/
 .auth/
+.agents/legacy-backups/
 .env
 .env.*
 !.env.example

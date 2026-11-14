@@ -379,15 +379,28 @@ function resolveTargetSquad(tape, cliSquad, domainGraph) {
   return null;
 }
 
+const SENSITIVE_BUILDER_PROP_REGEX =
+  /(?:password|passcode|^pin$|user[_-]?pin|card[_-]?pin|security[_-]?pin|^otp$|[_-]otp|otp[_-]|cvv|cvc|^ssn$|[_-]ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?key|token)/i;
+
+const REQUIRE_ENV_HELPER_CODE = `function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(\`Missing required environment variable: \${name}. Set it in .env or CI secrets.\`);
+  }
+  return value;
+}
+
+`;
+
 function inferDefaultValueForProperty(propName, roleHint = 'standard') {
   const lower = String(propName || '').toLowerCase();
   if (lower === 'role') return roleHint;
   if (lower.includes('username')) return 'standard_user';
-  if (/password|secret|token|api[_-]?key/i.test(lower)) {
+  if (SENSITIVE_BUILDER_PROP_REGEX.test(toKebabCase(propName).replace(/-/g, '_'))) {
     const envVar = lower.includes('password')
       ? 'TEST_PASSWORD'
       : `TEST_${toKebabCase(propName).replace(/-/g, '_').toUpperCase()}`;
-    return { __envExpr: `process.env.${envVar} ?? ''` };
+    return { __envExpr: `requireEnv('${envVar}')` };
   }
   if (lower.includes('email')) return 'qe.user@example.com';
   if (lower.includes('firstname')) return 'Ada';
@@ -540,7 +553,14 @@ export function compileSessionTape({
           })
           .join('\n\n');
 
-        const updatedContent = existing.content.replace(/\}\s*$/, `\n${injectedMethodsCode}\n}\n`);
+        let baseBuilderContent = existing.content;
+        if (
+          injectedMethodsCode.includes('requireEnv(') &&
+          !/\bfunction\s+requireEnv\b/.test(baseBuilderContent)
+        ) {
+          baseBuilderContent = `${REQUIRE_ENV_HELPER_CODE}${baseBuilderContent}`;
+        }
+        const updatedContent = baseBuilderContent.replace(/\}\s*$/, `\n${injectedMethodsCode}\n}\n`);
         plannedOperations.push({
           layer: 'data-builder',
           action: 'extend-existing',
@@ -577,7 +597,8 @@ export function compileSessionTape({
         })
         .join('\n\n');
 
-      const codeContent = `/**
+      const needsRequireEnv = methodsCode.includes('requireEnv(');
+      const codeContent = `${needsRequireEnv ? REQUIRE_ENV_HELPER_CODE : ''}/**
  * Typed Data Builder (DIP) synthesized from Session Tape '${sanitizeCodeComment(scenarioId)}'.
  */
 export class ${builderClass} {

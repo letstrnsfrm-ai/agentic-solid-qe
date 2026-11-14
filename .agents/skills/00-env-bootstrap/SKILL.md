@@ -17,7 +17,7 @@ When invoked as `/00-env-bootstrap`, immediately execute:
 For complex deployed apps behind SSO, MFA, or multi-step login:
 1. Launch a headed session via `npx playwright-cli -s=auth open <baseUrl> --headed` (add `--browser=chromium` if default `chrome` is unavailable).
 2. Execute credential fill from `src/data/user.builder.ts` (or pause for engineer interactive SSO/MFA completion).
-3. Persist reusable session state into `.auth/<persona>.json` (git-ignored) and record cookie/`localStorage` keys in `domain-memory.md`. Reopen idle sessions via `.playwright/cli.config.json` (`browser.contextOptions.storageState`).
+3. Persist reusable session state into `.auth/<persona>.json` (git-ignored) and record cookie/`localStorage` **key names only (never raw token/cookie values)** in `domain-memory.md`. Reopen idle sessions via `.playwright/cli.config.json` (`browser.contextOptions.storageState`).
 
 ## 3. Unfamiliar App Navigation & Mandatory Shard Seeding
 1. After SPA load, run `npx playwright-cli -s=auth snapshot --filename=.playwright-cli/page-landing.yml` and inspect landmarks (`navigation`, `banner`, `main`, links).

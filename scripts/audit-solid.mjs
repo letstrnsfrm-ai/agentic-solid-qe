@@ -5,6 +5,7 @@
  * (.agents/domain/domains/<squad>/, src/domains/<squad>/, and composed @fixtures/*.fixture).
  * Zero external runtime dependencies.
  */
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -390,6 +391,8 @@ const allCodeAndArtifactFiles = [
   ...walkFiles(path.join(ROOT, 'tests'), '.ts'),
   ...walkFiles(path.join(ROOT, '.agents/skills')),
   ...walkFiles(path.join(ROOT, '.agents/domain'), '.md'),
+  ...walkFiles(path.join(ROOT, '.agents/legacy-backups')),
+  ...walkFiles(path.join(ROOT, '.playwright')),
   ...walkFiles(path.join(ROOT, '.exploratory/tapes'), '.json'),
   ...walkFiles(path.join(ROOT, '.claude/commands'), '.md'),
   ...walkFiles(path.join(ROOT, '.github/prompts'), '.md'),
@@ -397,6 +400,16 @@ const allCodeAndArtifactFiles = [
   ...walkFiles(path.join(ROOT, '.azure-pipelines'), '.yml'),
   ...walkFiles(path.join(ROOT, 'defects'), '.md'),
 ];
+
+const TS_SENSITIVE_ASSIGN_REGEX =
+  /\b(password|passcode|pin|userPin|cardPin|securityPin|otp|cvv|cvc|ssn|secret|clientSecret|client_secret|privateKey|private_key|accessKey|access_key|apiKey|api_key|authToken|auth_token|accessToken|access_token|refreshToken|refresh_token|bearerToken)\s*[:=]\s*(['"`])([^'"`]+)\2/g;
+
+const TS_SENSITIVE_ENV_FALLBACK_REGEX =
+  /\bprocess\.env\.([A-Za-z0-9_]+)\s*(?:\?\?|\|\|)\s*(['"`])([^'"`]+)\2/g;
+
+const ARTIFACT_CREDENTIAL_ASSIGN_REGEX =
+  /\b(password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token)\s*[:=]\s*(['"`])([^'"`$\n]{4,})\2/gi;
+
 for (const targetFile of allCodeAndArtifactFiles) {
   const rawText = fs.readFileSync(targetFile, 'utf8');
   const relTarget = rel(targetFile);
@@ -410,6 +423,7 @@ for (const targetFile of allCodeAndArtifactFiles) {
   const isPromptOrMemoryArtifact =
     relTarget.startsWith('.agents/skills/') ||
     relTarget.startsWith('.agents/domain/') ||
+    relTarget.startsWith('.agents/legacy-backups/') ||
     relTarget.startsWith('.claude/commands/') ||
     relTarget.startsWith('.github/prompts/');
   if (isPromptOrMemoryArtifact) {
@@ -431,6 +445,35 @@ for (const targetFile of allCodeAndArtifactFiles) {
         );
       }
     }
+
+    for (const match of inspectText.matchAll(TS_SENSITIVE_ASSIGN_REGEX)) {
+      const propName = match[1];
+      const literalVal = match[3].trim();
+      if (
+        literalVal &&
+        literalVal !== 'secret_sauce' &&
+        !literalVal.startsWith('${') &&
+        !literalVal.startsWith('<')
+      ) {
+        violations.push(
+          `[Secret Hygiene Gate] ${relTarget} hardcodes a plaintext credential in '${propName}'. Inject secrets via requireEnv() in src/data/*.builder.ts.`
+        );
+      }
+    }
+
+    for (const match of inspectText.matchAll(TS_SENSITIVE_ENV_FALLBACK_REGEX)) {
+      const envName = match[1];
+      const fallbackVal = match[3].trim();
+      const isSensitiveEnv =
+        /(?:password|passcode|\bpin\b|_pin|pin_|\botp\b|_otp|cvv|cvc|\bssn\b|_ssn|secret|private[_-]?key|access[_-]?key|api[_-]?key|token)/i.test(
+          envName
+        );
+      if (isSensitiveEnv && fallbackVal && fallbackVal !== 'secret_sauce') {
+        violations.push(
+          `[Secret Hygiene Gate] ${relTarget} defines a non-empty fallback secret literal for process.env.${envName}. Use requireEnv('${envName}') instead of a hardcoded fallback credential.`
+        );
+      }
+    }
   }
 
   for (const pattern of SECRET_PATTERNS) {
@@ -440,16 +483,60 @@ for (const targetFile of allCodeAndArtifactFiles) {
       );
     }
   }
-  if (
-    relTarget.startsWith('.agents/skills/') &&
-    relTarget.includes('/scripts/') &&
-    /(?:password|secret|client[_-]?secret|api[_-]?key|access[_-]?token|auth[_-]?token|token)\s*[:=]\s*['"`][^'"`$]{4,}['"`]/i.test(
-      rawText
-    )
-  ) {
-    violations.push(
-      `[Secret Hygiene Gate] ${relTarget} contains a hardcoded credential assignment. Parameterize secrets via process.env.`
-    );
+
+  const isScannedArtifactOrScript =
+    (relTarget.startsWith('.agents/skills/') && relTarget.includes('/scripts/')) ||
+    relTarget.startsWith('.agents/domain/') ||
+    relTarget.startsWith('.agents/legacy-backups/') ||
+    relTarget.startsWith('defects/') ||
+    relTarget.startsWith('.playwright/');
+  if (isScannedArtifactOrScript) {
+    for (const match of rawText.matchAll(ARTIFACT_CREDENTIAL_ASSIGN_REGEX)) {
+      const keyName = match[1];
+      const assignedVal = match[3].trim();
+      if (
+        assignedVal &&
+        assignedVal !== 'secret_sauce' &&
+        !assignedVal.startsWith('<') &&
+        !assignedVal.includes('process.env') &&
+        !assignedVal.includes('UserBuilder.')
+      ) {
+        violations.push(
+          `[Secret Hygiene Gate] ${relTarget} contains a hardcoded '${keyName}' credential assignment. Parameterize secrets via process.env and record only key names in documentation.`
+        );
+      }
+    }
+  }
+}
+
+// 7. Audit Git Index & Staged Files for accidentally tracked .env, .auth/*.json, .playwright-cli/, .playwright/, or .agents/legacy-backups/
+const FORBIDDEN_GIT_TRACKED_FILE_REGEX =
+  /^(?:\.env|\..*\.env|\.env\.(?!example$)[^/]+|\.auth\/.*\.json|\.playwright-cli\/.*|\.playwright\/.*|\.agents\/legacy-backups\/.*)$/;
+
+if (fs.existsSync(path.join(ROOT, '.git'))) {
+  const trackedSet = new Set();
+  for (const gitArgs of [
+    ['ls-files', '--cached'],
+    ['diff', '--cached', '--name-only'],
+  ]) {
+    try {
+      const res = spawnSync('git', gitArgs, { cwd: ROOT, encoding: 'utf8' });
+      if (res.status === 0 && res.stdout) {
+        for (const line of res.stdout.split(/\r?\n/)) {
+          const trimmed = line.trim().replace(/\\/g, '/');
+          if (trimmed) trackedSet.add(trimmed);
+        }
+      }
+    } catch {
+      /* ignore if git binary is unavailable */
+    }
+  }
+  for (const trackedPath of trackedSet) {
+    if (FORBIDDEN_GIT_TRACKED_FILE_REGEX.test(trackedPath)) {
+      violations.push(
+        `[Git Secret File Gate] '${trackedPath}' is tracked or staged in Git. Run 'git rm --cached ${trackedPath}' so sensitive environment/session files are never committed.`
+      );
+    }
   }
 }
 

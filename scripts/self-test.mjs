@@ -902,7 +902,8 @@ test('7. Compiler & Enterprise Code Security: blocks tape code-injection/prototy
       false,
       'Generated Data Builder must not contain hardcoded secret_sauce password'
     );
-    assert.match(generatedBuilderCode, /process\.env\.TEST_PASSWORD \?\? ''/);
+    assert.match(generatedBuilderCode, /requireEnv\('TEST_PASSWORD'\)/);
+    assert.match(generatedBuilderCode, /function requireEnv\(name: string\): string/);
 
     const generatedApiClientCode = fs.readFileSync(
       path.join(tmpDir, 'src/api/policy-endorsement.client.ts'),
@@ -930,6 +931,137 @@ test('7. Compiler & Enterprise Code Security: blocks tape code-injection/prototy
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('8. Credential Leak Prevention: blocks hardcoded builder passwords & env fallbacks, query-string secrets, sensitive capturedVariables, legacy-backup leaks, and git-staged .env/.auth files + installs pre-commit hook', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-cred-hygiene-'));
+  try {
+    // Initialize a git repository first so init installs .git/hooks/pre-commit
+    spawnSync('git', ['init'], { cwd: tmpDir, encoding: 'utf8' });
+
+    const initRes = runNode(SYNC_SCRIPT, [
+      'init',
+      tmpDir,
+      '--url',
+      'https://banking.example.com',
+      '--name',
+      'Banking Portal',
+    ]);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    // 8a. Verify .git/hooks/pre-commit was installed and .gitignore includes .playwright/ and .agents/legacy-backups/
+    const preCommitPath = path.join(tmpDir, '.git/hooks/pre-commit');
+    assert.equal(fs.existsSync(preCommitPath), true, 'Expected .git/hooks/pre-commit to be installed');
+    assert.match(
+      fs.readFileSync(preCommitPath, 'utf8'),
+      /node scripts\/audit-solid\.mjs && node scripts\/validate-tapes\.mjs/
+    );
+    const gitignoreText = fs.readFileSync(path.join(tmpDir, '.gitignore'), 'utf8');
+    assert.match(gitignoreText, /^\.playwright\/$/m);
+    assert.match(gitignoreText, /^\.agents\/legacy-backups\/$/m);
+
+    // 8b. Verify validate-tapes blocks query-string secrets (?api_key=) and sensitive capturedVariables (pin/password)
+    const leakyTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'leaky-query-tape',
+      title: 'Leaky Query Param and Sensitive Capture Tape',
+      charter: 'happy-path-baseline',
+      recordedAt: '2026-11-14T00:00:00.000Z',
+      baseUrl: 'https://banking.example.com',
+      persona: {
+        role: 'standard',
+        dataBuilderRef: 'UserBuilder.standardUser',
+      },
+      preconditions: ['Portal reachable'],
+      capturedVariables: [
+        {
+          name: 'userPin',
+          capturedAtStep: 1,
+          source: 'inputValue',
+        },
+      ],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Call endpoint with query secret',
+          action: 'apiCall',
+          capturesVariable: 'userPin',
+          componentCandidate: 'AccountApiClient',
+          locatorContract: {
+            strategy: 'apiEndpoint',
+            value: '/api/v1/accounts?api_key=PlaintextKey999',
+          },
+        },
+      ],
+      networkContracts: [
+        {
+          urlPattern: '/api/v1/accounts?token=MySecretToken',
+          method: 'GET',
+          expectedStatus: 200,
+        },
+      ],
+      expectedStates: [
+        {
+          description: 'Status check',
+          assertionType: 'toBeVisible',
+          targetComponent: 'accountPage.summary',
+          targetProperty: 'root',
+          expectedValueRef: 'UserBuilder.standardUser().role',
+        },
+      ],
+    };
+    const leakyTapePath = path.join(tmpDir, '.exploratory/tapes/leaky-query-tape.json');
+    fs.writeFileSync(leakyTapePath, JSON.stringify(leakyTape, null, 2), 'utf8');
+    const tapeValFail = runNode(path.join(tmpDir, 'scripts/validate-tapes.mjs'), [], tmpDir);
+    assert.equal(tapeValFail.status, 1, 'Expected validate-tapes to reject query secrets and sensitive captures');
+    assert.match(tapeValFail.stderr, /targets a sensitive credential field/);
+    assert.match(tapeValFail.stderr, /without secret query parameters/);
+    assert.match(tapeValFail.stderr, /contains a secret query parameter/);
+    fs.unlinkSync(leakyTapePath);
+
+    // 8c. Verify audit-solid blocks hardcoded passwords and non-empty env fallbacks in src/data/user.builder.ts
+    const userBuilderPath = path.join(tmpDir, 'src/data/user.builder.ts');
+    const cleanBuilderContent = fs.readFileSync(userBuilderPath, 'utf8');
+    fs.writeFileSync(
+      userBuilderPath,
+      `export class UserBuilder {
+  static standardUser() {
+    return {
+      role: 'standard',
+      username: 'alice',
+      password: 'HardcodedStagingPassword2026!',
+      securityPin: process.env.TEST_SECURITY_PIN ?? '987654',
+    };
+  }
+}
+`,
+      'utf8'
+    );
+    const builderAuditFail = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(builderAuditFail.status, 1, 'Expected audit-solid to reject hardcoded password and env fallback');
+    assert.match(builderAuditFail.stderr, /hardcodes a plaintext credential in 'password'/);
+    assert.match(builderAuditFail.stderr, /defines a non-empty fallback secret literal for process\.env\.TEST_SECURITY_PIN/);
+    fs.writeFileSync(userBuilderPath, cleanBuilderContent, 'utf8');
+
+    // 8d. Verify audit-solid blocks plaintext credential assignments in .agents/legacy-backups/ and defects/
+    fs.mkdirSync(path.join(tmpDir, '.agents/legacy-backups'), { recursive: true });
+    const legacyBackupFile = path.join(tmpDir, '.agents/legacy-backups/AGENTS.legacy.md');
+    fs.writeFileSync(legacyBackupFile, '# Legacy Rules\npassword: "LegacyStagingSecret99"\n', 'utf8');
+    const backupAuditFail = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(backupAuditFail.status, 1, 'Expected audit-solid to reject plaintext password in legacy-backups');
+    assert.match(backupAuditFail.stderr, /AGENTS\.legacy\.md contains a hardcoded 'password' credential assignment/);
+    fs.unlinkSync(legacyBackupFile);
+
+    // 8e. Verify audit-solid fails if a .env or .auth/standard.json file is force-staged in Git
+    fs.writeFileSync(path.join(tmpDir, '.env'), 'TEST_PASSWORD=SuperSecretEnvVal\n', 'utf8');
+    spawnSync('git', ['add', '-f', '.env'], { cwd: tmpDir, encoding: 'utf8' });
+    const gitStagedFail = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(gitStagedFail.status, 1, 'Expected audit-solid to fail when .env is staged in Git');
+    assert.match(gitStagedFail.stderr, /\[Git Secret File Gate\] '\.env' is tracked or staged in Git/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 
 
 

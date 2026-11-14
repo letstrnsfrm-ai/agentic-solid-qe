@@ -103,11 +103,22 @@ export function isSafeClassName(rawName) {
   );
 }
 
+export const SENSITIVE_FIELD_REGEX =
+  /(?:password|passcode|\bpin\b|user[_-]?pin|card[_-]?pin|\botp\b|cvv|cvc|\bssn\b|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|bearer[_-]?token|\btoken\b)/i;
+
+export const QUERY_SECRET_PARAM_REGEX =
+  /[?&](?:password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|api[_-]?key|access[_-]?key|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token|bearer)=[^&\s]+/i;
+
+export function hasQuerySecretParam(rawUrlOrPath) {
+  return typeof rawUrlOrPath === 'string' && QUERY_SECRET_PARAM_REGEX.test(rawUrlOrPath);
+}
+
 export function isValidHttpUrl(rawUrl) {
   try {
     const parsed = new URL(rawUrl);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
     if (parsed.username || parsed.password) return false;
+    if (hasQuerySecretParam(rawUrl)) return false;
     const hostLower = parsed.hostname.toLowerCase();
     if (
       FORBIDDEN_METADATA_HOSTS.has(hostLower) ||
@@ -163,14 +174,16 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
   }
 
   if (typeof tape.baseUrl !== 'string' || !isValidHttpUrl(tape.baseUrl)) {
-    errors.push(`[${file}] Invalid baseUrl '${tape.baseUrl}'. Must be an http:// or https:// URL.`);
+    errors.push(
+      `[${file}] Invalid baseUrl '${tape.baseUrl}'. Must be a safe http(s):// URL without embedded credentials or secret query params.`
+    );
   }
   if (
     tape.apiBaseUrl !== undefined &&
     (typeof tape.apiBaseUrl !== 'string' || !isValidHttpUrl(tape.apiBaseUrl))
   ) {
     errors.push(
-      `[${file}] Invalid apiBaseUrl '${tape.apiBaseUrl}'. Must be an http:// or https:// URL.`
+      `[${file}] Invalid apiBaseUrl '${tape.apiBaseUrl}'. Must be a safe http(s):// URL without embedded credentials or secret query params.`
     );
   }
 
@@ -267,6 +280,15 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
             `[${file}] capturedVariables '${cv.name}' has invalid jsonPath '${cv.jsonPath}'.`
           );
         }
+        const isSensitiveCapture =
+          /(?:password|passcode|\bpin\b|user[_-]?pin|card[_-]?pin|\botp\b|cvv|cvc|\bssn\b|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key)/i.test(
+            `${cv.name || ''} ${cv.jsonPath || ''}`
+          );
+        if (isSensitiveCapture) {
+          errors.push(
+            `[${file}] capturedVariables '${cv.name}' targets a sensitive credential field. Do not capture passwords, PINs, OTPs, CVVs, or secret keys into runtime spec variables.`
+          );
+        }
       }
     }
   }
@@ -277,11 +299,11 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
     for (const step of tape.semanticSteps) {
       const stepLabel = `[${file} step #${step.stepIndex}]`;
       const isPasswordTarget =
-        /password|secret|token|api[_-]?key/i.test(step.intent ?? '') ||
-        /password|secret|token|api[_-]?key/i.test(step.locatorContract?.value ?? '');
+        SENSITIVE_FIELD_REGEX.test(step.intent ?? '') ||
+        SENSITIVE_FIELD_REGEX.test(step.locatorContract?.value ?? '');
       if (step.action === 'fill' && isPasswordTarget && step.inputData !== undefined) {
         errors.push(
-          `${stepLabel} Raw secret 'inputData' is forbidden on password/secret fields. Use 'inputDataRef' referencing a Data Builder method (e.g. 'UserBuilder.standardUser().password').`
+          `${stepLabel} Raw secret 'inputData' is forbidden on sensitive credential fields (password/secret/token/apiKey/pin/passcode/otp/cvv/ssn). Use 'inputDataRef' referencing a Data Builder method.`
         );
       }
 
@@ -299,7 +321,10 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         }
       }
       if (step.portalUrl !== undefined && (typeof step.portalUrl !== 'string' || !isValidHttpUrl(step.portalUrl))) {
-        errors.push(`${stepLabel} Invalid step.portalUrl '${step.portalUrl}'. Must be an http(s):// URL.`);
+        errors.push(`${stepLabel} Invalid step.portalUrl '${step.portalUrl}'. Must be a safe http(s):// URL.`);
+      }
+      if (step.pageRoute !== undefined && hasQuerySecretParam(step.pageRoute)) {
+        errors.push(`${stepLabel} step.pageRoute '${step.pageRoute}' contains a secret query parameter.`);
       }
       if (step.conditionRef !== undefined && !isSafeMemberRef(step.conditionRef)) {
         errors.push(`${stepLabel} Invalid step.conditionRef '${step.conditionRef}'. Must be a safe Data Builder reference.`);
@@ -343,19 +368,21 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         }
         if (step.action === 'goto' || step.locatorContract.strategy === 'url') {
           const navVal = String(step.locatorContract.value ?? '');
-          const isSafeRelative = navVal.startsWith('/') && !navVal.startsWith('//');
+          const isSafeRelative =
+            navVal.startsWith('/') && !navVal.startsWith('//') && !hasQuerySecretParam(navVal);
           if (!isSafeRelative && !isValidHttpUrl(navVal)) {
             errors.push(
-              `${stepLabel} Unsafe navigation URL '${navVal}'. Must be a root-relative path ('/...') or http(s):// URL.`
+              `${stepLabel} Unsafe navigation URL '${navVal}'. Must be a root-relative path ('/...') or safe http(s):// URL without secret query parameters.`
             );
           }
         }
         if (step.action === 'apiCall' || step.locatorContract.strategy === 'apiEndpoint') {
           const epVal = String(step.locatorContract.value ?? '');
-          const isSafeRelative = epVal.startsWith('/') && !epVal.startsWith('//');
+          const isSafeRelative =
+            epVal.startsWith('/') && !epVal.startsWith('//') && !hasQuerySecretParam(epVal);
           if (!isSafeRelative && !isValidHttpUrl(epVal)) {
             errors.push(
-              `${stepLabel} Unsafe apiEndpoint URL '${epVal}'. Must be a root-relative path ('/api/...') or safe http(s):// URL.`
+              `${stepLabel} Unsafe apiEndpoint URL '${epVal}'. Must be a root-relative path ('/api/...') or safe http(s):// URL without secret query parameters.`
             );
           }
         }
@@ -386,6 +413,11 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
   if (Array.isArray(tape.networkContracts)) {
     for (const nc of tape.networkContracts) {
       checkUnknownKeys(nc, VALID_NETWORK_KEYS, `[${file} networkContracts]`, errors);
+      if (hasQuerySecretParam(nc.urlPattern)) {
+        errors.push(
+          `[${file}] networkContracts.urlPattern '${nc.urlPattern}' contains a secret query parameter (?api_key=, ?token=, ?password=, etc.).`
+        );
+      }
       if (nc.clientCandidate !== undefined && !isSafeClassName(nc.clientCandidate)) {
         errors.push(`[${file}] Invalid networkContracts.clientCandidate '${nc.clientCandidate}'.`);
       }

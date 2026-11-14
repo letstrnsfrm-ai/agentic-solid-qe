@@ -772,14 +772,16 @@ const REQUIRED_GITIGNORE_ENTRIES = [
   'playwright-report/',
   'blob-report/',
   '.playwright-cli/',
+  '.playwright/',
   '.auth/',
+  '.agents/legacy-backups/',
   '.env',
   '.env.*',
   '!.env.example',
 ];
 
 /**
- * Ensures consumer repos never commit secrets or session tokens (.env, .auth/*.json).
+ * Ensures consumer repos never commit secrets or session tokens (.env, .auth/*.json, .playwright/, .agents/legacy-backups/).
  * Creates .gitignore if missing; otherwise appends only the missing entries (non-destructive).
  */
 function mergeConsumerGitignore() {
@@ -798,6 +800,60 @@ function mergeConsumerGitignore() {
   );
 }
 
+/**
+ * Installs or non-destructively augments a zero-dependency .git/hooks/pre-commit gate
+ * so local commits run audit-solid.mjs and validate-tapes.mjs before secrets can enter git history.
+ */
+function installGitPreCommitHook() {
+  const gitDir = path.join(TARGET_ROOT, '.git');
+  if (!fs.existsSync(gitDir)) return;
+  try {
+    const gitStat = fs.lstatSync(gitDir);
+    if (gitStat.isSymbolicLink() || !gitStat.isDirectory()) return;
+  } catch {
+    return;
+  }
+  const hooksDir = path.join(gitDir, 'hooks');
+  const hookPath = path.join(hooksDir, 'pre-commit');
+  if (fs.existsSync(hookPath) && fs.lstatSync(hookPath).isSymbolicLink()) return;
+
+  const gateSnippet = `# agentic-solid-qe pre-commit secret & SOLID hygiene gate\nnode scripts/audit-solid.mjs && node scripts/validate-tapes.mjs\n`;
+  if (!fs.existsSync(hookPath)) {
+    const hookContent = `#!/usr/bin/env sh\nset -e\n${gateSnippet}`;
+    if (!dryRun) {
+      fs.mkdirSync(hooksDir, { recursive: true });
+      fs.writeFileSync(hookPath, hookContent, { encoding: 'utf8', mode: 0o755 });
+      try {
+        fs.chmodSync(hookPath, 0o755);
+      } catch {
+        /* ignore chmod no-op on non-POSIX filesystems */
+      }
+    }
+    console.log(
+      `${dryRun ? '🔍 [DRY-RUN] Would install' : '🛡️  Installed'}: .git/hooks/pre-commit (runs audit:solid + validate:tapes)`
+    );
+    return;
+  }
+
+  const existingHook = fs.readFileSync(hookPath, 'utf8');
+  if (existingHook.includes('scripts/audit-solid.mjs')) return;
+  const prefix = existingHook && !existingHook.endsWith('\n') ? '\n' : '';
+  if (!dryRun) {
+    fs.writeFileSync(hookPath, `${existingHook}${prefix}\n${gateSnippet}`, {
+      encoding: 'utf8',
+      mode: 0o755,
+    });
+    try {
+      fs.chmodSync(hookPath, 0o755);
+    } catch {
+      /* ignore chmod no-op on non-POSIX filesystems */
+    }
+  }
+  console.log(
+    `${dryRun ? '🔍 [DRY-RUN] Would update' : '🛡️  Updated'}: .git/hooks/pre-commit (+audit:solid & validate:tapes gate)`
+  );
+}
+
 function backupPreExistingInstructionFiles() {
   if (path.resolve(SOURCE_ROOT) === path.resolve(TARGET_ROOT)) return;
   const candidateBackups = [
@@ -812,8 +868,13 @@ function backupPreExistingInstructionFiles() {
     const backupDest = path.join(TARGET_ROOT, '.agents/legacy-backups', item.backupName);
     if (!fs.existsSync(backupDest)) {
       if (!dryRun) {
-        fs.mkdirSync(path.dirname(backupDest), { recursive: true });
+        fs.mkdirSync(path.dirname(backupDest), { recursive: true, mode: 0o700 });
         fs.copyFileSync(existingPath, backupDest);
+        try {
+          fs.chmodSync(backupDest, 0o600);
+        } catch {
+          /* ignore chmod no-op on non-POSIX filesystems */
+        }
       }
       console.log(
         `${dryRun ? '🔍 [DRY-RUN] Would back up' : '📦 Backed up'} pre-existing instructions: ${item.relPath} -> ${rel(backupDest)} (discoverable via 'npm run migrate:skill -- --discover')`
@@ -912,6 +973,7 @@ if (command === 'init') {
   mergeConsumerTsConfig();
   configurePlaywrightConfig();
   mergeConsumerGitignore();
+  installGitPreCommitHook();
   copyRecursive(
     path.join(SOURCE_ROOT, '.github/workflows/playwright-ci.yml'),
     path.join(TARGET_ROOT, '.github/workflows/playwright-ci.yml'),
@@ -958,6 +1020,7 @@ if (command === 'init') {
   mergeConsumerNpmrc();
   mergeConsumerTsConfig();
   mergeConsumerGitignore();
+  installGitPreCommitHook();
 }
 
 // Optional: Federated Org Brain sync (--org-brain <path>)
