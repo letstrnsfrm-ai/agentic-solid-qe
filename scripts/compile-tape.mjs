@@ -15,12 +15,94 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildDomainGraph, seedShardsFromTapes } from './build-domain-graph.mjs';
+import {
+  FORBIDDEN_IDENTIFIERS,
+  isSafeClassName,
+  isSafeMemberRef,
+  validateTapeObject,
+} from './validate-tapes.mjs';
 
 const ROOT = process.cwd();
 const TAPES_DIR = path.join(ROOT, '.exploratory/tapes');
 const MAX_COMPONENT_LINES = 150;
 const COMPONENT_WARN_LINES = 130;
 const MAX_SCAN_FILE_BYTES = 1024 * 1024;
+
+const ALLOWED_HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head']);
+const JS_RESERVED_WORDS = new Set([
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'debugger',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'false',
+  'finally',
+  'for',
+  'function',
+  'if',
+  'import',
+  'in',
+  'instanceof',
+  'new',
+  'null',
+  'return',
+  'super',
+  'switch',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'typeof',
+  'var',
+  'void',
+  'while',
+  'with',
+  'yield',
+  'let',
+  'static',
+  'implements',
+  'interface',
+  'package',
+  'private',
+  'protected',
+  'public',
+  'await',
+  'eval',
+  'arguments',
+]);
+
+function isSafeJsIdentifier(name) {
+  return (
+    typeof name === 'string' &&
+    /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) &&
+    !FORBIDDEN_IDENTIFIERS.has(name) &&
+    !JS_RESERVED_WORDS.has(name)
+  );
+}
+
+function assertSafeJsIdentifier(name, label = 'identifier') {
+  if (!isSafeJsIdentifier(name)) {
+    throw new Error(`Security Error: Unsafe or reserved JavaScript ${label} '${name}'.`);
+  }
+  return name;
+}
+
+function sanitizeCodeComment(rawText) {
+  return String(rawText ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\*\//g, '* /')
+    .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
+    .trim();
+}
 
 function walkFiles(dir, extFilter) {
   if (!fs.existsSync(dir)) return [];
@@ -96,18 +178,25 @@ function stripClassSuffix(className, suffixes) {
 function parseBuilderRef(refStr) {
   if (!refStr || typeof refStr !== 'string') return null;
   if (refStr.startsWith('capturedVariable:')) {
+    const varName = refStr.slice('capturedVariable:'.length).trim();
+    assertSafeJsIdentifier(varName, 'capturedVariable reference');
     return {
       isCapturedVar: true,
-      varName: refStr.slice('capturedVariable:'.length),
+      varName,
     };
   }
   const clean = refStr.trim();
+  if (!isSafeMemberRef(clean)) {
+    throw new Error(`Security Error: Invalid Data Builder reference '${refStr}'.`);
+  }
   const parts = clean.split('.');
   if (parts.length < 2) return null;
-  const builderClass = parts[0].replace(/\(\)$/, '');
+  const builderClass = assertSafeJsIdentifier(parts[0].replace(/\(\)$/, ''), 'builder class');
   const methodRaw = parts[1];
-  const methodName = methodRaw.replace(/\(\)$/, '');
-  const propChain = parts.slice(2).map((p) => p.replace(/\(\)$/, ''));
+  const methodName = assertSafeJsIdentifier(methodRaw.replace(/\(\)$/, ''), 'builder method');
+  const propChain = parts
+    .slice(2)
+    .map((p) => assertSafeJsIdentifier(p.replace(/\(\)$/, ''), 'builder property'));
   return {
     isCapturedVar: false,
     builderClass,
@@ -169,6 +258,17 @@ function buildRootLocatorExpression(parentScope) {
   return `page.locator(${val})`;
 }
 
+function ensureSafeLocatorPropName(candidateName, fallbackIndex = 1) {
+  let cleaned = String(candidateName || '').replace(/[^A-Za-z0-9_]/g, '');
+  if (!cleaned || /^[0-9]/.test(cleaned)) {
+    cleaned = `element${cleaned || fallbackIndex}`;
+  }
+  if (FORBIDDEN_IDENTIFIERS.has(cleaned) || JS_RESERVED_WORDS.has(cleaned)) {
+    cleaned = `${cleaned}Element`;
+  }
+  return cleaned;
+}
+
 /**
  * Derives a clean camelCase Locator property name from a step's locatorContract & action.
  */
@@ -180,25 +280,22 @@ function deriveLocatorPropertyName(step) {
     .trim();
   const baseCamel = toCamelCase(rawVal) || `element${step.stepIndex}`;
 
+  let prop;
   if (lc.strategy === 'getByRole') {
     const roleSuffix = toPascalCase(lc.role || 'Element');
-    if (baseCamel.toLowerCase().endsWith(roleSuffix.toLowerCase())) {
-      return baseCamel;
-    }
-    return `${baseCamel}${roleSuffix}`;
+    prop = baseCamel.toLowerCase().endsWith(roleSuffix.toLowerCase())
+      ? baseCamel
+      : `${baseCamel}${roleSuffix}`;
+  } else if (lc.strategy === 'getByPlaceholder' || lc.strategy === 'getByLabel' || step.action === 'fill') {
+    prop = baseCamel.toLowerCase().endsWith('input') ? baseCamel : `${baseCamel}Input`;
+  } else if (step.action === 'selectOption') {
+    prop = baseCamel.toLowerCase().endsWith('select') ? baseCamel : `${baseCamel}Select`;
+  } else if (step.action === 'click' && !baseCamel.toLowerCase().endsWith('button') && !baseCamel.toLowerCase().endsWith('link')) {
+    prop = `${baseCamel}Button`;
+  } else {
+    prop = baseCamel;
   }
-  if (lc.strategy === 'getByPlaceholder' || lc.strategy === 'getByLabel' || step.action === 'fill') {
-    if (baseCamel.toLowerCase().endsWith('input')) return baseCamel;
-    return `${baseCamel}Input`;
-  }
-  if (step.action === 'selectOption') {
-    if (baseCamel.toLowerCase().endsWith('select')) return baseCamel;
-    return `${baseCamel}Select`;
-  }
-  if (step.action === 'click' && !baseCamel.toLowerCase().endsWith('button') && !baseCamel.toLowerCase().endsWith('link')) {
-    return `${baseCamel}Button`;
-  }
-  return baseCamel;
+  return ensureSafeLocatorPropName(prop, step.stepIndex);
 }
 
 /**
@@ -253,7 +350,12 @@ function toImportAlias(relPath) {
 
 function resolveTargetSquad(tape, cliSquad, domainGraph) {
   if (cliSquad) {
-    return cliSquad.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    if (!/^[a-z0-9][a-z0-9-]*$/i.test(cliSquad) || cliSquad.includes('..')) {
+      throw new Error(
+        `Security Error: Invalid --squad '${cliSquad}'. Must be a kebab-case identifier ([a-z0-9-]) with no path traversal.`
+      );
+    }
+    return cliSquad.toLowerCase();
   }
   const scenarioId = tape.scenarioId || '';
   for (const hub of domainGraph.domainHubs || []) {
@@ -281,7 +383,12 @@ function inferDefaultValueForProperty(propName, roleHint = 'standard') {
   const lower = String(propName || '').toLowerCase();
   if (lower === 'role') return roleHint;
   if (lower.includes('username')) return 'standard_user';
-  if (lower.includes('password')) return 'secret_sauce';
+  if (/password|secret|token|api[_-]?key/i.test(lower)) {
+    const envVar = lower.includes('password')
+      ? 'TEST_PASSWORD'
+      : `TEST_${toKebabCase(propName).replace(/-/g, '_').toUpperCase()}`;
+    return { __envExpr: `process.env.${envVar} ?? ''` };
+  }
   if (lower.includes('email')) return 'qe.user@example.com';
   if (lower.includes('firstname')) return 'Ada';
   if (lower.includes('lastname')) return 'Lovelace';
@@ -292,6 +399,13 @@ function inferDefaultValueForProperty(propName, roleHint = 'standard') {
     return '100.00';
   }
   return `sample_${toKebabCase(propName).replace(/-/g, '_')}`;
+}
+
+function serializeBuilderPropertyValue(val) {
+  if (val && typeof val === 'object' && typeof val.__envExpr === 'string') {
+    return val.__envExpr;
+  }
+  return JSON.stringify(val);
 }
 
 export function compileSessionTape({
@@ -307,10 +421,11 @@ export function compileSessionTape({
   let tapePath = null;
   if (tapeInput) {
     const directCandidate = path.resolve(ROOT, tapeInput);
-    const byIdCandidate = path.join(TAPES_DIR, `${tapeInput.replace(/\.json$/, '')}.json`);
-    if (fs.existsSync(directCandidate) && isWithinDir(directCandidate, ROOT)) {
+    const cleanId = String(tapeInput).replace(/\.json$/, '');
+    const byIdCandidate = path.resolve(TAPES_DIR, `${cleanId}.json`);
+    if (isWithinDir(directCandidate, ROOT) && fs.existsSync(directCandidate)) {
       tapePath = directCandidate;
-    } else if (fs.existsSync(byIdCandidate) && isWithinDir(byIdCandidate, TAPES_DIR)) {
+    } else if (isWithinDir(byIdCandidate, TAPES_DIR) && fs.existsSync(byIdCandidate)) {
       tapePath = byIdCandidate;
     } else {
       throw new Error(`Session Tape not found for '${tapeInput}'. Expected file in .exploratory/tapes/<scenario-id>.json.`);
@@ -330,8 +445,22 @@ export function compileSessionTape({
     tapePath = uncompiled || allTapeFiles[0];
   }
 
+  const tapeStat = fs.lstatSync(tapePath);
+  if (tapeStat.isSymbolicLink() || !tapeStat.isFile() || tapeStat.size > MAX_SCAN_FILE_BYTES) {
+    throw new Error(`Security Error: Refusing to compile symbolic link or oversized Session Tape: ${rel(tapePath)}`);
+  }
+
   const tape = JSON.parse(fs.readFileSync(tapePath, 'utf8'));
-  const scenarioId = tape.scenarioId || path.basename(tapePath, '.json');
+  const validationErrors = validateTapeObject(tape, path.basename(tapePath), {
+    expectedScenarioId: path.basename(tapePath, '.json'),
+  });
+  if (validationErrors.length > 0) {
+    throw new Error(
+      `Session Tape failed schema & security validation:\n  - ${validationErrors.join('\n  - ')}`
+    );
+  }
+
+  const scenarioId = tape.scenarioId;
   const resolvedSquad = resolveTargetSquad(tape, squadOverride, domainGraph);
 
   const baseSrcDir = resolvedSquad ? `src/domains/${resolvedSquad}` : 'src';
@@ -390,6 +519,7 @@ export function compileSessionTape({
 
   const builderImports = new Map(); // BuilderClass -> importAlias
   for (const [builderClass, methodMap] of builderRequirements.entries()) {
+    assertSafeJsIdentifier(builderClass, 'Data Builder class');
     publishedCapabilities.add(builderClass);
     const existing = existingClasses.get(builderClass);
     if (existing) {
@@ -398,12 +528,13 @@ export function compileSessionTape({
       if (missingMethods.length > 0) {
         const injectedMethodsCode = missingMethods
           .map((mName) => {
+            assertSafeJsIdentifier(mName, 'Data Builder method');
             const props = methodMap.get(mName);
             if (!props || props.size === 0) {
               return `  static ${mName}(): Record<string, string> {\n    return { role: 'standard' };\n  }`;
             }
             const propLines = [...props.entries()]
-              .map(([k, v]) => `      ${k}: ${JSON.stringify(v)},`)
+              .map(([k, v]) => `      ${assertSafeJsIdentifier(k, 'Data Builder property')}: ${serializeBuilderPropertyValue(v)},`)
               .join('\n');
             return `  static ${mName}() {\n    return {\n${propLines}\n    };\n  }`;
           })
@@ -435,18 +566,19 @@ export function compileSessionTape({
 
       const methodsCode = [...methodMap.entries()]
         .map(([mName, props]) => {
+          assertSafeJsIdentifier(mName, 'Data Builder method');
           if (!props || props.size === 0) {
             return `  static ${mName}() {\n    return {\n      role: 'standard',\n    };\n  }`;
           }
           const propLines = [...props.entries()]
-            .map(([k, v]) => `      ${k}: ${JSON.stringify(v)},`)
+            .map(([k, v]) => `      ${assertSafeJsIdentifier(k, 'Data Builder property')}: ${serializeBuilderPropertyValue(v)},`)
             .join('\n');
           return `  static ${mName}() {\n    return {\n${propLines}\n    };\n  }`;
         })
         .join('\n\n');
 
       const codeContent = `/**
- * Typed Data Builder (DIP) synthesized from Session Tape '${scenarioId}'.
+ * Typed Data Builder (DIP) synthesized from Session Tape '${sanitizeCodeComment(scenarioId)}'.
  */
 export class ${builderClass} {
 ${methodsCode}
@@ -492,9 +624,15 @@ ${methodsCode}
 
   const apiClientImports = new Map(); // ClientClass -> { importAlias, fixtureProp }
   for (const [clientClass, endpoints] of apiClientCandidates.entries()) {
+    if (!isSafeClassName(clientClass)) {
+      throw new Error(`Security Error: Unsafe API Client class name '${clientClass}'.`);
+    }
     publishedCapabilities.add(clientClass);
     const existing = existingClasses.get(clientClass);
-    const fixtureProp = toCamelCase(stripClassSuffix(clientClass, ['Client']));
+    const fixtureProp = assertSafeJsIdentifier(
+      toCamelCase(stripClassSuffix(clientClass, ['Client'])) || 'apiClient',
+      'API Client fixture property'
+    );
     if (existing) {
       apiClientImports.set(clientClass, { importAlias: existing.importAlias, fixtureProp });
       plannedOperations.push({
@@ -510,7 +648,11 @@ ${methodsCode}
       const importAlias = toImportAlias(targetRel);
       apiClientImports.set(clientClass, { importAlias, fixtureProp });
       const primaryEndpoint = endpoints[0]?.endpoint?.replace(/\*+$/, '') || '/api/v1/resource';
-      const httpMethod = (endpoints[0]?.method || 'POST').toLowerCase();
+      const rawMethod = String(endpoints[0]?.method || 'POST').toLowerCase();
+      if (!ALLOWED_HTTP_METHODS.has(rawMethod)) {
+        throw new Error(`Security Error: Unsupported HTTP method '${endpoints[0]?.method}'.`);
+      }
+      const httpMethod = rawMethod;
 
       const codeContent = `import type { APIRequestContext } from '@playwright/test';
 import type { ApiClientContract, ApiResponseEnvelope } from '@contracts/api-client.contract';
@@ -518,7 +660,7 @@ import { AuthTokenBridge } from '@shared/api/auth-token.bridge';
 
 /**
  * SOLID Backend API Client (SRP: zero expect() calls, LSP: implements ApiClientContract).
- * Compiled from Session Tape '${scenarioId}'.
+ * Compiled from Session Tape '${sanitizeCodeComment(scenarioId)}'.
  */
 export class ${clientClass} implements ApiClientContract {
   constructor(
@@ -531,10 +673,10 @@ export class ${clientClass} implements ApiClientContract {
     endpoint = ${JSON.stringify(primaryEndpoint)},
     payload?: TPayload
   ): Promise<ApiResponseEnvelope<TResponse>> {
-    const headers = this.storageStatePath
-      ? AuthTokenBridge.extractAuthHeaders(this.storageStatePath)
-      : {};
     const url = endpoint.startsWith('http') ? endpoint : \`\${this.baseUrl}\${endpoint}\`;
+    const headers = this.storageStatePath
+      ? AuthTokenBridge.extractAuthHeaders(this.storageStatePath, { targetOrigin: url })
+      : {};
     const res = await this.request.${httpMethod}(url, {
       ...(payload !== undefined ? { data: payload } : {}),
       headers,
@@ -592,6 +734,7 @@ export class ${clientClass} implements ApiClientContract {
 
   const componentDescriptors = new Map(); // ComponentClass -> { className, propNameOnPage, importAlias, stepLocators }
   for (const [compClass, steps] of componentStepsMap.entries()) {
+    assertSafeJsIdentifier(compClass, 'Component class');
     publishedCapabilities.add(compClass);
     const isWizardStep =
       compClass.endsWith('Step') ||
@@ -600,7 +743,7 @@ export class ${clientClass} implements ApiClientContract {
     const isErrorComponent = /error/i.test(compClass);
 
     const stem = stripClassSuffix(compClass, ['StepComponent', 'Component', 'Step']);
-    const propNameOnPage = toCamelCase(stem) || 'widget';
+    const propNameOnPage = ensureSafeLocatorPropName(toCamelCase(stem) || 'widget');
     const existing = existingClasses.get(compClass);
 
     // Map each step to a locator property name
@@ -619,8 +762,12 @@ export class ${clientClass} implements ApiClientContract {
         propNameOnPage.toLowerCase().endsWith(subProp.toLowerCase())
       ) {
         for (const reqProp of propSet) {
-          if (reqProp !== 'root' && !stepLocatorProps.has(reqProp)) {
-            stepLocatorProps.set(reqProp, `this.root.getByTestId(${JSON.stringify(toKebabCase(reqProp))})`);
+          const safeReqProp = assertSafeJsIdentifier(reqProp, 'expectedState targetProperty');
+          if (safeReqProp !== 'root' && !stepLocatorProps.has(safeReqProp)) {
+            stepLocatorProps.set(
+              safeReqProp,
+              `this.root.getByTestId(${JSON.stringify(toKebabCase(safeReqProp))})`
+            );
           }
         }
       }
@@ -709,7 +856,7 @@ ${contractImport}
 
 /**
  * Atomic SRP Component (<= 150 lines, zero expect() calls).
- * Compiled from Session Tape '${scenarioId}'.
+ * Compiled from Session Tape '${sanitizeCodeComment(scenarioId)}'.
  */
 export class ${compClass} implements ${implementsClause} {
   readonly root: Locator;
@@ -751,7 +898,8 @@ ${propInits ? propInits + '\n' : ''}  }
     const parts = String(state.targetComponent || '').split('.');
     const rootTarget = parts[0];
     if (rootTarget && rootTarget.endsWith('Page')) {
-      const pageClass = toPascalCase(rootTarget);
+      assertSafeJsIdentifier(rootTarget, 'Page fixture property');
+      const pageClass = assertSafeJsIdentifier(toPascalCase(rootTarget), 'Page class');
       if (!pageRequirements.has(rootTarget)) {
         pageRequirements.set(rootTarget, {
           fixtureProp: rootTarget,
@@ -761,7 +909,7 @@ ${propInits ? propInits + '\n' : ''}  }
         });
       }
       if (parts[1]) {
-        const subProp = parts[1];
+        const subProp = assertSafeJsIdentifier(parts[1], 'Page sub-component property');
         // Match component descriptor whose propNameOnPage ends with or matches subProp
         const matchedComp = [...componentDescriptors.values()].find(
           (cd) =>
@@ -802,6 +950,8 @@ ${propInits ? propInits + '\n' : ''}  }
   const pageFixtureDescriptors = new Map(); // fixtureProp -> { pageClassName, importAlias, actor }
   for (const [fixtureProp, pageReq] of pageRequirements.entries()) {
     const { pageClassName, subComponents, actorId } = pageReq;
+    assertSafeJsIdentifier(fixtureProp, 'Page fixture property');
+    assertSafeJsIdentifier(pageClassName, 'Page class');
     publishedCapabilities.add(pageClassName);
     const existing = existingClasses.get(pageClassName);
     const actorObj = (tape.actors || []).find((a) => a.actorId === actorId) || null;
@@ -845,7 +995,7 @@ ${propInits ? propInits + '\n' : ''}  }
 ${compImports ? compImports + '\n' : ''}
 /**
  * Composed Page Object (SRP: zero expect() calls).
- * Compiled from Session Tape '${scenarioId}'.
+ * Compiled from Session Tape '${sanitizeCodeComment(scenarioId)}'.
  */
 export class ${pageClassName} {
 ${compProps ? compProps + '\n' : ''}
@@ -1029,9 +1179,14 @@ export { expect };
         const payloadArg = step.inputDataRef ? `, ${inputExpr}` : '';
         const endpointArg = JSON.stringify(step.locatorContract?.value || '/api/v1/resource');
         if (step.capturesVariable) {
-          const cv = (tape.capturedVariables || []).find((c) => c.name === step.capturesVariable);
-          const propTail = cv?.jsonPath ? `.${cv.jsonPath.replace(/^data\./, '')}` : '';
-          stmt = `const ${step.capturesVariable}Res = await ${apiFix}.executeRequest(${endpointArg}${payloadArg});\n    const ${step.capturesVariable} = String((${step.capturesVariable}Res.body as Record<string, unknown>)${propTail ? `?.['${propTail.split('.').pop()}'] ?? ''` : ''});`;
+          const safeCapVar = assertSafeJsIdentifier(step.capturesVariable, 'capturesVariable');
+          const cv = (tape.capturedVariables || []).find((c) => c.name === safeCapVar);
+          const lastJsonKey = cv?.jsonPath ? cv.jsonPath.replace(/^data\./, '').split('.').pop() : '';
+          if (lastJsonKey) {
+            assertSafeJsIdentifier(lastJsonKey, 'jsonPath segment');
+          }
+          const keyAccessExpr = lastJsonKey ? `?.[${JSON.stringify(lastJsonKey)}] ?? ''` : '';
+          stmt = `const ${safeCapVar}Res = await ${apiFix}.executeRequest(${endpointArg}${payloadArg});\n    const ${safeCapVar} = String((${safeCapVar}Res.body as Record<string, unknown>)${keyAccessExpr});`;
         } else {
           stmt = `await ${apiFix}.executeRequest(${endpointArg}${payloadArg});`;
         }
@@ -1058,7 +1213,8 @@ export { expect };
           stmt = `await ${locRef}.click();`;
         }
         if (step.capturesVariable) {
-          stmt += `\n    const ${step.capturesVariable} = (await ${locRef}.textContent()) ?? '';`;
+          const safeCapVar = assertSafeJsIdentifier(step.capturesVariable, 'capturesVariable');
+          stmt += `\n    const ${safeCapVar} = (await ${locRef}.textContent()) ?? '';`;
         }
       }
 
@@ -1068,12 +1224,17 @@ export { expect };
           const condExpr = condParsed?.callExpression || 'true';
           stmt = `if (${condExpr}) {\n      ${stmt.replace(/\n/g, '\n      ')}\n    }`;
         }
-        stepStatements.push(`    // Step ${step.stepIndex}: ${step.intent}\n    ${stmt}`);
+        stepStatements.push(`    // Step ${Number(step.stepIndex) || 1}: ${sanitizeCodeComment(step.intent)}\n    ${stmt}`);
       }
     }
 
     const assertionStatements = [];
     for (const state of tape.expectedStates || []) {
+      if (!isSafeMemberRef(state.targetComponent) || !isSafeMemberRef(state.targetProperty)) {
+        throw new Error(
+          `Security Error: Unsafe expectedStates target reference '${state.targetComponent}.${state.targetProperty}'.`
+        );
+      }
       const targetExpr = `${state.targetComponent}.${state.targetProperty}`;
       const parsedExpected = parseBuilderRef(state.expectedValueRef);
       const valExpr = parsedExpected?.isCapturedVar
@@ -1082,11 +1243,11 @@ export { expect };
 
       if (state.assertionType === 'toBeVisible' || state.assertionType === 'toBeHidden') {
         assertionStatements.push(
-          `    // Verify: ${state.description}\n    await expect(${targetExpr}).${state.assertionType}();`
+          `    // Verify: ${sanitizeCodeComment(state.description)}\n    await expect(${targetExpr}).${state.assertionType}();`
         );
       } else {
         assertionStatements.push(
-          `    // Verify: ${state.description}\n    await expect(${targetExpr}).${state.assertionType}(String(${valExpr}));`
+          `    // Verify: ${sanitizeCodeComment(state.description)}\n    await expect(${targetExpr}).${state.assertionType}(String(${valExpr}));`
         );
       }
     }

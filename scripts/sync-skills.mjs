@@ -178,6 +178,8 @@ function assertSafeTargetDirectory(resolvedTarget, label = 'target directory') {
 }
 
 const FORBIDDEN_METADATA_HOSTS = new Set([
+  '0.0.0.0',
+  '[::]',
   '169.254.169.254',
   '169.254.170.2',
   '100.100.100.200',
@@ -185,6 +187,7 @@ const FORBIDDEN_METADATA_HOSTS = new Set([
   'metadata.google.internal',
   'metadata.azure.com',
   'metadata',
+  'instance-data',
 ]);
 
 function assertSafeHttpUrl(rawUrl) {
@@ -206,7 +209,12 @@ function assertSafeHttpUrl(rawUrl) {
     process.exit(1);
   }
   const hostLower = parsed.hostname.toLowerCase();
-  if (FORBIDDEN_METADATA_HOSTS.has(hostLower) || /^169\.254\./.test(hostLower)) {
+  if (
+    FORBIDDEN_METADATA_HOSTS.has(hostLower) ||
+    /^169\.254\./.test(hostLower) ||
+    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(hostLower) ||
+    /^\[fe80:/i.test(hostLower)
+  ) {
     console.error(
       `❌ Security Error: Cloud metadata / link-local address '${parsed.hostname}' is forbidden (SSRF protection).`
     );

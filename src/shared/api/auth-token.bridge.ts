@@ -28,14 +28,45 @@ const MAX_STORAGE_STATE_BYTES = 1024 * 1024; // 1 MB cap
 const CONTROL_CHAR_REGEX = /[\r\n\x00-\x1f\x7f]/g;
 const SAFE_COOKIE_NAME_REGEX = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
+const FORBIDDEN_METADATA_HOSTS = new Set([
+  '0.0.0.0',
+  '[::]',
+  '169.254.169.254',
+  '169.254.170.2',
+  '100.100.100.200',
+  '[fd00:ec2::254]',
+  'metadata.google.internal',
+  'metadata.azure.com',
+  'metadata',
+  'instance-data',
+]);
+
+function isForbiddenTargetUrl(parsed: URL): boolean {
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true;
+  if (parsed.username || parsed.password) return true;
+  const hostLower = parsed.hostname.toLowerCase();
+  return (
+    FORBIDDEN_METADATA_HOSTS.has(hostLower) ||
+    /^169\.254\./.test(hostLower) ||
+    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(hostLower) ||
+    /^\[fe80:/i.test(hostLower)
+  );
+}
+
 function sanitizeHeaderValue(raw: string): string {
   return raw.replace(CONTROL_CHAR_REGEX, '').trim();
 }
 
-function matchesCookieDomain(cookieDomain: string | undefined, targetHost: string | undefined): boolean {
-  if (!targetHost || !cookieDomain) return true;
+function matchesCookieDomain(
+  cookieDomain: string | undefined,
+  targetHost: string | undefined,
+  fallbackOriginHost?: string
+): boolean {
+  if (!targetHost) return true;
+  const effectiveDomain = cookieDomain || fallbackOriginHost;
+  if (!effectiveDomain) return true;
   const normalizedTarget = targetHost.toLowerCase();
-  const normalizedCookie = cookieDomain.toLowerCase().replace(/^\.+/, '');
+  const normalizedCookie = effectiveDomain.toLowerCase().replace(/^\.+/, '');
   return (
     normalizedTarget === normalizedCookie ||
     normalizedTarget.endsWith(`.${normalizedCookie}`)
@@ -121,12 +152,27 @@ export class AuthTokenBridge {
       return {};
     }
 
+    let primaryOriginHost: string | undefined;
+    if (state.origins?.[0]?.origin) {
+      try {
+        primaryOriginHost = new URL(state.origins[0].origin).hostname;
+      } catch {
+        primaryOriginHost = undefined;
+      }
+    }
+
     let targetOriginUrl: URL | null = null;
-    const candidateOrigin = options?.targetOrigin || state.origins?.[0]?.origin;
-    if (candidateOrigin) {
+    const candidateOrigin = options?.targetOrigin ?? state.origins?.[0]?.origin;
+    if (candidateOrigin !== undefined) {
       try {
         targetOriginUrl = new URL(candidateOrigin);
+        if (isForbiddenTargetUrl(targetOriginUrl)) {
+          return {};
+        }
       } catch {
+        if (options?.targetOrigin !== undefined) {
+          return {};
+        }
         targetOriginUrl = null;
       }
     }
@@ -171,7 +217,7 @@ export class AuthTokenBridge {
         if (c.secure && targetOriginUrl.protocol === 'http:' && targetOriginUrl.hostname !== 'localhost') {
           return false;
         }
-        if (!matchesCookieDomain(c.domain, targetOriginUrl.hostname)) {
+        if (!matchesCookieDomain(c.domain, targetOriginUrl.hostname, primaryOriginHost)) {
           return false;
         }
       }

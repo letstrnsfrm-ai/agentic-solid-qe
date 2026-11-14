@@ -366,6 +366,25 @@ const PROMPT_INJECTION_PATTERNS = [
   },
 ];
 
+const UNSAFE_TS_CODE_PATTERNS = [
+  {
+    name: 'Dynamic Code Execution (eval / new Function)',
+    regex: /\b(?:eval\s*\(|new\s+Function\s*\()/,
+  },
+  {
+    name: 'Shell Process Spawning in Test/Page Layer (child_process)',
+    regex: /(?:from\s+['"](?:node:)?child_process['"]|require\s*\(\s*['"](?:node:)?child_process['"]\s*\))/,
+  },
+  {
+    name: 'Hardcoded TLS Verification Bypass (ignoreHTTPSErrors: true / NODE_TLS_REJECT_UNAUTHORIZED=0)',
+    regex: /(?:\bignoreHTTPSErrors\s*:\s*true\b|NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"`]0['"`])/,
+  },
+  {
+    name: 'Hardcoded Content-Security-Policy Bypass (bypassCSP: true)',
+    regex: /\bbypassCSP\s*:\s*true\b/,
+  },
+];
+
 const allCodeAndArtifactFiles = [
   ...walkFiles(path.join(ROOT, 'src'), '.ts'),
   ...walkFiles(path.join(ROOT, 'tests'), '.ts'),
@@ -404,6 +423,16 @@ for (const targetFile of allCodeAndArtifactFiles) {
   }
 
   const inspectText = targetFile.endsWith('.ts') ? stripComments(rawText) : rawText;
+  if (relTarget.startsWith('src/') || relTarget.startsWith('tests/')) {
+    for (const unsafeRule of UNSAFE_TS_CODE_PATTERNS) {
+      if (unsafeRule.regex.test(inspectText)) {
+        violations.push(
+          `[Enterprise Code Security Gate] ${relTarget} contains forbidden pattern '${unsafeRule.name}'.`
+        );
+      }
+    }
+  }
+
   for (const pattern of SECRET_PATTERNS) {
     if (pattern.regex.test(inspectText)) {
       violations.push(

@@ -729,4 +729,207 @@ test('6. Deterministic Tape-to-SOLID Compiler (npx cortex compile) scaffolds fed
   }
 });
 
+test('7. Compiler & Enterprise Code Security: blocks tape code-injection/prototype-pollution, emits env-backed builder passwords & origin-scoped AuthTokenBridge, blocks IPv6 SSRF, and enforces TS code security gates', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-compiler-sec-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, [
+      'init',
+      tmpDir,
+      '--url',
+      'https://portal.insurer.example.com',
+      '--name',
+      'Enterprise Security Suite',
+    ]);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    // 7a. Verify IPv4-mapped IPv6 metadata SSRF URL is rejected
+    const ipv6SsrfRes = runNode(SYNC_SCRIPT, [
+      'init',
+      tmpDir,
+      '--url',
+      'http://[::ffff:169.254.169.254]/latest/meta-data',
+    ]);
+    assert.equal(ipv6SsrfRes.status, 1, 'Expected IPv4-mapped IPv6 metadata URL to be blocked');
+    assert.match(ipv6SsrfRes.stderr, /Cloud metadata \/ link-local address/);
+
+    // 7b. Verify migrate-skill --discover treats compile-tape.mjs as a core engine script
+    const discRes = runNode(path.join(tmpDir, 'scripts/migrate-skill.mjs'), ['--discover'], tmpDir);
+    assert.equal(discRes.status, 0, discRes.stderr);
+    const discJson = JSON.parse(discRes.stdout.slice(discRes.stdout.indexOf('{')));
+    assert.deepEqual(
+      discJson.standaloneHelperScripts,
+      [],
+      'Expected compile-tape.mjs to be excluded from standaloneHelperScripts'
+    );
+
+    // 7c. Verify compile-tape.mjs rejects a tampered Session Tape with code injection in inputDataRef & jsonPath
+    const maliciousTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'tampered-injection-tape',
+      title: 'Tampered Session Tape',
+      charter: 'happy-path-baseline',
+      recordedAt: '2026-11-14T00:00:00.000Z',
+      baseUrl: 'https://portal.insurer.example.com',
+      persona: {
+        role: 'standard',
+        dataBuilderRef: 'AuthPortalBuilder.portalAdmin',
+      },
+      preconditions: ['Portal reachable'],
+      capturedVariables: [
+        {
+          name: 'quoteToken',
+          capturedAtStep: 1,
+          source: 'apiResponseJson',
+          jsonPath: "data.token']); process.exit(1); //",
+        },
+      ],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Attempt code injection via inputDataRef',
+          action: 'fill',
+          inputDataRef: 'AuthPortalBuilder.portalAdmin()); process.exit(1); //',
+          componentCandidate: 'PortalLoginComponent',
+          locatorContract: {
+            strategy: 'getByLabel',
+            value: 'Password',
+          },
+        },
+      ],
+      networkContracts: [],
+      expectedStates: [
+        {
+          description: 'Verify login',
+          assertionType: 'toBeVisible',
+          targetComponent: 'portalLoginPage.__proto__',
+          targetProperty: 'constructor',
+          expectedValueRef: 'AuthPortalBuilder.portalAdmin',
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/tampered-injection-tape.json'),
+      JSON.stringify(maliciousTape, null, 2),
+      'utf8'
+    );
+
+    const badCompileRes = runNode(
+      path.join(tmpDir, 'scripts/compile-tape.mjs'),
+      ['tampered-injection-tape', '--apply'],
+      tmpDir
+    );
+    assert.equal(badCompileRes.status, 1, 'Expected compile-tape to reject tampered tape');
+    assert.match(badCompileRes.stderr, /failed schema & security validation/);
+    fs.unlinkSync(path.join(tmpDir, '.exploratory/tapes/tampered-injection-tape.json'));
+
+    // 7d. Verify valid tape with password property synthesizes process.env.TEST_PASSWORD ?? '' (never hardcoded 'secret_sauce') and origin-scoped AuthTokenBridge
+    const validAuthTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'portal-auth-api-flow',
+      title: 'Portal Login and Origin-Scoped API Call',
+      charter: 'api-contract',
+      tags: ['@p0', '@smoke'],
+      recordedAt: '2026-11-14T00:00:00.000Z',
+      baseUrl: 'https://portal.insurer.example.com',
+      persona: {
+        role: 'standard',
+        dataBuilderRef: 'PortalCredentialBuilder.underwriterUser',
+        storageStatePath: '.auth/underwriter.json',
+      },
+      preconditions: ['Portal reachable'],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Fill underwriter password',
+          action: 'fill',
+          inputDataRef: 'PortalCredentialBuilder.underwriterUser().password',
+          componentCandidate: 'UnderwriterLoginComponent',
+          locatorContract: {
+            strategy: 'getByLabel',
+            value: 'Password',
+          },
+        },
+        {
+          stepIndex: 2,
+          intent: 'Invoke policy API',
+          action: 'apiCall',
+          inputDataRef: 'PortalCredentialBuilder.underwriterUser().username',
+          componentCandidate: 'PolicyEndorsementApiClient',
+          locatorContract: {
+            strategy: 'apiEndpoint',
+            value: '/api/v1/policies/endorse',
+          },
+        },
+      ],
+      networkContracts: [
+        {
+          urlPattern: '/api/v1/policies/endorse',
+          method: 'POST',
+          expectedStatus: 200,
+          clientCandidate: 'PolicyEndorsementApiClient',
+          requestBuilderRef: 'PortalCredentialBuilder.underwriterUser',
+        },
+      ],
+      expectedStates: [
+        {
+          description: 'Login form visible',
+          assertionType: 'toBeVisible',
+          targetComponent: 'underwriterLoginPage.underwriterLogin',
+          targetProperty: 'passwordInput',
+          expectedValueRef: 'PortalCredentialBuilder.underwriterUser().role',
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/portal-auth-api-flow.json'),
+      JSON.stringify(validAuthTape, null, 2),
+      'utf8'
+    );
+
+    const goodCompileRes = runNode(
+      path.join(tmpDir, 'scripts/compile-tape.mjs'),
+      ['portal-auth-api-flow', '--apply'],
+      tmpDir
+    );
+    assert.equal(goodCompileRes.status, 0, `Expected valid tape to compile: ${goodCompileRes.stderr}`);
+
+    const generatedBuilderCode = fs.readFileSync(
+      path.join(tmpDir, 'src/data/portal-credential.builder.ts'),
+      'utf8'
+    );
+    assert.equal(
+      generatedBuilderCode.includes('secret_sauce'),
+      false,
+      'Generated Data Builder must not contain hardcoded secret_sauce password'
+    );
+    assert.match(generatedBuilderCode, /process\.env\.TEST_PASSWORD \?\? ''/);
+
+    const generatedApiClientCode = fs.readFileSync(
+      path.join(tmpDir, 'src/api/policy-endorsement.client.ts'),
+      'utf8'
+    );
+    assert.match(
+      generatedApiClientCode,
+      /AuthTokenBridge\.extractAuthHeaders\(this\.storageStatePath,\s*\{\s*targetOrigin:\s*url\s*\}\)/
+    );
+
+    // 7e. Verify audit-solid blocks unsafe eval(), child_process, and hardcoded ignoreHTTPSErrors: true in specs/src
+    const specFile = path.join(tmpDir, 'tests/portal-auth-api-flow.spec.ts');
+    fs.appendFileSync(
+      specFile,
+      `\nimport { execSync } from 'node:child_process';\nconst bad = { ignoreHTTPSErrors: true, bypassCSP: true };\neval('1+1');\nvoid execSync; void bad;\n`,
+      'utf8'
+    );
+    const unsafeAuditRes = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(unsafeAuditRes.status, 1, 'Expected audit-solid to fail on unsafe TS patterns');
+    assert.match(unsafeAuditRes.stderr, /Dynamic Code Execution/);
+    assert.match(unsafeAuditRes.stderr, /Shell Process Spawning/);
+    assert.match(unsafeAuditRes.stderr, /Hardcoded TLS Verification Bypass/);
+    assert.match(unsafeAuditRes.stderr, /Hardcoded Content-Security-Policy Bypass/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+
 
