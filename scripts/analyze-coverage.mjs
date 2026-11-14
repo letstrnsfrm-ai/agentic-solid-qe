@@ -62,17 +62,71 @@ const specsWithContent = specFiles.map((f) => {
   };
 });
 
-// 2. Recorded Session Tapes & Traceability to Specs
+// 2. Recorded Session Tapes, API Contracts, Multi-Portal Auth Readiness & Traceability to Specs
+const apiClientFilePaths = [
+  ...walkFiles(path.join(ROOT, 'src/api'), '.client.ts'),
+  ...walkFiles(path.join(ROOT, 'src/domains'), '.client.ts'),
+];
+const exportedApiClientClasses = new Set();
+for (const cf of apiClientFilePaths) {
+  const code = fs.readFileSync(cf, 'utf8');
+  for (const m of code.matchAll(/\bexport\s+class\s+([A-Za-z0-9_]+)/g)) {
+    exportedApiClientClasses.add(m[1]);
+  }
+}
+
+const discoveredApiContracts = [];
+const unimplementedApiClientSet = new Set();
+const missingAuthSessionSet = new Set();
+
 const tapeFiles = walkFiles(path.join(ROOT, '.exploratory/tapes'), '.json');
 const tapes = tapeFiles.map((f) => {
   try {
     const data = JSON.parse(fs.readFileSync(f, 'utf8'));
     const scenarioId = data.scenarioId || path.basename(f, '.json');
     const matchingSpec = specsWithContent.find((s) => s.rawContent.includes(scenarioId));
+
+    const requiredSessions = [];
+    if (data.persona?.storageStatePath) {
+      requiredSessions.push(data.persona.storageStatePath);
+    }
+    if (Array.isArray(data.actors)) {
+      for (const actor of data.actors) {
+        if (actor?.storageStatePath) {
+          requiredSessions.push(actor.storageStatePath);
+        }
+      }
+    }
+    for (const sessRel of requiredSessions) {
+      if (!fs.existsSync(path.join(ROOT, sessRel))) {
+        missingAuthSessionSet.add(sessRel);
+      }
+    }
+
+    if (Array.isArray(data.networkContracts)) {
+      for (const nc of data.networkContracts) {
+        const candidate = nc.clientCandidate || null;
+        const isClientImplemented = candidate ? exportedApiClientClasses.has(candidate) : false;
+        if (candidate && !isClientImplemented) {
+          unimplementedApiClientSet.add(candidate);
+        }
+        discoveredApiContracts.push({
+          scenarioId,
+          method: nc.method,
+          urlPattern: nc.urlPattern || nc.endpointPattern,
+          expectedStatus: nc.expectedStatus,
+          clientCandidate: candidate,
+          isClientImplemented,
+        });
+      }
+    }
+
     return {
       scenarioId,
       charter: data.charter,
       persona: data.persona?.role,
+      actors: Array.isArray(data.actors) ? data.actors.map((a) => a.actorId) : [],
+      apiContractCount: Array.isArray(data.networkContracts) ? data.networkContracts.length : 0,
       title: data.title,
       compiledToSpec: matchingSpec ? matchingSpec.file : null,
     };
@@ -88,6 +142,8 @@ const tapes = tapeFiles.map((f) => {
 const uncompiledTapes = tapes
   .filter((t) => !t.compiledToSpec && t.charter !== 'invalid-json')
   .map((t) => t.scenarioId);
+const unimplementedApiClients = [...unimplementedApiClientSet];
+const missingAuthSessions = [...missingAuthSessionSet];
 
 // 3. Domain Shards (Global + Squad-Scoped) & Coverage Mapping
 const shards = domainGraph.shards.map((shard) => {
@@ -126,9 +182,14 @@ const openDefects = defectFiles.map((f) => path.relative(ROOT, f));
 // 5. Existing SOLID Architecture (Global + Domain-Scoped)
 const contracts = walkFiles(path.join(ROOT, 'src/contracts'), '.ts').map((f) => path.basename(f));
 const components = [
-  ...walkFiles(path.join(ROOT, 'src/components'), '.ts'),
+  ...walkFiles(path.join(ROOT, 'src/components'), '.ts').filter((f) => !f.endsWith('.step.ts')),
   ...walkFiles(path.join(ROOT, 'src/shared/components'), '.ts'),
   ...walkFiles(path.join(ROOT, 'src/domains'), '.component.ts'),
+].map((f) => path.basename(f));
+const wizardSteps = [
+  ...walkFiles(path.join(ROOT, 'src/components'), '.step.ts'),
+  ...walkFiles(path.join(ROOT, 'src/steps'), '.step.ts'),
+  ...walkFiles(path.join(ROOT, 'src/domains'), '.step.ts'),
 ].map((f) => path.basename(f));
 const pages = [
   ...walkFiles(path.join(ROOT, 'src/pages'), '.ts'),
@@ -138,15 +199,14 @@ const dataBuilders = [
   ...walkFiles(path.join(ROOT, 'src/data'), '.ts'),
   ...walkFiles(path.join(ROOT, 'src/domains'), '.builder.ts'),
 ].map((f) => path.basename(f));
-const apiClients = [
-  ...walkFiles(path.join(ROOT, 'src/api'), '.client.ts'),
-  ...walkFiles(path.join(ROOT, 'src/domains'), '.client.ts'),
-].map((f) => path.basename(f));
+const apiClients = apiClientFilePaths.map((f) => path.basename(f));
 
 // 6. Compute Recommended Next Action (1-Test-at-a-Time Vertical Slice Loop)
 let recommendedNextAction;
 let nextSingleScenarioToAutomate = null;
-if (uncompiledTapes.length > 0) {
+if (missingAuthSessions.length > 0) {
+  recommendedNextAction = `Invoke /00-env-bootstrap to capture missing persona session(s) required by Session Tapes: ${missingAuthSessions.join(', ')}`;
+} else if (uncompiledTapes.length > 0) {
   nextSingleScenarioToAutomate = uncompiledTapes[0];
   recommendedNextAction = `Invoke '/02-solid-architect ${nextSingleScenarioToAutomate}' to compile and verify 1 Session Tape at a time (${uncompiledTapes.length} uncompiled: ${uncompiledTapes.join(', ')})`;
 } else if (shards.length === 0 && specsWithContent.length === 0) {
@@ -168,6 +228,7 @@ const report = {
     baseUrl,
     needsTargetUrlConfig,
     savedAuthSessions,
+    missingAuthSessions,
   },
   federatedBrain: {
     domainGraphPath: '.agents/domain/domain-graph.json',
@@ -179,12 +240,22 @@ const report = {
   uncoveredShards,
   recordedSessionTapes: tapes,
   uncompiledTapes,
+  discoveredApiContracts,
+  unimplementedApiClients,
   nextSingleScenarioToAutomate,
   openDefects,
   automatedSpecs: specsWithContent.map(({ rawContent, ...rest }) => rest),
-  existingArchitecture: { contracts, pages, components, dataBuilders, apiClients },
+  existingArchitecture: {
+    contracts,
+    pages,
+    components,
+    wizardSteps,
+    dataBuilders,
+    apiClients,
+  },
   recommendedNextAction,
 };
 
 console.log('📊 Agentic-SOLID-QE Coverage & Federated Brain Snapshot:\n');
 console.log(JSON.stringify(report, null, 2));
+

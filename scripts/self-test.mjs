@@ -211,12 +211,10 @@ test('3. Multi-portal + Backend API + Conditional Wizard tape validates, auto-in
 
     const squadRes = runNode(SYNC_SCRIPT, ['sync', tmpDir, '--squad', 'motor-b2c']);
     assert.equal(squadRes.status, 0, squadRes.stderr);
-
-    // Export motor-b2cFixture so Published Capabilities in motor-b2c/index.md pass capability check
-    fs.writeFileSync(
-      path.join(tmpDir, 'src/domains/motor-b2c/fixtures/motor.fixture.ts'),
-      `export const motorB2cFixture = {};\n`,
-      'utf8'
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, 'src/domains/motor-b2c/steps')),
+      true,
+      'Expected --squad to scaffold src/domains/motor-b2c/steps directory'
     );
 
     // Emit a complex cross-portal + API seeder + conditional wizard Session Tape
@@ -339,9 +337,110 @@ test('3. Multi-portal + Backend API + Conditional Wizard tape validates, auto-in
     assert.match(shardText, /Observed Backend API Contracts/);
     assert.match(shardText, /MotorQuoteApiClient/);
 
-    // 3. Run audit:solid to ensure auto-indexed shard and skills pass with zero violations
+    // 3. Run analyze-coverage.mjs and verify unimplementedApiClients & missingAuthSessions are surfaced
+    const covRes = runNode(path.join(tmpDir, 'scripts/analyze-coverage.mjs'), [], tmpDir);
+    assert.equal(covRes.status, 0, `analyze-coverage failed: ${covRes.stderr}`);
+    const covJsonStart = covRes.stdout.indexOf('{');
+    const covReport = JSON.parse(covRes.stdout.slice(covJsonStart));
+    assert.deepEqual(covReport.unimplementedApiClients, ['MotorQuoteApiClient']);
+    assert.deepEqual(covReport.targetApp.missingAuthSessions, ['.auth/senior_underwriter.json']);
+
+    // 4. Run audit:solid to ensure auto-indexed shard and skills pass with zero violations
     const auditRes = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
     assert.equal(auditRes.status, 0, `audit-solid failed: ${auditRes.stderr}\n${auditRes.stdout}`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('4. migrate-skill extracts multi-step wizard actions & API contracts into a valid Session Tape, and audit-solid enforces *.step.ts guardrails', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-migrator-steps-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, [
+      'init',
+      tmpDir,
+      '--url',
+      'https://home.insurer.example.com',
+      '--name',
+      'Home Insurance Portal',
+    ]);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    // Create a legacy UI + API helper skill directory
+    const legacyDir = path.join(tmpDir, 'legacy-skills/home-quote-wizard');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyDir, 'SKILL.md'),
+      `# Home Insurance Wizard Helper\nAutomates the 3-step home quote flow and property API lookup.\n`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(legacyDir, 'run-wizard.js'),
+      `
+      // Legacy monolithic Playwright script with waitForTimeout anti-pattern
+      await request.post('/api/v1/property/valuation');
+      await page.goto('/home/quote/step-1');
+      await page.getByLabel('Postcode').fill('SW1A 1AA');
+      await page.getByRole('button', { name: 'Find Address' }).click();
+      await page.getByTestId('property-type').selectOption('Detached');
+      await page.waitForTimeout(2000);
+      await expect(page.locator('#summary')).toBeVisible();
+      `,
+      'utf8'
+    );
+
+    const migRes = runNode(
+      path.join(tmpDir, 'scripts/migrate-skill.mjs'),
+      ['legacy-skills/home-quote-wizard', '--name', '06-home-wizard', '--squad', 'home-b2c', '--apply'],
+      tmpDir
+    );
+    assert.equal(migRes.status, 0, `migrate-skill failed: ${migRes.stderr}\n${migRes.stdout}`);
+
+    // Verify bridged Session Tape extracted multi-step UI actions AND backend API contract
+    const bridgedTapePath = path.join(tmpDir, '.exploratory/tapes/06-home-wizard.json');
+    assert.equal(fs.existsSync(bridgedTapePath), true, 'Expected bridged Session Tape to exist');
+    const bridgedTape = JSON.parse(fs.readFileSync(bridgedTapePath, 'utf8'));
+    assert.equal(bridgedTape.semanticSteps.length, 4, 'Expected 4 extracted UI steps (goto, fill, click, selectOption)');
+    assert.equal(bridgedTape.networkContracts.length, 1, 'Expected 1 extracted API contract');
+    assert.equal(bridgedTape.networkContracts[0].urlPattern, '/api/v1/property/valuation');
+
+    // Validate bridged tape against session-tape.schema.json
+    const valRes = runNode(path.join(tmpDir, 'scripts/validate-tapes.mjs'), [], tmpDir);
+    assert.equal(valRes.status, 0, `validate-tapes failed on bridged tape: ${valRes.stderr}\n${valRes.stdout}`);
+
+    // Create a compliant WizardStepContract *.step.ts file and verify audit:solid passes
+    const stepsDir = path.join(tmpDir, 'src/domains/home-b2c/steps');
+    fs.mkdirSync(stepsDir, { recursive: true });
+    const stepFile = path.join(stepsDir, 'property-details.step.ts');
+    fs.writeFileSync(
+      stepFile,
+      `import type { Locator, Page } from '@playwright/test';
+import type { WizardStepContract } from '@contracts/wizard-step.contract';
+
+export class PropertyDetailsStep implements WizardStepContract<{ postcode: string }> {
+  readonly stepId = 'property-details';
+  readonly root: Locator;
+  constructor(page: Page) {
+    this.root = page.getByTestId('property-step');
+  }
+  isApplicable(): boolean {
+    return true;
+  }
+  async fillStep(): Promise<void> {}
+  async advance(): Promise<void> {}
+}
+`,
+      'utf8'
+    );
+
+    const auditPass = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(auditPass.status, 0, `Expected compliant *.step.ts to pass audit-solid: ${auditPass.stderr}`);
+
+    // Now inject an illegal expect() into *.step.ts and verify audit-solid catches it
+    fs.appendFileSync(stepFile, `\n// violation\nexpect(true).toBe(true);\n`, 'utf8');
+    const auditFail = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(auditFail.status, 1, 'Expected audit-solid to fail when *.step.ts contains expect()');
+    assert.match(auditFail.stderr, /\[SRP Assertion Ban\].*property-details\.step\.ts/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

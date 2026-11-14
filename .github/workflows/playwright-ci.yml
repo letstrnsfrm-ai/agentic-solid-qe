@@ -6,6 +6,17 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      grep_tags:
+        description: 'Optional Playwright @tag regex filter (e.g. @p0, @motor-b2c, @api-contract)'
+        required: false
+        default: ''
+        type: string
+      target_url:
+        description: 'Optional BASE_URL override for staging/UAT environment'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -77,10 +88,16 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Run Sharded Playwright Suite
         env:
-          BASE_URL: ${{ vars.BASE_URL }}
+          BASE_URL: ${{ inputs.target_url || vars.BASE_URL }}
+          GREP_TAGS: ${{ inputs.grep_tags }}
           TEST_USERNAME: ${{ secrets.TEST_USERNAME }}
           TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
-        run: npx playwright test --project=chromium --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
+        run: |
+          if [ -n "$GREP_TAGS" ]; then
+            npx playwright test --project=chromium --grep "$GREP_TAGS" --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --pass-with-no-tests
+          else
+            npx playwright test --project=chromium --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --pass-with-no-tests
+          fi
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: failure()
         with:

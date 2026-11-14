@@ -42,6 +42,7 @@ const CORE_ENGINE_SCRIPTS = new Set([
   'scripts/validate-tapes.mjs',
   'scripts/sync-skills.mjs',
   'scripts/generate-release-notes.mjs',
+  'scripts/self-test.mjs',
 ]);
 
 const rawArgs = process.argv.slice(2);
@@ -671,15 +672,182 @@ function resolveRepoBaseUrl() {
   return 'http://localhost:3000';
 }
 
+function toPascalCase(slug) {
+  const cleaned = String(slug || 'MigratedFlow')
+    .replace(/^\d+-/, '')
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join('');
+  return /^[A-Za-z_]/.test(cleaned) ? cleaned : `Migrated${cleaned}`;
+}
+
+function extractLegacyStepsAndNetworkContracts(primaryRoute) {
+  const baseClassPrefix = toPascalCase(defaultSkillId);
+  const steps = [];
+  const networkContracts = [];
+  let currentRoute = primaryRoute;
+
+  const lines = combinedSourceText.split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('//') || line.startsWith('#')) continue;
+
+    // 1. Extract page.goto('/route') or cy.visit('/route')
+    const gotoMatch = line.match(/\b(?:goto|visit)\s*\(\s*['"`]([^'"`]+)['"`]/);
+    if (gotoMatch) {
+      let navTarget = gotoMatch[1].trim();
+      if (/^https?:\/\//.test(navTarget)) {
+        try {
+          navTarget = new URL(navTarget).pathname || '/';
+        } catch {
+          navTarget = primaryRoute;
+        }
+      }
+      if (!navTarget.startsWith('/') || navTarget.startsWith('//')) {
+        navTarget = primaryRoute;
+      }
+      currentRoute = navTarget;
+      steps.push({
+        stepIndex: steps.length + 1,
+        intent: `Navigate to ${navTarget}`,
+        pageRoute: currentRoute,
+        action: 'goto',
+        componentCandidate: `${baseClassPrefix}Page`,
+        locatorContract: {
+          strategy: 'url',
+          value: navTarget,
+        },
+      });
+      continue;
+    }
+
+    // 2. Extract Playwright / Cypress UI interactions (getByRole, getByLabel, getByPlaceholder, getByTestId, locator)
+    const actionMatch = line.match(/\.\s*(fill|click|selectOption|check|press)\s*\(\s*(?:['"`]([^'"`]*)['"`])?/);
+    if (actionMatch) {
+      const mappedAction = actionMatch[1];
+      const actionArg = (actionMatch[2] || '').trim();
+
+      let strategy = 'getByTestId';
+      let locatorVal = 'migrated-element';
+      let roleOption;
+
+      const roleMatch = line.match(/getByRole\s*\(\s*['"`]([a-zA-Z]+)['"`](?:.*?name\s*:\s*['"`]([^'"`]+)['"`])?/);
+      const labelMatch = line.match(/getByLabel\s*\(\s*['"`]([^'"`]+)['"`]/);
+      const placeholderMatch = line.match(/getByPlaceholder\s*\(\s*['"`]([^'"`]+)['"`]/);
+      const testIdMatch = line.match(/getByTestId\s*\(\s*['"`]([^'"`]+)['"`]/);
+      const textMatch = line.match(/getByText\s*\(\s*['"`]([^'"`]+)['"`]/);
+      const cssMatch = line.match(/(?:locator|get)\s*\(\s*['"`]([^'"`]+)['"`]/);
+
+      if (roleMatch) {
+        strategy = 'getByRole';
+        roleOption = roleMatch[1];
+        locatorVal = roleMatch[2] || roleMatch[1];
+      } else if (labelMatch) {
+        strategy = 'getByLabel';
+        locatorVal = labelMatch[1];
+      } else if (placeholderMatch) {
+        strategy = 'getByPlaceholder';
+        locatorVal = placeholderMatch[1];
+      } else if (testIdMatch) {
+        strategy = 'getByTestId';
+        locatorVal = testIdMatch[1];
+      } else if (textMatch) {
+        strategy = 'getByText';
+        locatorVal = textMatch[1];
+      } else if (cssMatch) {
+        strategy = 'getByTestId';
+        locatorVal = cssMatch[1].replace(/^[#.]/, '') || 'migrated-element';
+      }
+
+      if (/^e\d+$/.test(locatorVal)) {
+        locatorVal = `migrated-${locatorVal}`;
+      }
+
+      const isSensitive = /password|secret|token|api[_-]?key/i.test(`${locatorVal} ${line}`);
+      const stepObj = {
+        stepIndex: steps.length + 1,
+        intent: `${mappedAction.toUpperCase()} target '${locatorVal}' on ${currentRoute}`,
+        pageRoute: currentRoute,
+        action: mappedAction,
+        componentCandidate: `${baseClassPrefix}Step`,
+        locatorContract: {
+          strategy,
+          ...(roleOption ? { role: roleOption } : {}),
+          value: locatorVal,
+        },
+      };
+
+      if (mappedAction === 'fill' || mappedAction === 'selectOption') {
+        stepObj.inputDataRef = isSensitive
+          ? 'UserBuilder.standardUser().password'
+          : 'UserBuilder.standardUser().username';
+      } else if (mappedAction === 'press') {
+        stepObj.key = actionArg || 'Enter';
+      }
+
+      steps.push(stepObj);
+      continue;
+    }
+
+    // 3. Extract backend API calls: request.post/get/put/patch/delete('/api/...') or fetch('/api/...')
+    const apiMatch =
+      line.match(/\brequest\.\s*(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/i) ||
+      line.match(/\bfetch\s*\(\s*['"`]([^'"`]+)['"`](?:.*?method\s*:\s*['"`](GET|POST|PUT|PATCH|DELETE)['"`])?/i);
+    if (apiMatch) {
+      const isRequestCall = /^request\./i.test(apiMatch[0]);
+      const method = (isRequestCall ? apiMatch[1] : apiMatch[2] || 'GET').toUpperCase();
+      const rawEndpoint = (isRequestCall ? apiMatch[2] : apiMatch[1]).trim();
+      let urlPattern = rawEndpoint;
+      if (/^https?:\/\//.test(rawEndpoint)) {
+        try {
+          urlPattern = new URL(rawEndpoint).pathname || '/api';
+        } catch {
+          urlPattern = '/api';
+        }
+      }
+      if (
+        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method) &&
+        !networkContracts.some((nc) => nc.method === method && nc.urlPattern === urlPattern)
+      ) {
+        networkContracts.push({
+          urlPattern,
+          method,
+          expectedStatus: method === 'POST' ? 201 : 200,
+          clientCandidate: `${baseClassPrefix}ApiClient`,
+          requestBuilderRef: 'UserBuilder.standardUser()',
+        });
+      }
+    }
+  }
+
+  if (steps.length === 0) {
+    steps.push({
+      stepIndex: 1,
+      intent: `Navigate to ${primaryRoute} for ${skillTitle}`,
+      pageRoute: primaryRoute,
+      action: 'goto',
+      componentCandidate: 'MigratedFlowPage',
+      locatorContract: {
+        strategy: 'url',
+        value: primaryRoute,
+      },
+    });
+  }
+
+  return { steps: steps.slice(0, 30), networkContracts: networkContracts.slice(0, 15) };
+}
+
 function buildStarterSessionTape() {
   const baseUrl = resolveRepoBaseUrl();
   const primaryRoute =
     discoveredRoutes.find((r) => r.startsWith('/') && !r.startsWith('//')) || '/';
+  const { steps, networkContracts } = extractLegacyStepsAndNetworkContracts(primaryRoute);
   return {
     schemaVersion: '1.0.0',
     scenarioId: defaultSkillId,
     title: `Migrated UI Flow: ${skillTitle}`.slice(0, 120),
-    charter: 'happy-path-baseline',
+    charter: networkContracts.length > 0 && steps.length <= 1 ? 'api-contract' : 'happy-path-baseline',
     tags: ['@regression'],
     recordedAt: new Date().toISOString(),
     baseUrl,
@@ -688,22 +856,10 @@ function buildStarterSessionTape() {
       dataBuilderRef: 'UserBuilder.standardUser()',
     },
     preconditions: [
-      `Migrated from legacy UI automation script in ${defaultSkillId} via 05-skill-migrator`,
+      `Migrated from legacy UI automation script in ${defaultSkillId} via 05-skill-migrator (${steps.length} step(s), ${networkContracts.length} API contract(s))`,
     ],
-    semanticSteps: [
-      {
-        stepIndex: 1,
-        intent: `Navigate to ${primaryRoute} for ${skillTitle}`,
-        pageRoute: primaryRoute,
-        action: 'goto',
-        componentCandidate: 'MigratedFlowPage',
-        locatorContract: {
-          strategy: 'url',
-          value: primaryRoute,
-        },
-      },
-    ],
-    networkContracts: [],
+    semanticSteps: steps,
+    networkContracts,
     expectedStates: [
       {
         description: `Verify ${primaryRoute} view renders for standard persona`,

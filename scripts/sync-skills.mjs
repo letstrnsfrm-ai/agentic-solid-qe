@@ -429,6 +429,9 @@ function mergeConsumerPackageJson() {
   const pkgPath = path.join(TARGET_ROOT, 'package.json');
   const requiredScripts = {
     test: 'playwright test --project=chromium --pass-with-no-tests',
+    'test:p0': 'playwright test --project=chromium --grep "@p0" --pass-with-no-tests',
+    'test:smoke': 'playwright test --project=chromium --grep "@smoke|@p0" --pass-with-no-tests',
+    'test:api': 'playwright test --project=chromium --grep "@api-contract" --pass-with-no-tests',
     'test:engine': 'node --test scripts/self-test.mjs',
     'test:headed': 'playwright test --headed',
     'test:ui': 'playwright test --ui',
@@ -855,7 +858,7 @@ if (squadName) {
   const squadHubDir = path.join(TARGET_ROOT, '.agents/domain/domains', cleanSquad);
   if (!dryRun) {
     fs.mkdirSync(path.join(squadHubDir, 'shards'), { recursive: true });
-    for (const sub of ['api', 'components', 'pages', 'data', 'fixtures']) {
+    for (const sub of ['api', 'components', 'steps', 'pages', 'data', 'fixtures']) {
       fs.mkdirSync(path.join(TARGET_ROOT, 'src/domains', cleanSquad, sub), { recursive: true });
     }
   }
@@ -867,7 +870,7 @@ if (squadName) {
 
 > **Parent Index:** \`.agents/domain/domain-memory.md\` | **Max Lines:** 150
 > **Owner Squad:** \`@org/${cleanSquad}-squad\` | **Last Verified:** \`${today}\`
-> **Published Capabilities:** \`${cleanSquad}Fixture\`
+> **Published Capabilities:** \`UserBuilder\`
 
 ---
 

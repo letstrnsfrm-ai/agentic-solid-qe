@@ -134,11 +134,15 @@ function stripComments(code) {
     .replace(/\/\/.*$/gm, '');
 }
 
-// 2. Audit Components across src/components, src/shared/components, and src/domains/*/components
+// 2. Audit Components & Wizard Steps across src/components, src/steps, src/shared/components, and src/domains/*/{components,steps}
 const componentFiles = [
-  ...walkFiles(path.join(ROOT, 'src/components'), '.ts'),
-  ...walkFiles(path.join(ROOT, 'src/shared/components'), '.ts'),
-  ...walkFiles(path.join(ROOT, 'src/domains'), '.component.ts'),
+  ...new Set([
+    ...walkFiles(path.join(ROOT, 'src/components'), '.ts'),
+    ...walkFiles(path.join(ROOT, 'src/steps'), '.step.ts'),
+    ...walkFiles(path.join(ROOT, 'src/shared/components'), '.ts'),
+    ...walkFiles(path.join(ROOT, 'src/domains'), '.component.ts'),
+    ...walkFiles(path.join(ROOT, 'src/domains'), '.step.ts'),
+  ]),
 ];
 for (const file of componentFiles) {
   const content = fs.readFileSync(file, 'utf8');
@@ -147,7 +151,7 @@ for (const file of componentFiles) {
 
   if (lines > MAX_COMPONENT_LINES) {
     violations.push(
-      `[SRP Line Cap] ${rel(file)} has ${lines} lines (max ${MAX_COMPONENT_LINES}). Split into smaller atomic components.`
+      `[SRP Line Cap] ${rel(file)} has ${lines} lines (max ${MAX_COMPONENT_LINES}). Split into smaller atomic components or wizard steps.`
     );
   }
 
@@ -159,7 +163,7 @@ for (const file of componentFiles) {
 
   if (!/\bimplements\s+[A-Za-z0-9_]+/.test(codeOnly)) {
     violations.push(
-      `[LSP Contract] ${rel(file)} must implement a shared contract interface from src/contracts/.`
+      `[LSP Contract] ${rel(file)} must implement a shared contract interface from src/contracts/ (e.g., IdentifiableComponent or WizardStepContract).`
     );
   }
 }
