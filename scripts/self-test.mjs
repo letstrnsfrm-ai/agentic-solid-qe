@@ -559,3 +559,174 @@ export class EnterpriseNavbarComponent implements IdentifiableComponent {
   }
 });
 
+test('6. Deterministic Tape-to-SOLID Compiler (npx cortex compile) scaffolds federated Components, Steps, API Clients, Builders, Fixtures, Spec & Shard Capabilities and passes audit:solid', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-compiler-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, [
+      'init',
+      tmpDir,
+      '--url',
+      'https://quote.insurer.example.com',
+      '--name',
+      'Enterprise Compiler Suite',
+    ]);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    const squadRes = runNode(SYNC_SCRIPT, ['sync', tmpDir, '--squad', 'motor-b2c']);
+    assert.equal(squadRes.status, 0, squadRes.stderr);
+
+    const tape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'motor-b2c-quote-referral',
+      title: 'Motor Quote Referral Seeded via API and Verified in Portal',
+      charter: 'cross-portal-handoff',
+      tags: ['@p0', '@smoke', '@motor'],
+      recordedAt: '2026-11-14T00:00:00.000Z',
+      baseUrl: 'https://quote.insurer.example.com',
+      apiBaseUrl: 'https://api.insurer.example.com',
+      persona: {
+        role: 'standard',
+        dataBuilderRef: 'MotorRiskBuilder.highPerformanceDriver',
+      },
+      actors: [
+        {
+          actorId: 'underwriter_agent',
+          role: 'senior_underwriter',
+          portalBaseUrl: 'https://agent.insurer.example.com',
+          dataBuilderRef: 'MotorRiskBuilder.highPerformanceDriver',
+          storageStatePath: '.auth/senior_underwriter.json',
+        },
+      ],
+      preconditions: ['Underwriter session exists'],
+      capturedVariables: [
+        {
+          name: 'seededQuoteId',
+          capturedAtStep: 1,
+          source: 'apiResponseJson',
+          jsonPath: 'data.quoteId',
+          description: 'Quote ID from rating service',
+        },
+      ],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Seed referred quote via Rating API',
+          pageRoute: '/motor-b2c/quote',
+          action: 'apiCall',
+          inputDataRef: 'MotorRiskBuilder.highPerformanceDriver().vehicleReg',
+          capturesVariable: 'seededQuoteId',
+          componentCandidate: 'MotorQuoteApiClient',
+          locatorContract: {
+            strategy: 'apiEndpoint',
+            value: '/api/v1/motor/quotes',
+          },
+        },
+        {
+          stepIndex: 2,
+          intent: 'Enter prior claim date when driver has claims',
+          pageRoute: '/motor-b2c/claims',
+          conditionRef: 'MotorRiskBuilder.highPerformanceDriver().hasClaims',
+          action: 'fill',
+          inputDataRef: 'MotorRiskBuilder.highPerformanceDriver().claimDate',
+          componentCandidate: 'ClaimsHistoryStepComponent',
+          locatorContract: {
+            parentScope: {
+              strategy: 'getByRole',
+              role: 'region',
+              value: 'Claims History',
+            },
+            strategy: 'getByLabel',
+            value: 'Date of Incident',
+          },
+        },
+        {
+          stepIndex: 3,
+          actor: 'underwriter_agent',
+          intent: 'Approve referral in Agent Queue',
+          pageRoute: '/motor-b2c/referrals',
+          action: 'click',
+          componentCandidate: 'ReferralQueueComponent',
+          locatorContract: {
+            strategy: 'getByRole',
+            role: 'button',
+            value: 'Approve Referral',
+          },
+        },
+      ],
+      networkContracts: [
+        {
+          urlPattern: '/api/v1/motor/quotes',
+          method: 'POST',
+          expectedStatus: 201,
+          clientCandidate: 'MotorQuoteApiClient',
+          requestBuilderRef: 'MotorRiskBuilder.highPerformanceDriver',
+          responseSchemaSummary: '{ quoteId: string }',
+        },
+      ],
+      expectedStates: [
+        {
+          description: 'Referral queue displays approved badge for seeded Quote ID',
+          actor: 'underwriter_agent',
+          assertionType: 'toContainText',
+          targetComponent: 'agentReferralPage.queue',
+          targetProperty: 'approvedBadge',
+          expectedValueRef: 'capturedVariable:seededQuoteId',
+        },
+      ],
+    };
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/motor-b2c-quote-referral.json'),
+      JSON.stringify(tape, null, 2),
+      'utf8'
+    );
+
+    // 1. Dry-run via `cortex compile`
+    const dryRes = runNode(SYNC_SCRIPT, ['compile', 'motor-b2c-quote-referral'], tmpDir);
+    assert.equal(dryRes.status, 0, `compile dry-run failed: ${dryRes.stderr}\n${dryRes.stdout}`);
+    assert.match(dryRes.stdout, /"mode": "dry-run"/);
+    assert.match(dryRes.stdout, /"targetLayout": "federated-squad \(motor-b2c\)"/);
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, 'tests/motor-b2c/motor-b2c-quote-referral.spec.ts')),
+      false,
+      'Dry-run must not write spec file to disk'
+    );
+
+    // 2. Apply compilation via `cortex compile --apply`
+    const applyRes = runNode(SYNC_SCRIPT, ['compile', 'motor-b2c-quote-referral', '--apply'], tmpDir);
+    assert.equal(applyRes.status, 0, `compile --apply failed: ${applyRes.stderr}\n${applyRes.stdout}`);
+
+    // Verify all federated SOLID layers were deterministically created
+    for (const expectedRel of [
+      'src/domains/motor-b2c/data/motor-risk.builder.ts',
+      'src/domains/motor-b2c/api/motor-quote.client.ts',
+      'src/domains/motor-b2c/steps/claims-history.step.ts',
+      'src/domains/motor-b2c/components/referral-queue.component.ts',
+      'src/domains/motor-b2c/pages/agent-referral.page.ts',
+      'src/domains/motor-b2c/fixtures/motor-b2c.fixture.ts',
+      'tests/motor-b2c/motor-b2c-quote-referral.spec.ts',
+      '.agents/domain/domains/motor-b2c/shards/motor-b2c-quote-referral.md',
+    ]) {
+      assert.equal(
+        fs.existsSync(path.join(tmpDir, expectedRel)),
+        true,
+        `Expected compiler to create ${expectedRel}`
+      );
+    }
+
+    // Verify audit-solid passes 100% on the compiled SOLID files and synchronized Domain Shard capabilities
+    const auditRes = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(auditRes.status, 0, `audit-solid failed after compile --apply: ${auditRes.stderr}\n${auditRes.stdout}`);
+
+    // Verify analyze-coverage reports 0 uncompiled tapes and 0 unimplemented API clients
+    const covRes = runNode(path.join(tmpDir, 'scripts/analyze-coverage.mjs'), [], tmpDir);
+    assert.equal(covRes.status, 0, covRes.stderr);
+    const covReport = JSON.parse(covRes.stdout.slice(covRes.stdout.indexOf('{')));
+    assert.deepEqual(covReport.uncompiledTapes, []);
+    assert.deepEqual(covReport.unimplementedApiClients, []);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+

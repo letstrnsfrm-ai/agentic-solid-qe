@@ -25,6 +25,7 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help
 
 Usage:
   cortex orchestrate           Run Master Orchestrator Diagnostic & 5-Stage Coverage Maturity Snapshot (alias: cortex status)
+  cortex compile [<tape>]      Compile Session Tape into SOLID Components, Pages, Builders, Fixtures & Spec (--apply)
   cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo] [--dry-run]
   cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>] [--dry-run]
   cortex migrate --discover
@@ -39,6 +40,7 @@ Usage:
 const subcommandDelegateMap = {
   orchestrate: 'analyze-coverage.mjs',
   status: 'analyze-coverage.mjs',
+  compile: 'compile-tape.mjs',
   migrate: 'migrate-skill.mjs',
   graph: 'build-domain-graph.mjs',
   gaps: 'analyze-coverage.mjs',
@@ -519,6 +521,7 @@ function mergeConsumerPackageJson() {
     report: 'playwright show-report',
     typecheck: 'tsc --noEmit',
     'domain:graph': 'node scripts/build-domain-graph.mjs',
+    'compile:tape': 'node scripts/compile-tape.mjs',
     'migrate:skill': 'node scripts/migrate-skill.mjs',
     'coverage:gaps': 'node scripts/analyze-coverage.mjs',
     orchestrate: 'node scripts/analyze-coverage.mjs',
@@ -820,6 +823,7 @@ const coreEnginePaths = [
   '.github/prompts',
   '.claude/commands',
   'scripts/build-domain-graph.mjs',
+  'scripts/compile-tape.mjs',
   'scripts/migrate-skill.mjs',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',

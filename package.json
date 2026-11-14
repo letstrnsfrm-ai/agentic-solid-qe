@@ -22,6 +22,7 @@
     "report": "playwright show-report",
     "typecheck": "tsc --noEmit",
     "domain:graph": "node scripts/build-domain-graph.mjs",
+    "compile:tape": "node scripts/compile-tape.mjs",
     "migrate:skill": "node scripts/migrate-skill.mjs",
     "coverage:gaps": "node scripts/analyze-coverage.mjs",
     "orchestrate": "node scripts/analyze-coverage.mjs",

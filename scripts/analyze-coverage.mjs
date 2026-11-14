@@ -265,7 +265,7 @@ if (missingAuthSessions.length > 0) {
   recommendedNextAction = `Invoke /00-env-bootstrap to capture missing persona session(s) required by Session Tapes: ${missingAuthSessions.join(', ')}`;
 } else if (uncompiledTapes.length > 0) {
   nextSingleScenarioToAutomate = uncompiledTapes[0];
-  recommendedNextAction = `Invoke '/02-solid-architect ${nextSingleScenarioToAutomate}' to compile and verify 1 Session Tape at a time (${uncompiledTapes.length} uncompiled: ${uncompiledTapes.join(', ')})`;
+  recommendedNextAction = `Invoke '/02-solid-architect ${nextSingleScenarioToAutomate}' (or run 'npx cortex compile ${nextSingleScenarioToAutomate} --apply') to compile and verify 1 Session Tape at a time (${uncompiledTapes.length} uncompiled: ${uncompiledTapes.join(', ')})`;
 } else if (shards.length === 0 && specsWithContent.length === 0) {
   recommendedNextAction = needsTargetUrlConfig
     ? `Invoke /00-env-bootstrap (or run 'npm run init:app -- --url <https://your-app> --name "<App Name>"') to configure Base URL, capture auth state, and discover initial feature shards.`

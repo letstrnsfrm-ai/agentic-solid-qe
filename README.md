@@ -367,6 +367,7 @@ npm run upgrade:skills
 | Command (`npm run` or `npx cortex` / `npx asqe`) | Description |
 | :--- | :--- |
 | `npm run verify` | **Full Gate:** Runs `typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `test:engine` + `playwright test`. |
+| `npx cortex compile [<tape>] [--squad <squad>] [--apply]` | **Deterministic Tape-to-SOLID Compiler:** Compiles a Session Tape into SOLID Components, Wizard Steps, Pages, API Clients, Data Builders, Fixtures, and `.spec.ts` (`npm run compile:tape`). |
 | `npx cortex orchestrate` / `npm run orchestrate` | **Master Orchestrator Snapshot:** Outputs `coverageMaturityStage` (Stage 0–4), uncovered/stale shards, uncompiled Session Tapes, API contracts, and recommended next skill (`npx cortex status`). |
 | `npm run test:engine` | Runs zero-browser `node --test` self-tests verifying `--dry-run`, legacy consumer `sync` upgrades, JSONC `tsconfig.json` merging, and `--seed-from-tapes` auto-indexing. |
 | `npx cortex init --url <url> --name "<App>" [--dry-run]` | Initializes or resets a repository with a clean SOLID skeleton (`npm run init:app`). |
