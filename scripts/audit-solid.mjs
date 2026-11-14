@@ -179,6 +179,26 @@ for (const file of pageFiles) {
   }
 }
 
+// 3a. Audit Backend API Clients across src/api and src/domains/*/api (SRP Zero expect() & LSP ApiClientContract)
+const apiClientFiles = [
+  ...walkFiles(path.join(ROOT, 'src/api'), '.client.ts'),
+  ...walkFiles(path.join(ROOT, 'src/domains'), '.client.ts'),
+];
+for (const file of apiClientFiles) {
+  const content = fs.readFileSync(file, 'utf8');
+  const codeOnly = stripComments(content);
+  if (/\bexpect\s*\(/.test(codeOnly)) {
+    violations.push(
+      `[SRP Assertion Ban] ${rel(file)} contains an expect() call. Return typed ApiResponseEnvelope<T> and assert in tests/*.spec.ts.`
+    );
+  }
+  if (!/\bimplements\s+[A-Za-z0-9_]+/.test(codeOnly)) {
+    violations.push(
+      `[LSP Contract] ${rel(file)} must implement ApiClientContract from src/contracts/api-client.contract.ts.`
+    );
+  }
+}
+
 // 3b. Verify Published Capabilities in Domain Shards match exported classes/interfaces in src/
 const allSrcTsFiles = walkFiles(path.join(ROOT, 'src'), '.ts');
 const exportedSymbols = new Set();

@@ -39,7 +39,9 @@
         "boundary-analysis",
         "state-interruption",
         "chaos-network-500",
-        "multi-persona-auth"
+        "multi-persona-auth",
+        "api-contract",
+        "cross-portal-handoff"
       ]
     },
     "tags": {
@@ -83,6 +85,29 @@
         }
       }
     },
+    "actors": {
+      "type": "array",
+      "description": "Optional multi-portal/multi-persona actors for cross-portal E2E handoffs (e.g., Customer B2C Quote Portal -> Back-Office Underwriter Agent Portal).",
+      "items": {
+        "type": "object",
+        "required": ["actorId", "role", "portalBaseUrl", "dataBuilderRef"],
+        "additionalProperties": false,
+        "properties": {
+          "actorId": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$" },
+          "role": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+          "portalBaseUrl": { "type": "string", "format": "uri", "pattern": "^https?://" },
+          "apiBaseUrl": { "type": "string", "format": "uri", "pattern": "^https?://" },
+          "dataBuilderRef": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_.()]*$"
+          },
+          "storageStatePath": {
+            "type": "string",
+            "pattern": "^\\.auth/[a-z0-9_-]+\\.json$"
+          }
+        }
+      }
+    },
     "preconditions": {
       "type": "array",
       "items": { "type": "string" },
@@ -90,7 +115,7 @@
     },
     "capturedVariables": {
       "type": "array",
-      "description": "Optional cross-page runtime values captured during earlier steps (e.g. generated Order ID, Quote ID, dynamic total) to assert on subsequent pages.",
+      "description": "Optional cross-page or cross-portal runtime values captured during earlier UI or API steps (e.g. generated Quote ID, Policy Number, Referral ID, dynamic premium) to assert or use on subsequent steps.",
       "items": {
         "type": "object",
         "required": ["name", "capturedAtStep", "source"],
@@ -100,7 +125,11 @@
           "capturedAtStep": { "type": "integer", "minimum": 1 },
           "source": {
             "type": "string",
-            "enum": ["textContent", "inputValue", "urlParam", "urlPathSegment", "attribute"]
+            "enum": ["textContent", "inputValue", "urlParam", "urlPathSegment", "attribute", "apiResponseJson"]
+          },
+          "jsonPath": {
+            "type": "string",
+            "description": "Optional dot-path when source is apiResponseJson (e.g., data.quoteId or policy.policyNumber)."
           },
           "description": { "type": "string" }
         }
@@ -122,9 +151,25 @@
         "properties": {
           "stepIndex": { "type": "integer", "minimum": 1 },
           "intent": { "type": "string" },
+          "actor": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+            "description": "Optional actorId (referencing root actors) executing this step in a cross-portal flow (e.g., customer vs. agent_underwriter)."
+          },
+          "portalUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "description": "Optional portal base URL override when a cross-portal step switches to a secondary application (e.g. Back-Office Agent Portal)."
+          },
           "pageRoute": {
             "type": "string",
             "description": "Optional route path where this step executes in a multi-page flow (e.g. /checkout-step-one.html)."
+          },
+          "conditionRef": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_.()]*$",
+            "description": "Optional RiskProfile/Data Builder boolean reference controlling conditional wizard branching (e.g. MotorRiskBuilder.withPriorClaim().hasClaims)."
           },
           "cliRefSource": {
             "type": "string",
@@ -143,7 +188,8 @@
               "hover",
               "upload",
               "waitFor",
-              "route"
+              "route",
+              "apiCall"
             ]
           },
           "key": {
@@ -166,22 +212,22 @@
           },
           "capturesVariable": {
             "type": "string",
-            "description": "Optional variable name (matching capturedVariables) extracted from this element for cross-page verification."
+            "description": "Optional variable name (matching capturedVariables) extracted from this element or API response for cross-page/cross-portal verification."
           },
           "componentCandidate": {
             "type": "string",
             "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-            "description": "Suggested SRP Component or Page class name (e.g., LoginFormComponent, InventoryListComponent)."
+            "description": "Suggested SRP Component, Page, or API Client class name (e.g., VehicleLookupComponent, MotorQuoteApiClient)."
           },
           "locatorContract": {
             "type": "object",
-            "description": "Hierarchical Locator Contract ensuring strict-mode safety on complex pages.",
+            "description": "Hierarchical Locator Contract ensuring strict-mode safety on complex pages (or endpoint descriptor when action is apiCall).",
             "required": ["strategy", "value"],
             "additionalProperties": false,
             "properties": {
               "iframeSelector": {
                 "type": "string",
-                "description": "Optional iframe selector when the target control lives inside an embedded frame."
+                "description": "Optional iframe selector when the target control lives inside an embedded frame (e.g., PCI Payment iframe)."
               },
               "parentScope": {
                 "type": "object",
@@ -205,7 +251,7 @@
               },
               "strategy": {
                 "type": "string",
-                "enum": ["getByRole", "getByLabel", "getByPlaceholder", "getByText", "getByTestId", "url"]
+                "enum": ["getByRole", "getByLabel", "getByPlaceholder", "getByText", "getByTestId", "url", "apiEndpoint"]
               },
               "role": {
                 "type": "string",
@@ -213,7 +259,7 @@
               },
               "value": {
                 "type": "string",
-                "description": "Accessible name, label, placeholder, text, or testId value."
+                "description": "Accessible name, label, placeholder, text, testId value, or API endpoint path."
               },
               "nameExact": {
                 "type": "boolean",
@@ -238,7 +284,21 @@
             "type": "integer",
             "description": "Optional SLA latency threshold observed during exploration."
           },
-          "chaosFaultInjected": { "type": "boolean" }
+          "chaosFaultInjected": { "type": "boolean" },
+          "clientCandidate": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "description": "Optional typed Playwright APIRequestContext client class to generate/reuse (e.g. QuoteRatingApiClient)."
+          },
+          "requestBuilderRef": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_.()]*$",
+            "description": "Optional Data Builder method producing the typed request payload."
+          },
+          "responseSchemaSummary": {
+            "type": "string",
+            "description": "Optional concise summary of key response JSON fields (e.g. '{ quoteId: string, annualPremium: number, referralRequired: boolean }')."
+          }
         }
       }
     },
@@ -251,19 +311,34 @@
         "additionalProperties": false,
         "properties": {
           "description": { "type": "string" },
+          "actor": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+            "description": "Optional actorId whose portal/context this assertion evaluates against."
+          },
           "assertionType": {
             "type": "string",
-            "enum": ["toBeVisible", "toBeHidden", "toHaveText", "toContainText", "toHaveCount", "toHaveURL", "toHaveValue"]
+            "enum": [
+              "toBeVisible",
+              "toBeHidden",
+              "toHaveText",
+              "toContainText",
+              "toHaveCount",
+              "toHaveURL",
+              "toHaveValue",
+              "toHaveStatus",
+              "toMatchObject"
+            ]
           },
           "targetComponent": {
             "type": "string",
             "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$",
-            "description": "Fixture/Component exposing the readonly Locator."
+            "description": "Fixture/Component/ApiClient exposing the readonly Locator or response state."
           },
           "targetProperty": {
             "type": "string",
             "pattern": "^[A-Za-z_][A-Za-z0-9_.()]*$",
-            "description": "Readonly Locator property or query method on the Component/Page."
+            "description": "Readonly Locator property or query method on the Component/Page/ApiClient."
           },
           "expectedValueRef": {
             "type": "string",

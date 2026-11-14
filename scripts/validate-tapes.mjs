@@ -30,6 +30,7 @@ const VALID_CAPTURE_SOURCES = new Set(
 
 const VALID_ROOT_KEYS = new Set(Object.keys(schema.properties));
 const VALID_PERSONA_KEYS = new Set(Object.keys(schema.properties.persona.properties));
+const VALID_ACTOR_KEYS = new Set(Object.keys(schema.properties.actors.items.properties));
 const VALID_STEP_KEYS = new Set(Object.keys(schema.properties.semanticSteps.items.properties));
 const VALID_LOCATOR_KEYS = new Set(
   Object.keys(schema.properties.semanticSteps.items.properties.locatorContract.properties)
@@ -39,6 +40,7 @@ const VALID_PARENT_SCOPE_KEYS = new Set(
     schema.properties.semanticSteps.items.properties.locatorContract.properties.parentScope.properties
   )
 );
+const VALID_NETWORK_KEYS = new Set(Object.keys(schema.properties.networkContracts.items.properties));
 const VALID_STATE_KEYS = new Set(Object.keys(schema.properties.expectedStates.items.properties));
 
 const SAFE_MEMBER_REF_REGEX = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*(\(\))?)*$/;
@@ -142,6 +144,41 @@ for (const file of tapeFiles) {
     }
   }
 
+  const declaredActors = new Set();
+  if (tape.actors !== undefined) {
+    if (!Array.isArray(tape.actors)) {
+      errors.push(`[${file}] actors must be an array when provided.`);
+    } else {
+      for (const actor of tape.actors) {
+        checkUnknownKeys(actor, VALID_ACTOR_KEYS, `[${file} actor]`, errors);
+        if (!actor.actorId || !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(actor.actorId)) {
+          errors.push(`[${file}] Invalid actor.actorId '${actor.actorId}'.`);
+        } else {
+          declaredActors.add(actor.actorId);
+        }
+        if (typeof actor.portalBaseUrl !== 'string' || !isValidHttpUrl(actor.portalBaseUrl)) {
+          errors.push(`[${file}] Invalid actor.portalBaseUrl '${actor.portalBaseUrl}'.`);
+        }
+        if (actor.apiBaseUrl !== undefined && (typeof actor.apiBaseUrl !== 'string' || !isValidHttpUrl(actor.apiBaseUrl))) {
+          errors.push(`[${file}] Invalid actor.apiBaseUrl '${actor.apiBaseUrl}'.`);
+        }
+        if (
+          typeof actor.dataBuilderRef !== 'string' ||
+          !SAFE_MEMBER_REF_REGEX.test(actor.dataBuilderRef)
+        ) {
+          errors.push(`[${file}] Invalid actor.dataBuilderRef '${actor.dataBuilderRef}'.`);
+        }
+        if (
+          actor.storageStatePath !== undefined &&
+          (typeof actor.storageStatePath !== 'string' ||
+            !SAFE_STORAGE_STATE_REGEX.test(actor.storageStatePath))
+        ) {
+          errors.push(`[${file}] Invalid actor.storageStatePath '${actor.storageStatePath}'.`);
+        }
+      }
+    }
+  }
+
   if (tape.tags !== undefined) {
     if (!Array.isArray(tape.tags) || tape.tags.some((t) => typeof t !== 'string' || !/^@[a-z0-9-]+$/.test(t))) {
       errors.push(`[${file}] tags must be an array of '@kebab-case' strings (e.g. '@p0', '@smoke').`);
@@ -181,6 +218,23 @@ for (const file of tapeFiles) {
       }
 
       checkUnknownKeys(step, VALID_STEP_KEYS, stepLabel, errors);
+
+      if (step.actor !== undefined) {
+        if (typeof step.actor !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(step.actor)) {
+          errors.push(`${stepLabel} Invalid step.actor '${step.actor}'.`);
+        } else if (declaredActors.size > 0 && !declaredActors.has(step.actor)) {
+          errors.push(`${stepLabel} step.actor '${step.actor}' is not declared in root actors.`);
+        }
+      }
+      if (step.portalUrl !== undefined && (typeof step.portalUrl !== 'string' || !isValidHttpUrl(step.portalUrl))) {
+        errors.push(`${stepLabel} Invalid step.portalUrl '${step.portalUrl}'. Must be an http(s):// URL.`);
+      }
+      if (
+        step.conditionRef !== undefined &&
+        (typeof step.conditionRef !== 'string' || !SAFE_MEMBER_REF_REGEX.test(step.conditionRef))
+      ) {
+        errors.push(`${stepLabel} Invalid step.conditionRef '${step.conditionRef}'. Must be a safe Data Builder reference.`);
+      }
 
       if (!VALID_ACTIONS.has(step.action)) {
         errors.push(`${stepLabel} Invalid action '${step.action}'.`);
@@ -244,6 +298,18 @@ for (const file of tapeFiles) {
         errors.push(
           `${stepLabel} capturesVariable '${step.capturesVariable}' is not declared in root capturedVariables.`
         );
+      }
+    }
+  }
+
+  if (Array.isArray(tape.networkContracts)) {
+    for (const nc of tape.networkContracts) {
+      checkUnknownKeys(nc, VALID_NETWORK_KEYS, `[${file} networkContracts]`, errors);
+      if (nc.clientCandidate !== undefined && (typeof nc.clientCandidate !== 'string' || !SAFE_CLASS_NAME_REGEX.test(nc.clientCandidate))) {
+        errors.push(`[${file}] Invalid networkContracts.clientCandidate '${nc.clientCandidate}'.`);
+      }
+      if (nc.requestBuilderRef !== undefined && (typeof nc.requestBuilderRef !== 'string' || !SAFE_MEMBER_REF_REGEX.test(nc.requestBuilderRef))) {
+        errors.push(`[${file}] Invalid networkContracts.requestBuilderRef '${nc.requestBuilderRef}'.`);
       }
     }
   }

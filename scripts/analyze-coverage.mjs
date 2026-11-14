@@ -138,21 +138,28 @@ const dataBuilders = [
   ...walkFiles(path.join(ROOT, 'src/data'), '.ts'),
   ...walkFiles(path.join(ROOT, 'src/domains'), '.builder.ts'),
 ].map((f) => path.basename(f));
+const apiClients = [
+  ...walkFiles(path.join(ROOT, 'src/api'), '.client.ts'),
+  ...walkFiles(path.join(ROOT, 'src/domains'), '.client.ts'),
+].map((f) => path.basename(f));
 
-// 6. Compute Recommended Next Action
+// 6. Compute Recommended Next Action (1-Test-at-a-Time Vertical Slice Loop)
 let recommendedNextAction;
+let nextSingleScenarioToAutomate = null;
 if (uncompiledTapes.length > 0) {
-  recommendedNextAction = `Invoke /02-solid-architect to compile uncompiled Session Tape(s): ${uncompiledTapes.join(', ')}`;
+  nextSingleScenarioToAutomate = uncompiledTapes[0];
+  recommendedNextAction = `Invoke '/02-solid-architect ${nextSingleScenarioToAutomate}' to compile and verify 1 Session Tape at a time (${uncompiledTapes.length} uncompiled: ${uncompiledTapes.join(', ')})`;
 } else if (shards.length === 0 && specsWithContent.length === 0) {
   recommendedNextAction = needsTargetUrlConfig
     ? `Invoke /00-env-bootstrap (or run 'npm run init:app -- --url <https://your-app> --name "<App Name>"') to configure Base URL, capture auth state, and discover initial feature shards.`
     : `Invoke /00-env-bootstrap to capture persona auth state and map unfamiliar app routes, or /01-cli-explorer to explore ${baseUrl} in --headed mode.`;
 } else if (uncoveredShards.length > 0) {
-  recommendedNextAction = `Invoke /01-cli-explorer to explore and curate Session Tapes for uncovered domain shard(s): ${uncoveredShards.join(', ')}`;
+  nextSingleScenarioToAutomate = uncoveredShards[0];
+  recommendedNextAction = `Invoke /01-cli-explorer to explore 1 critical business flow for uncovered shard '${nextSingleScenarioToAutomate}' (${uncoveredShards.length} uncovered total: ${uncoveredShards.join(', ')})`;
 } else if (staleShards.length > 0) {
   recommendedNextAction = `Invoke /03-drift-healer or /01-cli-explorer to re-verify stale domain shard(s): ${staleShards.join(', ')}`;
 } else {
-  recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /01-cli-explorer for P1/P2 charters, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
+  recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /01-cli-explorer for the next single P1/P2 business scenario or backend API contract, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
 }
 
 const report = {
@@ -172,9 +179,10 @@ const report = {
   uncoveredShards,
   recordedSessionTapes: tapes,
   uncompiledTapes,
+  nextSingleScenarioToAutomate,
   openDefects,
   automatedSpecs: specsWithContent.map(({ rawContent, ...rest }) => rest),
-  existingArchitecture: { contracts, pages, components, dataBuilders },
+  existingArchitecture: { contracts, pages, components, dataBuilders, apiClients },
   recommendedNextAction,
 };
 

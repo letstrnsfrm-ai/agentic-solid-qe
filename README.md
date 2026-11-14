@@ -110,24 +110,30 @@ Any IDE AI agent (**Google Antigravity, Claude Code, GitHub Copilot, Cursor, or 
   > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md` and `AGENTS.md`). Inspect my current repository, explain how `agentic-solid-qe` fits my setup, run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe init .` non-destructively, and run `npm run migrate:skill -- --discover` to inventory my existing skills, prompts, scripts, and Playwright tests."*
 - **Prompt 2 — Migrate Existing Skills & Scripts with Full Guardrails (`/05-skill-migrator`):**
   > *"Run `/05-skill-migrator` (`npm run migrate:skill -- --discover`), walk me through the 4-Part Migration Triage Matrix for each of my existing skills/rules/scripts, migrate them with `--apply`, and verify all guardrails pass with `npm run verify`."*
+- **Prompt 3 — Upgrade an Existing `agentic-solid-qe` Consumer Repository Non-Destructively (`sync`):**
+  > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md`, `AGENTS.md`, and `.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`). Run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync` (`npm run upgrade:skills`) to non-destructively update our skills, `session-tape.schema.json`, scripts, and foundational contracts/shared helpers (`WizardStepContract`, `ApiClientContract`, `AuthTokenBridge`, `RelativeDateHelper`) without modifying our existing domain shards or tests, then run `npm run verify`."*
+- **Prompt 4 — Orchestrate Complex Multi-Step Wizards, Cross-Portal Handoffs & Backend APIs (1 Test at a Time):**
+  > *"Read `.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`. Scaffold our application domains (`npx cortex sync --squad <domain>`), explore 1 critical business flow and its backend API contracts via `/01-cli-explorer`, and compile/verify 1 test at a time via `/02-solid-architect <scenario-id>`."*
 
 ### 4-Step Execution Protocol for AI Agents Reading This File
 
-When a user asks you (the AI Agent) to help them understand, install, or migrate skills into `agentic-solid-qe`, execute these four steps interactively:
+When a user asks you (the AI Agent) to help them understand, install, upgrade, or migrate skills into `agentic-solid-qe`, execute these four steps interactively:
 
 1. **Step 1 — Assess the Existing Project & Recommend an Onboarding Track:**
    - Inspect `package.json`, `playwright.config.ts`, `tsconfig.json`, and existing test folders (`tests/`, `e2e/`).
-   - Recommend **Track 1** (single-app setup), **Track 2** (if `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.claude/commands/`, `.github/prompts/`, or custom helper scripts exist), or **Track 3** (if multiple engineering squads share the repo).
-2. **Step 2 — Run Non-Destructive Initialization (`init` / `sync`):**
-   - Execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --url <app-url> --name "<App Name>"`.
-   - This safely merges `package.json` scripts and `tsconfig.json` `@*` path aliases without deleting existing tests, and automatically backs up any pre-existing custom `AGENTS.md` or `.github/copilot-instructions.md` into `.agents/legacy-backups/` so nothing is lost.
+   - Recommend **Track 1** (single-app setup), **Track 2** (if `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.claude/commands/`, `.github/prompts/`, or custom helper scripts exist), **Track 3** (if multiple engineering squads share the repo), or **Track 4** (for multi-step wizards, multi-portal handoffs, backend API seeding, or upgrading an existing `agentic-solid-qe` installation).
+2. **Step 2 — Run Non-Destructive Initialization (`init`) or Consumer Upgrade (`sync`):**
+   - For first-time setup: execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --url <app-url> --name "<App Name>"`.
+   - For existing consumers upgrading: execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync` (`npm run upgrade:skills`).
+   - Both safely merge `package.json` scripts and `tsconfig.json` `@*` path aliases without deleting existing tests, seed missing foundational contracts/helpers (`src/contracts/*`, `src/shared/*`), and automatically back up any pre-existing custom `AGENTS.md` or `.github/copilot-instructions.md` into `.agents/legacy-backups/` so nothing is lost.
 3. **Step 3 — Auto-Discover Legacy Skills, Prompts, Scripts & Spec Gaps (`--discover`):**
    - Execute `npm run migrate:skill -- --discover` (`npx cortex migrate --discover`).
    - Present the JSON discovery report to the user:
      - `discoveredLegacySkillsAndPrompts`: Every `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.agents/legacy-backups/*.md`, `.cursor/rules/*.mdc`, custom `.claude/commands/*.md`, `.github/prompts/*.md`, and oversized/unregistered skill with its token count and ready-to-run migration command.
      - `existingPlaywrightSuiteAudit`: Existing `.spec.ts` files that import directly from `@playwright/test` instead of `@fixtures/app.fixture` or lack `@data/*` Data Builders.
-4. **Step 4 — Run Guarded Migration (`--apply`) & Verification (`npm run verify`):**
-   - For each legacy skill or prompt, run dry-run (`npm run migrate:skill -- <path> --name <skill-id> [--squad <squad>]`), present the **4-Part Migration Triage Matrix** for user confirmation, then run with `--apply` and `npm run verify`.
+4. **Step 4 — Run Guarded Migration (`--apply`) or 1-Test-at-a-Time Orchestration & Verification (`npm run verify`):**
+   - For legacy skills/prompts, run dry-run (`npm run migrate:skill -- <path> --name <skill-id> [--squad <squad>]`), present the **4-Part Migration Triage Matrix** for user confirmation, then run with `--apply` and `npm run verify`.
+   - For complex multi-step/multi-portal/API flows, follow [`.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`](./.agents/skills/02-solid-architect/references/complex-orchestration-guide.md) to explore and compile **1 test at a time**.
 
 ---
 
@@ -136,6 +142,7 @@ When a user asks you (the AI Agent) to help them understand, install, or migrate
 - **[Track 1: Greenfield / Single-App Quick Start (5 Minutes)](#track-1-greenfield--single-app-quick-start-5-minutes)** — Start from scratch or drop into an existing Playwright repo.
 - **[Track 2: Onboarding Existing Team Skills & Helper Scripts (`/05-skill-migrator`)](#track-2-onboarding-existing-team-skills--helper-scripts-05-skill-migrator)** — Bring your team's existing `.cursorrules`, prompts, and `.sh`/`.js`/`.py` scripts into the framework.
 - **[Track 3: Scaling to 100+ Engineers (3-Tier Federated Organizational Brain)](#track-3-scaling-to-100-engineers-3-tier-federated-organizational-brain)** — Partition domain knowledge and SOLID modules across 10–25 squads without merge conflicts.
+- **[Track 4: Complex Multi-Step Wizards, Multi-Portal Handoffs, Backend APIs & Consumer Upgrades](#track-4-complex-multi-step-wizards-multi-portal-handoffs-backend-apis--consumer-upgrades)** — Orchestrate 5–12 step conditional workflows (e.g., Motor/Home Insurance), Back-Office Agent Portals, Backend API clients, and non-destructive upgrades 1 test at a time.
 
 ---
 
@@ -284,6 +291,36 @@ flowchart TD
    npm run coverage:gaps
    ```
    - Compiles `.agents/domain/domain-graph.json` with `routeIndex`, `ownerSquad`, `publishedCapabilities` (reusable API/`storageState` precondition seeders for downstream squads), `codeownersRules`, and automatic TTL staleness tracking (`**Last Verified:** YYYY-MM-DD`, default 90 days via `DOMAIN_STALE_DAYS`).
+
+---
+
+## Track 4: Complex Multi-Step Wizards, Multi-Portal Handoffs, Backend APIs & Consumer Upgrades
+
+For enterprise applications with 5–12 step conditional wizards (e.g., Motor/Home Insurance Quote & Buy), Back-Office Agent/Underwriting portals, and Backend Rating/Policy APIs, follow the **[Complex Application, Multi-Portal & Backend API Orchestration Guide](./.agents/skills/02-solid-architect/references/complex-orchestration-guide.md)**.
+
+### 1. Four Enterprise Orchestration Patterns (`1 Test at a Time`)
+
+| Pattern | Session Tape Contract | SOLID TypeScript Target (`src/`) | When to Use |
+| :--- | :--- | :--- | :--- |
+| **Pattern A: Conditional Multi-Step Wizards** | `semanticSteps[].conditionRef` | Atomic `≤ 150`-line step components implementing [`WizardStepContract<TRiskProfile>`](./src/contracts/wizard-step.contract.ts) + [`RelativeDateHelper`](./src/shared/data/relative-date.helper.ts) | 5–12 step Motor/Home quote flows with conditional sections (claims history, convictions, non-standard property). |
+| **Pattern B: Backend API Discovery, Seeding & Contracts** | `charter: "api-contract"`, `action: "apiCall"`, `source: "apiResponseJson"`, `networkContracts.clientCandidate` | Typed `APIRequestContext` clients in `src/domains/<squad>/api/*.client.ts` implementing [`ApiClientContract`](./src/contracts/api-client.contract.ts) + [`AuthTokenBridge`](./src/shared/api/auth-token.bridge.ts) | Fast API precondition seeding (create a Quote/Policy via API before testing Agent Portal UI) or standalone API rating tests. |
+| **Pattern C: Cross-Portal Multi-Actor Handoffs** | `charter: "cross-portal-handoff"`, root `actors[]`, step `actor` & `portalUrl`, `capturedVariables` | Multi-context Playwright fixtures (`browser.newContext({ storageState })`) isolating Customer B2C and Back-Office Agent sessions | End-to-end journeys spanning Customer Quote Portal ➔ `QuoteId` ➔ Back-Office Underwriter/Agent Portal approval. |
+| **Pattern D: Strict 1-Test-at-a-Time Pacing** | `nextSingleScenarioToAutomate` in `npm run coverage:gaps` | Single vertical slice compiled via `/02-solid-architect <scenario-id>` and verified via `npm run verify` | Building a stable enterprise regression suite incrementally without unverified batch generation. |
+
+### 2. How Existing Day-to-Day Consumers Receive This Update Non-Destructively
+
+If your team already uses `agentic-solid-qe` in an existing repository, upgrade in one command without touching your existing domain shards, pages, components, builders, or `.spec.ts` files:
+
+```bash
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync
+# Or via your package.json script:
+npm run upgrade:skills
+```
+
+- **Automatically Updated (`overwrite: true`):** `.agents/skills/*` (including [`complex-orchestration-guide.md`](./.agents/skills/02-solid-architect/references/complex-orchestration-guide.md)), `.agents/domain/session-tape.schema.json`, `scripts/*.mjs`, `AGENTS.md` (with automatic backup of any custom file to `.agents/legacy-backups/`), `.github/copilot-instructions.md`, `.github/prompts/*`, and `.claude/commands/*`.
+- **Seeded Only If Missing (`overwrite: false`):** [`src/contracts/api-client.contract.ts`](./src/contracts/api-client.contract.ts), [`src/contracts/wizard-step.contract.ts`](./src/contracts/wizard-step.contract.ts), [`src/shared/api/auth-token.bridge.ts`](./src/shared/api/auth-token.bridge.ts), and [`src/shared/data/relative-date.helper.ts`](./src/shared/data/relative-date.helper.ts).
+- **Non-Destructively Merged:** `@domains/*` and `@shared/*` path aliases in `tsconfig.json` and verification scripts in `package.json`.
+- **100% Preserved:** `.agents/domain/domain-memory.md`, `.agents/domain/shards/*.md`, `.agents/domain/domains/**`, `.exploratory/tapes/*.json`, `defects/*.md`, `src/{components,pages,data,fixtures,domains}/**`, and `tests/**/*.spec.ts`.
 
 ---
 

@@ -308,6 +308,17 @@ export interface ErrorBannerContract extends IdentifiableComponent {
     { overwrite }
   );
 
+  for (const sharedPath of [
+    'src/contracts/api-client.contract.ts',
+    'src/contracts/wizard-step.contract.ts',
+    'src/shared/api/auth-token.bridge.ts',
+    'src/shared/data/relative-date.helper.ts',
+  ]) {
+    copyRecursive(path.join(SOURCE_ROOT, sharedPath), path.join(TARGET_ROOT, sharedPath), {
+      overwrite,
+    });
+  }
+
   writeFileSafe(
     path.join(TARGET_ROOT, 'src/data/user.builder.ts'),
     `export interface UserPersona {
@@ -417,7 +428,7 @@ function mergeConsumerPackageJson() {
     verify: 'npm run typecheck && npm run domain:graph && npm run audit:solid && npm run validate:tapes && npm test',
     'init:app': 'node scripts/sync-skills.mjs init --reset',
     'sync:skills': 'node scripts/sync-skills.mjs',
-    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.2.0 sync',
+    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync',
   };
   const requiredDevDeps = {
     '@playwright/cli': '0.1.22',
@@ -455,7 +466,11 @@ function mergeConsumerPackageJson() {
 
     let modified = false;
     for (const [k, v] of Object.entries(requiredScripts)) {
-      if (!pkg.scripts[k] || (k === 'test' && pkg.scripts[k] === 'playwright test --project=chromium')) {
+      if (
+        !pkg.scripts[k] ||
+        (k === 'test' && pkg.scripts[k] === 'playwright test --project=chromium') ||
+        (k === 'upgrade:skills' && pkg.scripts[k].includes('#v0.2.0'))
+      ) {
         pkg.scripts[k] = v;
         modified = true;
       }
@@ -691,7 +706,7 @@ if (command === 'init') {
     { overwrite: false }
   );
 } else {
-  // sync mode: preserve consumer domain-memory.md and src/
+  // sync mode: preserve consumer domain-memory.md and existing src/, while seeding new foundational contracts/shared helpers if missing
   if (!fs.existsSync(targetDomainMemory)) {
     writeFileSafe(targetDomainMemory, buildCleanDomainMemory(resolvedAppName, resolvedUrl), {
       overwrite: false,
@@ -709,6 +724,23 @@ if (command === 'init') {
       );
     }
   }
+
+  for (const foundationalPath of [
+    'src/contracts/identifiable-component.contract.ts',
+    'src/contracts/error-banner.contract.ts',
+    'src/contracts/api-client.contract.ts',
+    'src/contracts/wizard-step.contract.ts',
+    'src/shared/api/auth-token.bridge.ts',
+    'src/shared/data/relative-date.helper.ts',
+  ]) {
+    copyRecursive(path.join(SOURCE_ROOT, foundationalPath), path.join(TARGET_ROOT, foundationalPath), {
+      overwrite: false,
+    });
+  }
+
+  mergeConsumerPackageJson();
+  mergeConsumerTsConfig();
+  mergeConsumerGitignore();
 }
 
 // Optional: Federated Org Brain sync (--org-brain <path>)
@@ -737,7 +769,7 @@ if (squadName) {
   const cleanSquad = squadName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const squadHubDir = path.join(TARGET_ROOT, '.agents/domain/domains', cleanSquad);
   fs.mkdirSync(path.join(squadHubDir, 'shards'), { recursive: true });
-  for (const sub of ['components', 'pages', 'data', 'fixtures']) {
+  for (const sub of ['api', 'components', 'pages', 'data', 'fixtures']) {
     fs.mkdirSync(path.join(TARGET_ROOT, 'src/domains', cleanSquad, sub), { recursive: true });
   }
   const today = new Date().toISOString().slice(0, 10);

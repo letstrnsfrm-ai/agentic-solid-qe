@@ -12,9 +12,9 @@ When assisting in this repository, route your workflow through the six core skil
    - Drive browser sessions via `npx playwright-cli -s=<name>`, map unfamiliar multi-page flows, check API/console/state/a11y heuristics, log bugs in `defects/`, present the **Session Debrief & Coverage Selection Matrix**, and output QE-selected JSON Session Tapes to `.exploratory/tapes/` matching `.agents/domain/session-tape.schema.json`.
 
 3. **SOLID Playwright Architecture (`02-solid-architect`):**
-   - Follow `.agents/skills/02-solid-architect/SKILL.md`.
-   - Audit existing classes in `src/contracts/`, `src/components/`, `src/pages/`, `src/data/`, and `src/fixtures/` before creating new files.
-   - Enforce SRP (`src/components/*.component.ts` ≤ 150 lines, zero `expect()` in Pages/Components), OCP/ISP (`test.extend` fixtures in `src/fixtures/`), LSP (`src/contracts/`), and DIP (typed data builders in `src/data/`).
+   - Follow `.agents/skills/02-solid-architect/SKILL.md`, `.agents/skills/02-solid-architect/references/solid-patterns.md`, and `.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`.
+   - Compile 1 Session Tape at a time (`nextSingleScenarioToAutomate`), auditing existing classes in `src/{contracts,components,pages,data,fixtures}/` and `src/domains/<squad>/{api,components,pages,data,fixtures}/` before creating new files.
+   - Enforce SRP (`*.component.ts` ≤ 150 lines, `WizardStepContract` for multi-step wizards, zero `expect()` in Pages/Components/API Clients), OCP/ISP (`test.extend` / `mergeTests` fixtures), LSP (`src/contracts/`), and DIP (`src/data/*.builder.ts` + `RelativeDateHelper`).
    - Always verify changes with `npm run verify`.
 
 4. **Live Failure Triage & Drift Healing (`03-drift-healer`):**

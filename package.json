@@ -26,7 +26,7 @@
     "release:preview": "node scripts/generate-release-notes.mjs --dry-run",
     "init:app": "node scripts/sync-skills.mjs init --reset",
     "sync:skills": "node scripts/sync-skills.mjs",
-    "upgrade:skills": "npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.2.0 sync"
+    "upgrade:skills": "npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync"
   },
   "keywords": [
     "playwright",
