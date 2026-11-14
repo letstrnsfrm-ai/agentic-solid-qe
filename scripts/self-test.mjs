@@ -170,18 +170,30 @@ export class CustomQuoteWidgetComponent implements IdentifiableComponent {
       customComponent
     );
 
-    // Verify new foundational contracts & shared utilities were seeded
+    // Verify new foundational contracts, shared utilities & 00-master-orchestrator were seeded
     for (const seededRel of [
       'src/contracts/api-client.contract.ts',
       'src/contracts/wizard-step.contract.ts',
       'src/shared/api/auth-token.bridge.ts',
       'src/shared/data/relative-date.helper.ts',
+      '.agents/skills/00-master-orchestrator/SKILL.md',
+      '.agents/skills/00-master-orchestrator/references/master-orchestration-playbook.md',
+      '.claude/commands/00-master-orchestrator.md',
+      '.claude/commands/master-orchestrator.md',
+      '.github/prompts/00-master-orchestrator.prompt.md',
+      '.github/prompts/master-orchestrator.prompt.md',
       '.agents/skills/02-solid-architect/references/complex-orchestration-guide.md',
       '.npmrc',
     ]) {
       assert.equal(fs.existsSync(path.join(tmpDir, seededRel)), true, `Missing seeded file: ${seededRel}`);
     }
     assert.match(fs.readFileSync(path.join(tmpDir, '.npmrc'), 'utf8'), /ignore-scripts=true/);
+
+    // Verify 'cortex orchestrate' CLI subcommand returns masterOrchestratorSkill & coverageMaturityStage
+    const orchRes = runNode(SYNC_SCRIPT, ['orchestrate'], tmpDir);
+    assert.equal(orchRes.status, 0, `cortex orchestrate failed: ${orchRes.stderr}`);
+    assert.match(orchRes.stdout, /"masterOrchestratorSkill": "\/00-master-orchestrator"/);
+    assert.match(orchRes.stdout, /"coverageMaturityStage":/);
 
     // Verify JSONC tsconfig.json was parsed and merged with @domains/* and @shared/*
     const mergedTsConfig = JSON.parse(fs.readFileSync(path.join(tmpDir, 'tsconfig.json'), 'utf8'));
@@ -191,6 +203,7 @@ export class CustomQuoteWidgetComponent implements IdentifiableComponent {
     // Verify package.json preserved custom script and pinned upgrade:skills to #v0.2.0
     const mergedPkg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'package.json'), 'utf8'));
     assert.equal(mergedPkg.scripts['custom:lint'], 'echo custom-lint');
+    assert.equal(mergedPkg.scripts['orchestrate'], 'node scripts/analyze-coverage.mjs');
     assert.equal(mergedPkg.scripts['upgrade:skills'], 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.2.0 sync');
     assert.equal(mergedPkg.scripts['audit:security'], 'npm audit --audit-level=high');
   } finally {

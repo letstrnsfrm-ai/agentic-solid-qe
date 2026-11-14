@@ -24,6 +24,7 @@
     "domain:graph": "node scripts/build-domain-graph.mjs",
     "migrate:skill": "node scripts/migrate-skill.mjs",
     "coverage:gaps": "node scripts/analyze-coverage.mjs",
+    "orchestrate": "node scripts/analyze-coverage.mjs",
     "audit:solid": "node scripts/audit-solid.mjs",
     "validate:tapes": "node scripts/validate-tapes.mjs",
     "verify": "npm run typecheck && npm run domain:graph && npm run audit:solid && npm run validate:tapes && npm run test:engine && npm test",

@@ -24,6 +24,7 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help
 🧠 Cortex / ASQE — Agentic-SOLID-QE Unified CLI (cortex | asqe | agentic-solid-qe)
 
 Usage:
+  cortex orchestrate           Run Master Orchestrator Diagnostic & 5-Stage Coverage Maturity Snapshot (alias: cortex status)
   cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo] [--dry-run]
   cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>] [--dry-run]
   cortex migrate --discover
@@ -36,6 +37,8 @@ Usage:
 }
 
 const subcommandDelegateMap = {
+  orchestrate: 'analyze-coverage.mjs',
+  status: 'analyze-coverage.mjs',
   migrate: 'migrate-skill.mjs',
   graph: 'build-domain-graph.mjs',
   gaps: 'analyze-coverage.mjs',
@@ -518,6 +521,7 @@ function mergeConsumerPackageJson() {
     'domain:graph': 'node scripts/build-domain-graph.mjs',
     'migrate:skill': 'node scripts/migrate-skill.mjs',
     'coverage:gaps': 'node scripts/analyze-coverage.mjs',
+    orchestrate: 'node scripts/analyze-coverage.mjs',
     'audit:solid': 'node scripts/audit-solid.mjs',
     'validate:tapes': 'node scripts/validate-tapes.mjs',
     'audit:security': 'npm audit --audit-level=high',
@@ -1019,5 +1023,5 @@ if (squadName) {
 }
 
 console.log(
-  `\n✅ Agentic-SOLID-QE (${command}${dryRun ? ' --dry-run' : ''}) complete! Next steps: run 'npm install && npx playwright install chromium', then 'npm run coverage:gaps' or invoke '/01-cli-explorer'.\n`
+  `\n✅ Agentic-SOLID-QE (${command}${dryRun ? ' --dry-run' : ''}) complete! Next steps: run 'npm install && npx playwright install chromium', then invoke '/00-master-orchestrator' (or 'npx cortex orchestrate').\n`
 );

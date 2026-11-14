@@ -1,6 +1,10 @@
 # GitHub Copilot Instructions — `agentic-solid-qe`
 
-When assisting in this repository, route your workflow through the six core skills in `.agents/skills/`:
+When assisting in this repository, route your workflow through the Master Orchestrator and core lifecycle skills in `.agents/skills/`:
+
+0. **Master Orchestrator & Incremental Coverage Advisor (`00-master-orchestrator`):**
+   - Follow `.agents/skills/00-master-orchestrator/SKILL.md` and `.agents/skills/00-master-orchestrator/references/master-orchestration-playbook.md`.
+   - Entry point (`/00-master-orchestrator` or `/master-orchestrator`, backed by `npx cortex orchestrate` / `npm run coverage:gaps` + `npm run migrate:skill -- --discover`) to explain all framework capabilities, diagnose current repo maturity (`Stage 0` through `Stage 4`), and recommend how the user or AI agent can incrementally increase automation coverage 1 test at a time.
 
 1. **Environment, Auth & App Map Bootstrap (`00-env-bootstrap`):**
    - Follow `.agents/skills/00-env-bootstrap/SKILL.md`.

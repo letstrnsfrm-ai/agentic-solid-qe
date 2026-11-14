@@ -209,9 +209,58 @@ const dataBuilders = [
 ].map((f) => path.basename(f));
 const apiClients = apiClientFilePaths.map((f) => path.basename(f));
 
-// 6. Compute Recommended Next Action (1-Test-at-a-Time Vertical Slice Loop)
+// 6. Compute Recommended Next Action & 5-Stage Incremental Coverage Maturity
 let recommendedNextAction;
 let nextSingleScenarioToAutomate = null;
+let coverageMaturityStage;
+
+const hasMultiPersonaOrBoundary = tapes.some((t) =>
+  ['multi-persona-auth', 'boundary-analysis', 'state-interruption', 'accessibility-audit'].includes(
+    t.charter
+  )
+);
+const hasEnterprisePatterns =
+  wizardSteps.length > 0 ||
+  apiClients.length > 0 ||
+  tapes.some((t) => ['api-contract', 'cross-portal-handoff'].includes(t.charter));
+
+if (missingAuthSessions.length > 0 || (shards.length === 0 && specsWithContent.length === 0)) {
+  coverageMaturityStage = {
+    stage: 0,
+    name: 'Stage 0: Foundation, Auth & Legacy Onboarding',
+    nextMilestone:
+      'Configure target Base URL, capture .auth/<persona>.json via /00-env-bootstrap, and seed initial route shards (or migrate legacy prompts/scripts via /05-skill-migrator).',
+  };
+} else if (uncompiledTapes.length > 0 || uncoveredShards.length > 0) {
+  coverageMaturityStage = {
+    stage: 1,
+    name: 'Stage 1: P0 Golden-Path Baseline (1 Test at a Time)',
+    nextMilestone:
+      'Cover every domain shard with 1 @p0 happy-path Session Tape (/01-cli-explorer) and compile it into SOLID TypeScript (/02-solid-architect <scenario>).',
+  };
+} else if (!hasMultiPersonaOrBoundary) {
+  coverageMaturityStage = {
+    stage: 2,
+    name: 'Stage 2: Persona, Boundary & Resilience Expansion (@smoke / @regression)',
+    nextMilestone:
+      'Layer multi-persona-auth, boundary-analysis, state-interruption, and accessibility-audit scenarios reusing existing SOLID Components and Data Builders.',
+  };
+} else if (!hasEnterprisePatterns || unimplementedApiClients.length > 0) {
+  coverageMaturityStage = {
+    stage: 3,
+    name: 'Stage 3: Complex Wizards, Backend API Seeding & Cross-Portal Handoffs',
+    nextMilestone:
+      'Add WizardStepContract steps, ApiClientContract + AuthTokenBridge backend seeders, and cross-portal-handoff multi-actor flows 1 test at a time.',
+  };
+} else {
+  coverageMaturityStage = {
+    stage: 4,
+    name: 'Stage 4: Sharded CI/CD Execution & Continuous Drift Healing',
+    nextMilestone:
+      'Curate @p0/@smoke/@regression tags in sharded CI (/04-ci-pipeline), re-verify stale shards, and heal live drift via /03-drift-healer.',
+  };
+}
+
 if (missingAuthSessions.length > 0) {
   recommendedNextAction = `Invoke /00-env-bootstrap to capture missing persona session(s) required by Session Tapes: ${missingAuthSessions.join(', ')}`;
 } else if (uncompiledTapes.length > 0) {
@@ -227,10 +276,12 @@ if (missingAuthSessions.length > 0) {
 } else if (staleShards.length > 0) {
   recommendedNextAction = `Invoke /03-drift-healer or /01-cli-explorer to re-verify stale domain shard(s): ${staleShards.join(', ')}`;
 } else {
-  recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /01-cli-explorer for the next single P1/P2 business scenario or backend API contract, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
+  recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /00-master-orchestrator to plan the next incremental coverage stage, /01-cli-explorer for the next single P1/P2 business scenario or backend API contract, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
 }
 
 const report = {
+  masterOrchestratorSkill: '/00-master-orchestrator',
+  coverageMaturityStage,
   targetApp: {
     appName,
     baseUrl,

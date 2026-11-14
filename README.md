@@ -23,10 +23,14 @@ Current AI browser testing setups break down as soon as you move beyond a toy de
 
 ---
 
-## 6-Skill Closed-Loop QE Lifecycle
+## Master Orchestrator & Closed-Loop QE Lifecycle
 
 ```mermaid
 flowchart LR
+  MO(["/00-master-orchestrator\n(Master Entry Point & Coverage Advisor)"]) --> S00
+  MO --> S01
+  MO --> S02
+  MO --> S05
   S05["/05-skill-migrator\n(Onboard Legacy Skills & Scripts)"] -.-> Brain
   S00["/00-env-bootstrap\n(Base URL, SSO Auth & Route Map)"] --> S01["/01-cli-explorer\n(Multi-Oracle Recon & Session Tapes)"]
   S01 --> S02["/02-solid-architect\n(Compile Tapes -> SOLID TS Suite)"]
@@ -43,12 +47,36 @@ flowchart LR
 
 | Slash Command (IDE) | Backing CLI / Gate | When to Use |
 | :--- | :--- | :--- |
+| **`/00-master-orchestrator`** (`/master-orchestrator`) | `npx cortex orchestrate` / `npm run orchestrate` | **Start Here (Entry Point):** Understand all framework skills/features, diagnose repo maturity (`Stage 0`–`Stage 4`), select an Onboarding Track, and get the exact next step to incrementally increase automation coverage. |
 | **`/00-env-bootstrap`** | `npm run init:app` | Configure target `baseUrl`, capture reusable `.auth/<persona>.json` (`storageState`) for SSO/MFA apps, and seed initial route shards. |
 | **`/01-cli-explorer`** | `npm run coverage:gaps` | Explore unfamiliar multi-page flows via `@playwright/cli --headed`, audit API/console/state/a11y, log bugs to `defects/`, and curate `.exploratory/tapes/*.json`. |
 | **`/02-solid-architect`** | `npm run verify` | Compile Session Tapes into SOLID Components, Pages, Contracts, Fixtures, Data Builders, and tagged `.spec.ts` files. |
 | **`/03-drift-healer`** | `npx playwright test` | Diagnose failing tests against live environments via `@playwright/cli` to separate real app defects from harmless locator/flow drift. |
 | **`/04-ci-pipeline`** | `npm run audit:solid` | Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and scaffold sharded GitHub Actions / Azure DevOps pipelines. |
 | **`/05-skill-migrator`** | `npm run migrate:skill` | Decompose unorganized team skills, `.cursorrules`, and helper scripts (`.sh`, `.js`, `.mjs`, `.ts`, `.py`) into `< 500`-token `SKILL.md` bundles and Domain Shards. |
+
+---
+
+## Master Orchestrator Entry Point (`/00-master-orchestrator`) & 5-Stage Incremental Coverage Progression
+
+Whether you are a human engineer or an AI agent entering a repository for the first time, invoke **`/00-master-orchestrator`** (or `/master-orchestrator` / `npx cortex orchestrate`) as your single entry point.
+
+### What `/00-master-orchestrator` Does Automatically
+1. **Runs Live Project Diagnostics:** Executes `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`, and reads `.agents/domain/domain-memory.md` + the [Master Orchestration Playbook](./.agents/skills/00-master-orchestrator/references/master-orchestration-playbook.md).
+2. **Explains All Framework Capabilities:** Maps your team's needs across all skills (`/00-env-bootstrap` through `/05-skill-migrator`), SOLID contracts (`IdentifiableComponent`, `ErrorBannerContract`, `WizardStepContract`, `ApiClientContract`), shared utilities (`AuthTokenBridge`, `RelativeDateHelper`), and the 3-Tier Federated Brain (`--squad`, `--org-brain`).
+3. **Presents a Project Maturity & Next-Action Blueprint:** Classifies the repository into its **Onboarding Track (Tracks 1–4)** and current **Coverage Maturity Stage (`Stage 0`–`Stage 4`)**, and recommends the **single next command** to run.
+
+### The 5-Stage Incremental Coverage Ladder (`1 Test at a Time`)
+
+Instead of generating dozens of brittle tests in one unverified batch, `/00-master-orchestrator` guides users and AI agents to grow automation coverage incrementally across five deterministic stages:
+
+| Maturity Stage | Focus & Session Tape Charters | Skills & Contracts Used | Exit Gate (`npm run verify`) |
+| :--- | :--- | :--- | :--- |
+| **Stage 0: Foundation, Auth & Legacy Onboarding** | Initialize or `sync` framework, migrate legacy `.cursorrules`/`CLAUDE.md`/scripts, capture SSO/MFA `.auth/<persona>.json`, and seed top-level route shards. | `/00-master-orchestrator` ➔ `/05-skill-migrator` ➔ `/00-env-bootstrap` | Valid `Base URL` in `domain-memory.md`, `.auth/*.json` captured, initial shards indexed (`npm run domain:graph`). |
+| **Stage 1: P0 Golden-Path Baseline (`@p0`)** | Automate **1 `@p0` happy-path vertical slice per uncovered shard** (`charter: "happy-path-baseline"`) before writing edge cases. | `/01-cli-explorer` ➔ `/02-solid-architect <scenario>` (`IdentifiableComponent`) | `uncoveredShards.length === 0`, `uncompiledTapes.length === 0`, and `npm run test:p0` passes. |
+| **Stage 2: Persona, Boundary & Resilience Expansion (`@smoke` / `@regression`)** | Layer `multi-persona-auth`, `boundary-analysis`, `state-interruption`, and `accessibility-audit` scenarios reusing Stage 1 Components and Data Builders. | `/01-cli-explorer` ➔ `/02-solid-architect <scenario>` (`ErrorBannerContract`, `UserBuilder`) | Positive + negative/boundary/persona specs pass `npm run test:smoke` with zero duplicated page objects. |
+| **Stage 3: Complex Wizards, Backend APIs & Cross-Portal Handoffs** | Scale to 5–12 step conditional wizards, fast API precondition seeding, `@api-contract` tests, and multi-actor Customer ➔ Back-Office Agent flows. | `/01-cli-explorer` ➔ `/02-solid-architect` (`WizardStepContract`, `ApiClientContract`, `AuthTokenBridge`, `RelativeDateHelper`) | `unimplementedApiClients.length === 0` and all wizard/API/multi-portal specs pass `npm run verify`. |
+| **Stage 4: Sharded CI/CD & Continuous Drift Healing** | Enforce `@p0`/`@smoke`/`@regression` tags in sharded CI pipelines and triage live test failures into real defects (`defects/DEFECT-*.md`) vs. healed UI/API drift. | `/04-ci-pipeline` & `/03-drift-healer` | `staleShards.length === 0`, sharded CI green, and `npm run audit:solid` passes. |
 
 ---
 
@@ -64,6 +92,7 @@ agentic-solid-qe/
 │   │   ├── shards/                    # Global / Single-Team Feature Shards (<=150 lines each)
 │   │   └── session-tape.schema.json   # Strict JSON contract between Skill 01 & Skill 02
 │   └── skills/
+│       ├── 00-master-orchestrator/    # Master Orchestrator: Entry Point, Diagnostics & 5-Stage Coverage Advisor
 │       ├── 00-env-bootstrap/          # Skill 00: Auth (storageState) & Unfamiliar App Route Discovery
 │       ├── 01-cli-explorer/           # Skill 01: Multi-Page Explorer, Triage & Coverage Curator
 │       ├── 02-solid-architect/        # Skill 02: SOLID Playwright TypeScript Architect
@@ -71,17 +100,17 @@ agentic-solid-qe/
 │       ├── 04-ci-pipeline/            # Skill 04: Regression Tagging & Sharded CI/CD Architect
 │       └── 05-skill-migrator/         # Skill 05: Legacy Skill & Script Onboarding Migrator + Starter Guide
 ├── .github/
-│   ├── copilot-instructions.md        # Auto-bridges all 6 skills for GitHub Copilot
-│   ├── prompts/                       # Slash prompt triggers (/00 through /05) for Copilot
+│   ├── copilot-instructions.md        # Auto-bridges Master Orchestrator + all lifecycle skills for Copilot
+│   ├── prompts/                       # Slash prompt triggers (/00-master-orchestrator, /00..05) for Copilot
 │   └── workflows/playwright-ci.yml    # Sharded GitHub Actions pipeline with SOLID gate
-├── .claude/commands/                  # Slash commands (/00 through /05) for Claude Code
+├── .claude/commands/                  # Slash commands (/00-master-orchestrator, /00..05) for Claude Code
 ├── .azure-pipelines/playwright-ci.yml # Sharded Azure DevOps pipeline template
 ├── defects/                           # Structured Markdown bug reports + evidence pointers
 ├── .exploratory/tapes/                # Validated JSON Session Tapes
 ├── src/                               # Reference SOLID Playwright Framework
 │   ├── contracts/                     # Shared Liskov Substitution interfaces (LSP)
 │   ├── shared/components/             # Org-wide Design System components <= 150 lines
-│   ├── domains/<squad>/               # Squad-scoped {components, pages, data, fixtures} modules
+│   ├── domains/<squad>/               # Squad-scoped {api, components, steps, pages, data, fixtures} modules
 │   ├── components/                    # Atomic UI components <= 150 lines, zero expect() (SRP)
 │   ├── pages/                         # Composed page workflows, zero expect() (SRP)
 │   ├── fixtures/                      # Composable test.extend<>() / mergeTests() injection (OCP/ISP)
@@ -90,7 +119,7 @@ agentic-solid-qe/
 ├── scripts/
 │   ├── build-domain-graph.mjs         # Compiles 3-Tier Brain into .agents/domain/domain-graph.json
 │   ├── migrate-skill.mjs              # Analyzer & scaffolder for onboarding legacy team skills & scripts
-│   ├── analyze-coverage.mjs           # Coverage gap, shard freshness, capability & tag readiness analyzer
+│   ├── analyze-coverage.mjs           # Master Orchestrator diagnostic, coverage maturity & gap analyzer
 │   ├── audit-solid.mjs                # Deterministic gate enforcing <500-token skills, <=150-line shards & SOLID
 │   ├── validate-tapes.mjs             # Session Tape JSON schema validator
 │   └── sync-skills.mjs                # Installer, --squad scaffolder & --org-brain federated sync CLI
@@ -106,6 +135,8 @@ Any IDE AI agent (**Google Antigravity, Claude Code, GitHub Copilot, Cursor, or 
 
 ### Copy-Paste Prompts for Users
 
+- **Prompt 0 — Start Here: Ask the Master Orchestrator to Diagnose & Guide Your Next Step (`/00-master-orchestrator`):**
+  > *"Invoke `/00-master-orchestrator` (read `.agents/skills/00-master-orchestrator/SKILL.md` and `references/master-orchestration-playbook.md`). Run `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`, explain how all the skills and features in `agentic-solid-qe` apply to our project, show our current Coverage Maturity Stage (Stage 0–4), and recommend the single next step to incrementally increase our automation coverage."*
 - **Prompt 1 — Install into an Existing Project & Discover Legacy Skills:**
   > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md` and `AGENTS.md`). Inspect my current repository, explain how `agentic-solid-qe` fits my setup, run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe init .` non-destructively, and run `npm run migrate:skill -- --discover` to inventory my existing skills, prompts, scripts, and Playwright tests."*
 - **Prompt 2 — Migrate Existing Skills & Scripts with Full Guardrails (`/05-skill-migrator`):**
@@ -171,10 +202,13 @@ npm run verify
 npm run init:app -- --url https://your-app-url.com --name "Your App"
 ```
 
-### 2. Drive Coverage with the 5 Core QE Slash Commands
+### 2. Drive Coverage with the Master Orchestrator & Core QE Slash Commands
 
 Open your IDE agent (**Antigravity, Claude Code, GitHub Copilot, or Cursor**) and invoke:
 
+0. **Diagnose Repo & Get Incremental Coverage Plan (`/00-master-orchestrator`):**
+   > **Prompt:** `"/00-master-orchestrator"` (or `"/master-orchestrator"`)
+   - Runs `npm run coverage:gaps` (`npx cortex orchestrate`) + `npm run migrate:skill -- --discover`, reports your current **Coverage Maturity Stage (`Stage 0`–`Stage 4`)**, and recommends the exact next skill to invoke.
 1. **Bootstrap Environment & SSO/MFA Session (`/00-env-bootstrap`):**
    > **Prompt:** `"/00-env-bootstrap"`
    - Launches `@playwright/cli --headed`, captures authenticated `.auth/<persona>.json` (`storageState`), and maps top-level routes into `.agents/domain/shards/*.md`.
@@ -333,6 +367,7 @@ npm run upgrade:skills
 | Command (`npm run` or `npx cortex` / `npx asqe`) | Description |
 | :--- | :--- |
 | `npm run verify` | **Full Gate:** Runs `typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `test:engine` + `playwright test`. |
+| `npx cortex orchestrate` / `npm run orchestrate` | **Master Orchestrator Snapshot:** Outputs `coverageMaturityStage` (Stage 0–4), uncovered/stale shards, uncompiled Session Tapes, API contracts, and recommended next skill (`npx cortex status`). |
 | `npm run test:engine` | Runs zero-browser `node --test` self-tests verifying `--dry-run`, legacy consumer `sync` upgrades, JSONC `tsconfig.json` merging, and `--seed-from-tapes` auto-indexing. |
 | `npx cortex init --url <url> --name "<App>" [--dry-run]` | Initializes or resets a repository with a clean SOLID skeleton (`npm run init:app`). |
 | `npx cortex sync [--squad <squad>] [--org-brain <path>] [--dry-run]` | Upgrades skills/schema/contracts non-destructively, scaffolds a Tier 1 Squad Sub-Hub & `src/domains/<squad>/` module, or syncs an Org Brain. |
