@@ -86,6 +86,55 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium
+      - name: Validate Dispatch Inputs & Target Origin Policy
+        env:
+          INPUT_TARGET_URL: ${{ inputs.target_url }}
+          CONFIGURED_BASE_URL: ${{ vars.BASE_URL }}
+          ALLOWED_TARGET_HOSTS: ${{ vars.ALLOWED_TARGET_HOSTS }}
+          GREP_TAGS: ${{ inputs.grep_tags }}
+        run: |
+          node -e '
+            const grepTags = process.env.GREP_TAGS || "";
+            if (grepTags && !/^@[a-zA-Z0-9_|@-]+$/.test(grepTags)) {
+              console.error("❌ Invalid grep_tags input. Must be a safe @tag expression.");
+              process.exit(1);
+            }
+            const targetUrl = process.env.INPUT_TARGET_URL || "";
+            if (targetUrl) {
+              let parsed;
+              try {
+                parsed = new URL(targetUrl);
+              } catch {
+                console.error("❌ Invalid target_url URL format.");
+                process.exit(1);
+              }
+              const host = parsed.hostname.toLowerCase();
+              const isLocal = host === "localhost" || host === "127.0.0.1";
+              if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocal)) {
+                console.error("❌ Security Error: target_url must use https:// for non-localhost environments.");
+                process.exit(1);
+              }
+              if (parsed.username || parsed.password || /^169\.254\.|^100\.100\.100\.200$|^metadata/i.test(host)) {
+                console.error("❌ Security Error: target_url contains forbidden metadata host or embedded credentials.");
+                process.exit(1);
+              }
+              const allowed = new Set(
+                (process.env.ALLOWED_TARGET_HOSTS || "")
+                  .split(",")
+                  .map((s) => s.trim().toLowerCase())
+                  .filter(Boolean)
+              );
+              if (process.env.CONFIGURED_BASE_URL) {
+                try {
+                  allowed.add(new URL(process.env.CONFIGURED_BASE_URL).hostname.toLowerCase());
+                } catch {}
+              }
+              if (allowed.size > 0 && !allowed.has(host)) {
+                console.error(`❌ Security Error: target_url host "${host}" is not in ALLOWED_TARGET_HOSTS or BASE_URL.`);
+                process.exit(1);
+              }
+            }
+          '
       - name: Run Sharded Playwright Suite
         env:
           BASE_URL: ${{ inputs.target_url || vars.BASE_URL }}

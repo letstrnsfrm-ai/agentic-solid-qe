@@ -9,6 +9,7 @@ import path from 'node:path';
 import { buildDomainGraph } from './build-domain-graph.mjs';
 
 const ROOT = process.cwd();
+const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
 
 function walkFiles(dir, extFilter) {
   if (!fs.existsSync(dir)) return [];
@@ -20,7 +21,14 @@ function walkFiles(dir, extFilter) {
     if (entry.isDirectory()) {
       files.push(...walkFiles(fullPath, extFilter));
     } else if (!extFilter || fullPath.endsWith(extFilter)) {
-      files.push(fullPath);
+      try {
+        const st = fs.lstatSync(fullPath);
+        if (st.isFile() && st.size <= MAX_SCAN_FILE_BYTES) {
+          files.push(fullPath);
+        }
+      } catch {
+        /* skip unreadable file */
+      }
     }
   }
   return files;

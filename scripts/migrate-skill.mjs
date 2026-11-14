@@ -80,9 +80,22 @@ function rel(p) {
   return path.relative(ROOT, p).replace(/\\/g, '/');
 }
 
+const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap against ReDoS / OOM
+
 function isWithinDir(targetPath, baseDir) {
   const relPath = path.relative(baseDir, targetPath);
   return relPath === '' || (!relPath.startsWith('..') && !path.isAbsolute(relPath));
+}
+
+function readTextSafe(filePath, maxBytes = MAX_SCAN_FILE_BYTES) {
+  try {
+    if (!fs.existsSync(filePath)) return '';
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > maxBytes) return '';
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 function walkFiles(dir, extList) {
@@ -97,7 +110,14 @@ function walkFiles(dir, extList) {
     if (e.isDirectory()) {
       out.push(...walkFiles(full, normalizedExts));
     } else if (!normalizedExts || normalizedExts.some((ext) => full.endsWith(ext))) {
-      out.push(full);
+      try {
+        const st = fs.lstatSync(full);
+        if (st.isFile() && st.size <= MAX_SCAN_FILE_BYTES) {
+          out.push(full);
+        }
+      } catch {
+        /* skip unreadable file */
+      }
     }
   }
   return out;
@@ -123,9 +143,15 @@ function slugifyId(rawName, indexPrefix = '06') {
 
 function runWorkspaceDiscovery() {
   const scanRoot = sourceArg ? path.resolve(ROOT, sourceArg) : ROOT;
+  if (!isWithinDir(scanRoot, ROOT)) {
+    console.error(
+      `❌ Security Error: Discovery path '${sourceArg}' resolves outside the repository workspace ('${ROOT}').`
+    );
+    process.exit(1);
+  }
   const relFromScan = (p) => path.relative(scanRoot, p).replace(/\\/g, '/');
   const agentsMdPath = path.join(scanRoot, 'AGENTS.md');
-  const agentsMdContent = fs.existsSync(agentsMdPath) ? fs.readFileSync(agentsMdPath, 'utf8') : '';
+  const agentsMdContent = readTextSafe(agentsMdPath);
 
   const candidateSources = [];
   const seenPaths = new Set();
@@ -367,6 +393,12 @@ Starter Guide:
 }
 
 const resolvedSource = path.resolve(ROOT, sourceArg);
+if (!isWithinDir(resolvedSource, ROOT)) {
+  console.error(
+    `❌ Security Error: Source path '${sourceArg}' resolves outside the repository workspace ('${ROOT}'). Refusing to read external files.`
+  );
+  process.exit(1);
+}
 if (!fs.existsSync(resolvedSource)) {
   console.error(`❌ Source path not found: ${resolvedSource}`);
   process.exit(1);
@@ -376,6 +408,12 @@ if (!fs.existsSync(resolvedSource)) {
 const stat = fs.lstatSync(resolvedSource);
 if (stat.isSymbolicLink()) {
   console.error(`❌ Refusing to migrate symbolic link source: ${resolvedSource}`);
+  process.exit(1);
+}
+if (stat.isFile() && stat.size > MAX_SCAN_FILE_BYTES) {
+  console.error(
+    `❌ Source file exceeds maximum safe migration size (${MAX_SCAN_FILE_BYTES} bytes): ${resolvedSource}`
+  );
   process.exit(1);
 }
 let primaryDocPath = '';
@@ -400,10 +438,7 @@ if (stat.isDirectory()) {
   }
 }
 
-const rawDoc =
-  primaryDocPath && fs.existsSync(primaryDocPath)
-    ? fs.readFileSync(primaryDocPath, 'utf8')
-    : '';
+const rawDoc = primaryDocPath ? readTextSafe(primaryDocPath) : '';
 
 function assertSafeSlug(value, flagName) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(value) || value.includes('..')) {
@@ -418,7 +453,7 @@ function assertSafeSlug(value, flagName) {
 function sanitizeSingleLineText(value, fallback) {
   const cleaned = String(value || '')
     .replace(/[\r\n\t]+/g, ' ')
-    .replace(/[\x00-\x1F\x7F]/g, '')
+    .replace(/[\x00-\x1F\x7F\u202A-\u202E\u2066-\u2069]/g, '')
     .replace(/---+/g, '-')
     .replace(/\s+/g, ' ')
     .trim();
@@ -473,6 +508,7 @@ for (const refToken of referencedScriptTokens) {
     isWithinDir(fromSourceDir, sourceDir) &&
     fs.existsSync(fromSourceDir) &&
     !fs.lstatSync(fromSourceDir).isSymbolicLink() &&
+    fs.lstatSync(fromSourceDir).size <= MAX_SCAN_FILE_BYTES &&
     !CORE_ENGINE_SCRIPTS.has(rel(fromSourceDir))
   ) {
     resolvedScripts.set(fromSourceDir, refToken);
@@ -480,6 +516,7 @@ for (const refToken of referencedScriptTokens) {
     isWithinDir(fromRoot, ROOT) &&
     fs.existsSync(fromRoot) &&
     !fs.lstatSync(fromRoot).isSymbolicLink() &&
+    fs.lstatSync(fromRoot).size <= MAX_SCAN_FILE_BYTES &&
     !CORE_ENGINE_SCRIPTS.has(rel(fromRoot))
   ) {
     resolvedScripts.set(fromRoot, refToken);
@@ -493,13 +530,18 @@ for (const sp of candidateScriptPaths) {
 
 // 3. Classify each script & scan for hardcoded URLs/secrets/UI anti-patterns
 const HARDCODED_SECRET_ASSIGN_REGEX =
-  /((?:password|secret|api[_-]?key|token)\s*[:=]\s*)(['"`])([^'"`$]{4,})\2/gi;
+  /((?:password|secret|client[_-]?secret|api[_-]?key|access[_-]?token|auth[_-]?token|token)\s*[:=]\s*)(['"`])([^'"`$]{4,})\2/gi;
+const DB_CONN_URI_REGEX =
+  /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|mssql|amqp|amqps):\/\/[^/\s:@'"`]+:[^/\s@'"`]+@[^\s'"`]+/gi;
+const BASIC_AUTH_URL_REGEX =
+  /\bhttps?:\/\/[^/\s:@'"`]+:[^/\s@'"`]+@[^\s'"`]+/gi;
 const KNOWN_TOKEN_LITERAL_REGEX =
-  /(['"`])((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|Bearer\s+eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}[^'"`]*|ChangeMe123!)\1/g;
+  /(['"`])((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[0-9A-Za-z-]{10,}|npm_[A-Za-z0-9]{36}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}[^'"`]*|ChangeMe123!)\1/g;
 const BARE_TOKEN_REGEX =
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\bAKIA[0-9A-Z]{16}\b|\bBearer\s+eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|\bChangeMe123!\b/g;
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35}\b|\bxox[baprs]-[0-9A-Za-z-]{10,}\b|\bnpm_[A-Za-z0-9]{36}\b|\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b|\b(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b|\bChangeMe123!\b/g;
 const PRIVATE_KEY_BLOCK_REGEX =
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
+const BIDI_CONTROL_REGEX = /[\u202A-\u202E\u2066-\u2069]/g;
 
 function redactHardcodedSecrets(textBody, fileName = '') {
   const envReplacement = fileName.endsWith('.sh')
@@ -510,7 +552,10 @@ function redactHardcodedSecrets(textBody, fileName = '') {
         ? '"<REDACTED_VIA_ENV_OR_DATA_BUILDER>"'
         : 'process.env.REDACTED_SECRET';
   return textBody
+    .replace(BIDI_CONTROL_REGEX, '')
     .replace(PRIVATE_KEY_BLOCK_REGEX, '<REDACTED_PRIVATE_KEY_USE_ENV_SECRET>')
+    .replace(DB_CONN_URI_REGEX, '<REDACTED_DATABASE_URI_USE_ENV_SECRET>')
+    .replace(BASIC_AUTH_URL_REGEX, '<REDACTED_BASIC_AUTH_URL_USE_ENV_SECRET>')
     .replace(HARDCODED_SECRET_ASSIGN_REGEX, `$1${envReplacement}`)
     .replace(KNOWN_TOKEN_LITERAL_REGEX, envReplacement)
     .replace(BARE_TOKEN_REGEX, '<REDACTED_SECRET_TOKEN>');
@@ -518,15 +563,21 @@ function redactHardcodedSecrets(textBody, fileName = '') {
 
 const analyzedScripts = [];
 for (const [absPath, originalRef] of resolvedScripts.entries()) {
-  const content = fs.readFileSync(absPath, 'utf8');
+  const content = readTextSafe(absPath);
   const fileName = path.basename(absPath);
   const hardcodedUrls = [
     ...new Set([...content.matchAll(/https?:\/\/[^\s'"`)]+/g)].map((m) => m[0])),
   ];
   const hasHardcodedSecrets =
-    /(?:password|secret|api[_-]?key|token)\s*[:=]\s*['"`][^'"`$]{4,}['"`]/i.test(content) ||
+    /(?:password|secret|client[_-]?secret|api[_-]?key|access[_-]?token|auth[_-]?token|token)\s*[:=]\s*['"`][^'"`$]{4,}['"`]/i.test(
+      content
+    ) ||
+    DB_CONN_URI_REGEX.test(content) ||
+    BASIC_AUTH_URL_REGEX.test(content) ||
     BARE_TOKEN_REGEX.test(content) ||
     PRIVATE_KEY_BLOCK_REGEX.test(content);
+  DB_CONN_URI_REGEX.lastIndex = 0;
+  BASIC_AUTH_URL_REGEX.lastIndex = 0;
   BARE_TOKEN_REGEX.lastIndex = 0;
   PRIVATE_KEY_BLOCK_REGEX.lastIndex = 0;
 
@@ -575,7 +626,7 @@ for (const [absPath, originalRef] of resolvedScripts.entries()) {
 // 4. Extract embedded Domain Knowledge (Routes, Test IDs, API endpoints, Invariants)
 const combinedSourceText = [
   rawDoc,
-  ...Array.from(resolvedScripts.keys()).map((p) => fs.readFileSync(p, 'utf8')),
+  ...Array.from(resolvedScripts.keys()).map((p) => readTextSafe(p)),
 ].join('\n');
 
 const discoveredRoutes = [
@@ -664,7 +715,7 @@ const targetRefFile = path.join(targetSkillDir, 'references/legacy-reference.md'
 function resolveRepoBaseUrl() {
   const domainMemoryPath = path.join(ROOT, '.agents/domain/domain-memory.md');
   if (fs.existsSync(domainMemoryPath)) {
-    const m = fs.readFileSync(domainMemoryPath, 'utf8').match(/-\s*\*\*Base URL:\*\*\s*`([^`]+)`/);
+    const m = readTextSafe(domainMemoryPath).match(/-\s*\*\*Base URL:\*\*\s*`([^`]+)`/);
     if (m && /^https?:\/\//.test(m[1].trim())) {
       return m[1].trim();
     }
@@ -691,7 +742,7 @@ function extractLegacyStepsAndNetworkContracts(primaryRoute) {
   const lines = combinedSourceText.split(/\r?\n/);
   for (const rawLine of lines) {
     const line = rawLine.trim();
-    if (!line || line.startsWith('//') || line.startsWith('#')) continue;
+    if (!line || line.length > 2000 || line.startsWith('//') || line.startsWith('#')) continue;
 
     // 1. Extract page.goto('/route') or cy.visit('/route')
     const gotoMatch = line.match(/\b(?:goto|visit)\s*\(\s*['"`]([^'"`]+)['"`]/);
@@ -732,7 +783,7 @@ function extractLegacyStepsAndNetworkContracts(primaryRoute) {
       let locatorVal = 'migrated-element';
       let roleOption;
 
-      const roleMatch = line.match(/getByRole\s*\(\s*['"`]([a-zA-Z]+)['"`](?:.*?name\s*:\s*['"`]([^'"`]+)['"`])?/);
+      const roleMatch = line.match(/getByRole\s*\(\s*['"`]([a-zA-Z]+)['"`](?:[^)]*?\bname\s*:\s*['"`]([^'"`]+)['"`])?/);
       const labelMatch = line.match(/getByLabel\s*\(\s*['"`]([^'"`]+)['"`]/);
       const placeholderMatch = line.match(/getByPlaceholder\s*\(\s*['"`]([^'"`]+)['"`]/);
       const testIdMatch = line.match(/getByTestId\s*\(\s*['"`]([^'"`]+)['"`]/);
@@ -793,7 +844,7 @@ function extractLegacyStepsAndNetworkContracts(primaryRoute) {
     // 3. Extract backend API calls: request.post/get/put/patch/delete('/api/...') or fetch('/api/...')
     const apiMatch =
       line.match(/\brequest\.\s*(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/i) ||
-      line.match(/\bfetch\s*\(\s*['"`]([^'"`]+)['"`](?:.*?method\s*:\s*['"`](GET|POST|PUT|PATCH|DELETE)['"`])?/i);
+      line.match(/\bfetch\s*\(\s*['"`]([^'"`]+)['"`](?:[^)]*?\bmethod\s*:\s*['"`](GET|POST|PUT|PATCH|DELETE)['"`])?/i);
     if (apiMatch) {
       const isRequestCall = /^request\./i.test(apiMatch[0]);
       const method = (isRequestCall ? apiMatch[1] : apiMatch[2] || 'GET').toUpperCase();

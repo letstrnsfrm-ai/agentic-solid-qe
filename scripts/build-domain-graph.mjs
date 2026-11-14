@@ -16,6 +16,13 @@ const DOMAIN_DIR = path.join(ROOT, '.agents/domain');
 const GRAPH_OUT = path.join(DOMAIN_DIR, 'domain-graph.json');
 const STALE_TTL_DAYS = Number(process.env.DOMAIN_STALE_DAYS || 90);
 
+const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
+
+function isWithinDir(targetPath, baseDir) {
+  const relPath = path.relative(baseDir, targetPath);
+  return relPath === '' || (!relPath.startsWith('..') && !path.isAbsolute(relPath));
+}
+
 function walkFiles(dir, extFilter) {
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -26,7 +33,14 @@ function walkFiles(dir, extFilter) {
     if (entry.isDirectory()) {
       files.push(...walkFiles(fullPath, extFilter));
     } else if (!extFilter || fullPath.endsWith(extFilter)) {
-      files.push(fullPath);
+      try {
+        const st = fs.lstatSync(fullPath);
+        if (st.isFile() && st.size <= MAX_SCAN_FILE_BYTES) {
+          files.push(fullPath);
+        }
+      } catch {
+        /* skip unreadable file */
+      }
     }
   }
   return files;
@@ -191,13 +205,23 @@ export function seedShardsFromTapes() {
 
   for (const entry of fs.readdirSync(tapesDir, { withFileTypes: true })) {
     if (entry.isSymbolicLink() || !entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const tapeFullPath = path.join(tapesDir, entry.name);
     let tape;
     try {
-      tape = JSON.parse(fs.readFileSync(path.join(tapesDir, entry.name), 'utf8'));
+      const stat = fs.lstatSync(tapeFullPath);
+      if (stat.size > MAX_SCAN_FILE_BYTES) continue;
+      tape = JSON.parse(fs.readFileSync(tapeFullPath, 'utf8'));
     } catch {
       continue;
     }
-    const scenarioId = tape.scenarioId || path.basename(entry.name, '.json');
+    const rawScenarioId = String(tape.scenarioId || path.basename(entry.name, '.json'));
+    if (!/^[a-z0-9-]+$/.test(rawScenarioId) || rawScenarioId.includes('..')) {
+      console.error(
+        `❌ Security Error: Invalid scenarioId '${rawScenarioId}' in '${entry.name}'. Must match ^[a-z0-9-]+$ with no path traversal.`
+      );
+      process.exit(1);
+    }
+    const scenarioId = rawScenarioId;
 
     // Match a Tier 1 Squad Hub if scenarioId or routes start with a known squad prefix
     const matchedHub = existingGraph.domainHubs.find(
@@ -213,8 +237,8 @@ export function seedShardsFromTapes() {
       : path.join(DOMAIN_DIR, 'shards');
     fs.mkdirSync(targetShardsDir, { recursive: true });
 
-    const shardPath = path.join(targetShardsDir, `${scenarioId}.md`);
-    if (fs.existsSync(shardPath)) continue;
+    const shardPath = path.resolve(targetShardsDir, `${scenarioId}.md`);
+    if (!isWithinDir(shardPath, targetShardsDir) || fs.existsSync(shardPath)) continue;
 
     const routes = new Set();
     const components = new Set();

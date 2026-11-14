@@ -110,7 +110,7 @@ const TARGET_ROOT = path.resolve(process.cwd(), targetArg);
 const resolvedUrl = appUrl || process.env.BASE_URL || 'http://localhost:3000';
 const resolvedAppName = sanitizeAppName(appName);
 
-function assertSafeTargetDirectory(resolvedTarget) {
+function assertSafeTargetDirectory(resolvedTarget, label = 'target directory') {
   const normalized = path.resolve(resolvedTarget);
   const homeDir = path.resolve(os.homedir());
   const forbiddenExact = new Set([
@@ -129,20 +129,58 @@ function assertSafeTargetDirectory(resolvedTarget) {
     '/sys',
     '/dev',
     '/tmp',
+    '/System',
+    '/Library',
+    '/Users',
   ]);
-  const forbiddenPrefixes = ['/etc/', '/usr/', '/var/', '/bin/', '/sbin/', '/lib/', '/proc/', '/sys/', '/dev/'];
+  const forbiddenPrefixes = [
+    '/etc/',
+    '/usr/',
+    '/var/',
+    '/bin/',
+    '/sbin/',
+    '/lib/',
+    '/proc/',
+    '/sys/',
+    '/dev/',
+    '/System/',
+    '/Library/',
+  ];
   if (
     forbiddenExact.has(normalized) ||
-    forbiddenPrefixes.some((prefix) => normalized.startsWith(prefix))
+    forbiddenPrefixes.some((prefix) => normalized.startsWith(prefix)) ||
+    /^[A-Za-z]:\\(?:Windows|Program Files|Users)$/i.test(normalized)
   ) {
-    console.error(`❌ Refusing to run against protected system or home directory: '${normalized}'.`);
+    console.error(`❌ Refusing to run against protected system or home ${label}: '${normalized}'.`);
+    process.exit(1);
+  }
+  const normalizedSegments = normalized.split(path.sep);
+  if (normalizedSegments.includes('.git')) {
+    console.error(`❌ Refusing to run against a .git internal ${label}: '${normalized}'.`);
+    process.exit(1);
+  }
+  if (
+    normalized !== SOURCE_ROOT &&
+    SOURCE_ROOT.startsWith(normalized + path.sep)
+  ) {
+    console.error(`❌ Refusing to target parent directory '${normalized}' containing SOURCE_ROOT.`);
     process.exit(1);
   }
   if (fs.existsSync(normalized) && fs.lstatSync(normalized).isSymbolicLink()) {
-    console.error(`❌ Refusing to run against symbolic link target directory: '${normalized}'.`);
+    console.error(`❌ Refusing to run against symbolic link ${label}: '${normalized}'.`);
     process.exit(1);
   }
 }
+
+const FORBIDDEN_METADATA_HOSTS = new Set([
+  '169.254.169.254',
+  '169.254.170.2',
+  '100.100.100.200',
+  '[fd00:ec2::254]',
+  'metadata.google.internal',
+  'metadata.azure.com',
+  'metadata',
+]);
 
 function assertSafeHttpUrl(rawUrl) {
   let parsed;
@@ -154,6 +192,19 @@ function assertSafeHttpUrl(rawUrl) {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     console.error(`❌ Unsupported URL protocol '${parsed.protocol}' in '${rawUrl}'. Only http: and https: are allowed.`);
+    process.exit(1);
+  }
+  if (parsed.username || parsed.password) {
+    console.error(
+      `❌ Security Error: Embedded credentials in URL '${rawUrl}' are forbidden. Inject credentials via environment variables and UserBuilder.`
+    );
+    process.exit(1);
+  }
+  const hostLower = parsed.hostname.toLowerCase();
+  if (FORBIDDEN_METADATA_HOSTS.has(hostLower) || /^169\.254\./.test(hostLower)) {
+    console.error(
+      `❌ Security Error: Cloud metadata / link-local address '${parsed.hostname}' is forbidden (SSRF protection).`
+    );
     process.exit(1);
   }
   return parsed.toString().replace(/\/$/, '') || rawUrl;
@@ -215,19 +266,41 @@ function writeFileSafe(dest, content, { overwrite = false } = {}) {
   console.log(`${dryRun ? '🔍 [DRY-RUN] Would write' : overwrite ? '✨ Initialized' : '🌱 Created'}: ${rel(dest)}`);
 }
 
-function clearDirectoryFiles(dirPath, extFilter) {
-  if (!fs.existsSync(dirPath)) return;
-  for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
-    if (entry.isSymbolicLink()) continue;
-    const fullPath = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      clearDirectoryFiles(fullPath, extFilter);
-    } else if (!extFilter || entry.name.endsWith(extFilter)) {
-      if (!dryRun) {
-        fs.unlinkSync(fullPath);
-      }
-      console.log(`${dryRun ? '🔍 [DRY-RUN] Would remove' : '🧹 Removed'} demo artifact: ${rel(fullPath)}`);
+/**
+ * Explicit allowlist of reference SauceDemo template files so `init --reset`
+ * never deletes a consumer application's own `src/components/*.ts` or `src/pages/*.ts` files.
+ */
+const SAUCEDEMO_DEMO_ARTIFACTS = [
+  '.agents/domain/shards/auth.md',
+  '.agents/domain/shards/checkout.md',
+  '.agents/domain/shards/inventory-cart.md',
+  '.exploratory/tapes/saucedemo-e2e-checkout.json',
+  '.exploratory/tapes/saucedemo-login-inventory.json',
+  'defects/DEFECT-2026-10-25T12-00-00Z-problem-user-broken-images.md',
+  'src/components/cart-list.component.ts',
+  'src/components/checkout-form.component.ts',
+  'src/components/checkout-summary.component.ts',
+  'src/components/header-nav.component.ts',
+  'src/components/inventory-list.component.ts',
+  'src/components/login-form.component.ts',
+  'src/pages/checkout.page.ts',
+  'src/pages/inventory.page.ts',
+  'src/pages/login.page.ts',
+  'src/data/checkout.builder.ts',
+  'src/data/product.builder.ts',
+  'src/data/user.builder.ts',
+  'tests/auth-and-inventory.spec.ts',
+  'tests/e2e-checkout.spec.ts',
+];
+
+function removeSauceDemoArtifacts() {
+  for (const relArtifact of SAUCEDEMO_DEMO_ARTIFACTS) {
+    const fullPath = path.join(TARGET_ROOT, relArtifact);
+    if (!fs.existsSync(fullPath) || fs.lstatSync(fullPath).isSymbolicLink()) continue;
+    if (!dryRun) {
+      fs.unlinkSync(fullPath);
     }
+    console.log(`${dryRun ? '🔍 [DRY-RUN] Would remove' : '🧹 Removed'} demo artifact: ${rel(fullPath)}`);
   }
 }
 
@@ -415,10 +488,15 @@ setup('authenticate standard persona', async ({ page }) => {
     return;
   }
 
-  fs.mkdirSync(path.dirname(authFile), { recursive: true });
+  fs.mkdirSync(path.dirname(authFile), { recursive: true, mode: 0o700 });
   await page.goto('/');
   // TODO: Replace with your app login steps (or capture via /00-env-bootstrap), then save storageState:
   await page.context().storageState({ path: authFile });
+  try {
+    fs.chmodSync(authFile, 0o600);
+  } catch {
+    /* ignore chmod no-op on non-POSIX filesystems */
+  }
 });
 `,
     { overwrite }
@@ -442,10 +520,11 @@ function mergeConsumerPackageJson() {
     'coverage:gaps': 'node scripts/analyze-coverage.mjs',
     'audit:solid': 'node scripts/audit-solid.mjs',
     'validate:tapes': 'node scripts/validate-tapes.mjs',
+    'audit:security': 'npm audit --audit-level=high',
     verify: 'npm run typecheck && npm run domain:graph && npm run audit:solid && npm run validate:tapes && npm test',
     'init:app': 'node scripts/sync-skills.mjs init --reset',
     'sync:skills': 'node scripts/sync-skills.mjs',
-    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync',
+    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.2.0 sync',
   };
   const requiredDevDeps = {
     '@playwright/cli': '0.1.22',
@@ -466,6 +545,9 @@ function mergeConsumerPackageJson() {
       private: true,
       type: 'module',
       scripts: requiredScripts,
+      engines: {
+        node: '>=20.12.0',
+      },
       devDependencies: requiredDevDeps,
       overrides: requiredOverrides,
     };
@@ -488,11 +570,17 @@ function mergeConsumerPackageJson() {
       if (
         !pkg.scripts[k] ||
         (k === 'test' && pkg.scripts[k] === 'playwright test --project=chromium') ||
-        (k === 'upgrade:skills' && pkg.scripts[k].includes('#v0.2.0'))
+        (k === 'upgrade:skills' &&
+          (pkg.scripts[k] === 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync' ||
+            pkg.scripts[k].includes('#v0.1.')))
       ) {
         pkg.scripts[k] = v;
         modified = true;
       }
+    }
+    if (!pkg.engines || !pkg.engines.node) {
+      pkg.engines = { ...(pkg.engines || {}), node: '>=20.12.0' };
+      modified = true;
     }
     for (const [dep, ver] of Object.entries(requiredDevDeps)) {
       if (!allDeps[dep]) {
@@ -517,6 +605,35 @@ function mergeConsumerPackageJson() {
   } catch {
     console.warn(`⚠️  Could not parse existing package.json; skipping script merge.`);
   }
+}
+
+/**
+ * Ensures consumer repos have supply-chain protections enabled in .npmrc (ignore-scripts=true, audit-level=high)
+ * without overwriting custom registry configurations.
+ */
+function mergeConsumerNpmrc() {
+  const npmrcPath = path.join(TARGET_ROOT, '.npmrc');
+  if (fs.existsSync(npmrcPath) && fs.lstatSync(npmrcPath).isSymbolicLink()) return;
+  const existing = fs.existsSync(npmrcPath) ? fs.readFileSync(npmrcPath, 'utf8') : '';
+  const requiredSettings = [
+    { key: 'ignore-scripts', line: 'ignore-scripts=true' },
+    { key: 'audit-level', line: 'audit-level=high' },
+  ];
+  const missingLines = requiredSettings
+    .filter(({ key }) => !new RegExp(`^\\s*${key}\\s*=`, 'm').test(existing))
+    .map(({ line }) => line);
+  if (missingLines.length === 0) return;
+
+  const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+  const header = existing
+    ? '\n# Enterprise Supply-Chain Hardening (agentic-solid-qe)\n'
+    : '# Enterprise Supply-Chain Hardening (agentic-solid-qe)\n';
+  if (!dryRun) {
+    fs.writeFileSync(npmrcPath, `${existing}${prefix}${header}${missingLines.join('\n')}\n`, 'utf8');
+  }
+  console.log(
+    `${dryRun ? '🔍 [DRY-RUN] Would update' : existing ? '🔧 Updated' : '🌱 Created'}: .npmrc (+${missingLines.join(', ')})`
+  );
 }
 
 /**
@@ -724,14 +841,8 @@ const targetShardsDir = path.join(TARGET_ROOT, '.agents/domain/shards');
 
 if (command === 'init') {
   if (resetDemo) {
-    // Wipe reference SauceDemo artifacts when resetting a template clone for a real consumer app
-    clearDirectoryFiles(path.join(TARGET_ROOT, '.agents/domain/shards'), '.md');
-    clearDirectoryFiles(path.join(TARGET_ROOT, '.exploratory/tapes'), '.json');
-    clearDirectoryFiles(path.join(TARGET_ROOT, 'defects'), '.md');
-    clearDirectoryFiles(path.join(TARGET_ROOT, 'src/components'), '.ts');
-    clearDirectoryFiles(path.join(TARGET_ROOT, 'src/pages'), '.ts');
-    clearDirectoryFiles(path.join(TARGET_ROOT, 'src/data'), '.ts');
-    clearDirectoryFiles(path.join(TARGET_ROOT, 'tests'), '.spec.ts');
+    // Wipe only known SauceDemo reference artifacts so consumer source files are never deleted
+    removeSauceDemoArtifacts();
 
     writeFileSafe(targetDomainMemory, buildCleanDomainMemory(resolvedAppName, resolvedUrl), {
       overwrite: true,
@@ -781,6 +892,7 @@ if (command === 'init') {
   }
 
   mergeConsumerPackageJson();
+  mergeConsumerNpmrc();
   mergeConsumerTsConfig();
   configurePlaywrightConfig();
   mergeConsumerGitignore();
@@ -827,6 +939,7 @@ if (command === 'init') {
   }
 
   mergeConsumerPackageJson();
+  mergeConsumerNpmrc();
   mergeConsumerTsConfig();
   mergeConsumerGitignore();
 }
@@ -834,6 +947,7 @@ if (command === 'init') {
 // Optional: Federated Org Brain sync (--org-brain <path>)
 if (orgBrainSource) {
   const resolvedBrainRoot = path.resolve(process.cwd(), orgBrainSource);
+  assertSafeTargetDirectory(resolvedBrainRoot, '--org-brain source directory');
   if (fs.existsSync(resolvedBrainRoot) && !fs.lstatSync(resolvedBrainRoot).isSymbolicLink()) {
     for (const sharedRel of [
       '.agents/domain/domain-memory.md',
@@ -842,7 +956,7 @@ if (orgBrainSource) {
       'src/shared',
     ]) {
       const srcPath = path.join(resolvedBrainRoot, sharedRel);
-      if (fs.existsSync(srcPath)) {
+      if (fs.existsSync(srcPath) && !fs.lstatSync(srcPath).isSymbolicLink()) {
         copyRecursive(srcPath, path.join(TARGET_ROOT, sharedRel), { overwrite: true });
       }
     }

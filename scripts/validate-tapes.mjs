@@ -46,11 +46,28 @@ const VALID_STATE_KEYS = new Set(Object.keys(schema.properties.expectedStates.it
 const SAFE_MEMBER_REF_REGEX = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*(\(\))?)*$/;
 const SAFE_CLASS_NAME_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SAFE_STORAGE_STATE_REGEX = /^\.auth\/[a-z0-9_-]+\.json$/;
+const MAX_TAPE_FILE_BYTES = 1024 * 1024; // 1 MB cap
+
+const FORBIDDEN_METADATA_HOSTS = new Set([
+  '169.254.169.254',
+  '169.254.170.2',
+  '100.100.100.200',
+  '[fd00:ec2::254]',
+  'metadata.google.internal',
+  'metadata.azure.com',
+  'metadata',
+]);
 
 function isValidHttpUrl(rawUrl) {
   try {
     const parsed = new URL(rawUrl);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (parsed.username || parsed.password) return false;
+    const hostLower = parsed.hostname.toLowerCase();
+    if (FORBIDDEN_METADATA_HOSTS.has(hostLower) || /^169\.254\./.test(hostLower)) {
+      return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -80,6 +97,11 @@ for (const file of tapeFiles) {
   const fullPath = path.join(TAPES_DIR, file);
   let tape;
   try {
+    const stat = fs.lstatSync(fullPath);
+    if (stat.size > MAX_TAPE_FILE_BYTES) {
+      errors.push(`[${file}] Session Tape exceeds maximum allowed file size (${MAX_TAPE_FILE_BYTES} bytes).`);
+      continue;
+    }
     tape = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
   } catch (err) {
     errors.push(`[${file}] Invalid JSON: ${err.message}`);
@@ -316,12 +338,17 @@ for (const file of tapeFiles) {
 
   const rawTapeText = JSON.stringify(tape);
   if (
-    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\bAKIA[0-9A-Z]{16}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+eyJ[A-Za-z0-9_-]{10,}\./.test(
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35}\b|\bxox[baprs]-[0-9A-Za-z-]{10,}\b|\bnpm_[A-Za-z0-9]{36}\b|\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|mssql|amqp|amqps):\/\/[^/\s:@'"`]+:[^/\s@'"`]+@/i.test(
       rawTapeText
     )
   ) {
     errors.push(
       `[${file}] Session Tape contains a raw credential/token pattern. Reference environment-backed Data Builders via 'inputDataRef' instead.`
+    );
+  }
+  if (/[\u202A-\u202E\u2066-\u2069]/.test(rawTapeText)) {
+    errors.push(
+      `[${file}] Session Tape contains Trojan-Source bidirectional Unicode control characters.`
     );
   }
 

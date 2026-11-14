@@ -12,6 +12,7 @@ const ROOT = process.cwd();
 const MAX_COMPONENT_LINES = 150;
 const MAX_DOMAIN_LINES = 150;
 const MAX_SKILL_TOKENS = 500;
+const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
 
 let violations = [];
 
@@ -25,7 +26,14 @@ function walkFiles(dir, extFilter) {
     if (entry.isDirectory()) {
       files.push(...walkFiles(fullPath, extFilter));
     } else if (!extFilter || fullPath.endsWith(extFilter)) {
-      files.push(fullPath);
+      try {
+        const st = fs.lstatSync(fullPath);
+        if (st.isFile() && st.size <= MAX_SCAN_FILE_BYTES) {
+          files.push(fullPath);
+        }
+      } catch {
+        /* skip unreadable file */
+      }
     }
   }
   return files;
@@ -320,15 +328,42 @@ for (const file of specFiles) {
   }
 }
 
-// 6. Audit src/, tests/, .agents/skills/, .agents/domain/, and defects/ for leaked secret tokens
+// 6. Audit src/, tests/, .agents/skills/, .agents/domain/, .exploratory/tapes/, .claude/, .github/, and defects/ for leaked secrets, Trojan-Source Unicode, and prompt injection
 const SECRET_PATTERNS = [
   { name: 'GitHub Token', regex: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/ },
   { name: 'GitHub Fine-Grained PAT', regex: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/ },
   { name: 'API Secret Key (sk-*)', regex: /\bsk-[A-Za-z0-9_-]{20,}\b/ },
-  { name: 'AWS Access Key ID', regex: /\bAKIA[0-9A-Z]{16}\b/ },
+  { name: 'AWS Access Key ID', regex: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  { name: 'Google Cloud API Key', regex: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+  { name: 'Slack Token', regex: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/ },
+  { name: 'npm Access Token', regex: /\bnpm_[A-Za-z0-9]{36}\b/ },
+  { name: 'SendGrid API Key', regex: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/ },
   { name: 'Private Key Block', regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
-  { name: 'Raw JWT Bearer Token', regex: /\bBearer\s+eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
+  {
+    name: 'Raw JWT Token',
+    regex: /\b(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
+  },
+  {
+    name: 'Database Connection URI with Credentials',
+    regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|mssql|amqp|amqps):\/\/[^/\s:@'"`]+:[^/\s@'"`]+@[^\s'"`]+/i,
+  },
+  {
+    name: 'HTTP(S) URL with Embedded Basic Auth Credentials',
+    regex: /\bhttps?:\/\/[^/\s:@'"`]+:[^/\s@'"`]+@[^\s'"`]+/i,
+  },
   { name: 'Insecure Default Password Placeholder', regex: /['"`]ChangeMe123!['"`]/ },
+];
+
+const BIDI_UNICODE_REGEX = /[\u202A-\u202E\u2066-\u2069]/;
+const PROMPT_INJECTION_PATTERNS = [
+  {
+    name: 'Remote Shell Pipe Execution (curl/wget | sh)',
+    regex: /\b(?:curl|wget)\b[^\n|]*\|\s*(?:ba)?sh\b/i,
+  },
+  {
+    name: 'Prompt Override Injection Directive',
+    regex: /\bignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions\b/i,
+  },
 ];
 
 const allCodeAndArtifactFiles = [
@@ -336,23 +371,52 @@ const allCodeAndArtifactFiles = [
   ...walkFiles(path.join(ROOT, 'tests'), '.ts'),
   ...walkFiles(path.join(ROOT, '.agents/skills')),
   ...walkFiles(path.join(ROOT, '.agents/domain'), '.md'),
+  ...walkFiles(path.join(ROOT, '.exploratory/tapes'), '.json'),
+  ...walkFiles(path.join(ROOT, '.claude/commands'), '.md'),
+  ...walkFiles(path.join(ROOT, '.github/prompts'), '.md'),
+  ...walkFiles(path.join(ROOT, '.github/workflows'), '.yml'),
+  ...walkFiles(path.join(ROOT, '.azure-pipelines'), '.yml'),
   ...walkFiles(path.join(ROOT, 'defects'), '.md'),
 ];
 for (const targetFile of allCodeAndArtifactFiles) {
   const rawText = fs.readFileSync(targetFile, 'utf8');
+  const relTarget = rel(targetFile);
+
+  if (BIDI_UNICODE_REGEX.test(rawText)) {
+    violations.push(
+      `[Trojan-Source Unicode Gate] ${relTarget} contains bidirectional Unicode control characters (U+202A..U+202E / U+2066..U+2069). Strip hidden control characters.`
+    );
+  }
+
+  const isPromptOrMemoryArtifact =
+    relTarget.startsWith('.agents/skills/') ||
+    relTarget.startsWith('.agents/domain/') ||
+    relTarget.startsWith('.claude/commands/') ||
+    relTarget.startsWith('.github/prompts/');
+  if (isPromptOrMemoryArtifact) {
+    for (const inj of PROMPT_INJECTION_PATTERNS) {
+      if (inj.regex.test(rawText)) {
+        violations.push(
+          `[Agent Prompt Security Gate] ${relTarget} contains forbidden pattern '${inj.name}'. Remove untrusted shell pipes or prompt-override directives.`
+        );
+      }
+    }
+  }
+
   const inspectText = targetFile.endsWith('.ts') ? stripComments(rawText) : rawText;
   for (const pattern of SECRET_PATTERNS) {
     if (pattern.regex.test(inspectText)) {
       violations.push(
-        `[Secret Hygiene Gate] ${rel(targetFile)} contains a ${pattern.name}. Inject sensitive values via environment variables in src/data/*.builder.ts.`
+        `[Secret Hygiene Gate] ${relTarget} contains a ${pattern.name}. Inject sensitive values via environment variables in src/data/*.builder.ts.`
       );
     }
   }
-  const relTarget = rel(targetFile);
   if (
     relTarget.startsWith('.agents/skills/') &&
     relTarget.includes('/scripts/') &&
-    /(?:password|secret|api[_-]?key|token)\s*[:=]\s*['"`][^'"`$]{4,}['"`]/i.test(rawText)
+    /(?:password|secret|client[_-]?secret|api[_-]?key|access[_-]?token|auth[_-]?token|token)\s*[:=]\s*['"`][^'"`$]{4,}['"`]/i.test(
+      rawText
+    )
   ) {
     violations.push(
       `[Secret Hygiene Gate] ${relTarget} contains a hardcoded credential assignment. Parameterize secrets via process.env.`

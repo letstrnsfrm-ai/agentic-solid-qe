@@ -23,8 +23,10 @@ export default defineConfig({
     baseURL: process.env.BASE_URL || 'https://www.saucedemo.com',
     // Match your app's test-id attribute (e.g. 'data-testid'); unused if you locate by role/label/placeholder.
     testIdAttribute: 'data-test',
-    // Opt-in for networks with TLS-intercepting proxies. Never enable against production.
-    ignoreHTTPSErrors: process.env.IGNORE_HTTPS_ERRORS === '1',
+    // Opt-in for local networks with TLS-intercepting proxies. Blocked in CI unless ALLOW_CI_INSECURE_TLS=1 is set.
+    ignoreHTTPSErrors:
+      process.env.IGNORE_HTTPS_ERRORS === '1' &&
+      (!process.env.CI || process.env.ALLOW_CI_INSECURE_TLS === '1'),
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
