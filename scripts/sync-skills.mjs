@@ -24,8 +24,8 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help
 🧠 Cortex / ASQE — Agentic-SOLID-QE Unified CLI (cortex | asqe | agentic-solid-qe)
 
 Usage:
-  cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo]
-  cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>]
+  cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo] [--dry-run]
+  cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>] [--dry-run]
   cortex migrate --discover
   cortex migrate <legacy-path> [--name <skill-id>] [--squad <squad>] [--apply]
   cortex graph                 Compile 3-Tier Federated Brain (.agents/domain/domain-graph.json)
@@ -58,6 +58,7 @@ let squadName = '';
 let orgBrainSource = '';
 let resetDemo = false;
 let includeDemo = false;
+let dryRun = false;
 
 const positional = [];
 for (let i = 0; i < rawArgs.length; i++) {
@@ -66,6 +67,8 @@ for (let i = 0; i < rawArgs.length; i++) {
     resetDemo = true;
   } else if (arg === '--demo') {
     includeDemo = true;
+  } else if (arg === '--dry-run') {
+    dryRun = true;
   } else if (arg === '--url' && rawArgs[i + 1]) {
     appUrl = rawArgs[++i];
   } else if (arg.startsWith('--url=')) {
@@ -179,7 +182,9 @@ function copyRecursive(src, dest, { overwrite = true } = {}) {
   const stat = fs.lstatSync(src);
   if (stat.isSymbolicLink()) return;
   if (stat.isDirectory()) {
-    fs.mkdirSync(dest, { recursive: true });
+    if (!dryRun) {
+      fs.mkdirSync(dest, { recursive: true });
+    }
     for (const entry of fs.readdirSync(src)) {
       copyRecursive(path.join(src, entry), path.join(dest, entry), { overwrite });
     }
@@ -188,11 +193,13 @@ function copyRecursive(src, dest, { overwrite = true } = {}) {
       console.log(`⏭️  Skipped existing: ${rel(dest)}`);
       return;
     }
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    if (path.resolve(src) !== path.resolve(dest)) {
-      fs.copyFileSync(src, dest);
+    if (!dryRun) {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      if (path.resolve(src) !== path.resolve(dest)) {
+        fs.copyFileSync(src, dest);
+      }
     }
-    console.log(`${overwrite ? '🔄 Synced' : '🌱 Created'}: ${rel(dest)}`);
+    console.log(`${dryRun ? '🔍 [DRY-RUN] Would sync' : overwrite ? '🔄 Synced' : '🌱 Created'}: ${rel(dest)}`);
   }
 }
 
@@ -201,9 +208,11 @@ function writeFileSafe(dest, content, { overwrite = false } = {}) {
     console.log(`⏭️  Skipped existing: ${rel(dest)}`);
     return;
   }
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.writeFileSync(dest, content, 'utf8');
-  console.log(`${overwrite ? '✨ Initialized' : '🌱 Created'}: ${rel(dest)}`);
+  if (!dryRun) {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, content, 'utf8');
+  }
+  console.log(`${dryRun ? '🔍 [DRY-RUN] Would write' : overwrite ? '✨ Initialized' : '🌱 Created'}: ${rel(dest)}`);
 }
 
 function clearDirectoryFiles(dirPath, extFilter) {
@@ -214,8 +223,10 @@ function clearDirectoryFiles(dirPath, extFilter) {
     if (entry.isDirectory()) {
       clearDirectoryFiles(fullPath, extFilter);
     } else if (!extFilter || entry.name.endsWith(extFilter)) {
-      fs.unlinkSync(fullPath);
-      console.log(`🧹 Removed demo artifact: ${rel(fullPath)}`);
+      if (!dryRun) {
+        fs.unlinkSync(fullPath);
+      }
+      console.log(`${dryRun ? '🔍 [DRY-RUN] Would remove' : '🧹 Removed'} demo artifact: ${rel(fullPath)}`);
     }
   }
 }
@@ -275,7 +286,9 @@ function scaffoldCleanSolidSkeleton({ overwrite = false } = {}) {
     'tests',
   ];
   for (const d of dirs) {
-    fs.mkdirSync(path.join(TARGET_ROOT, d), { recursive: true });
+    if (!dryRun) {
+      fs.mkdirSync(path.join(TARGET_ROOT, d), { recursive: true });
+    }
   }
 
   writeFileSafe(
@@ -416,6 +429,7 @@ function mergeConsumerPackageJson() {
   const pkgPath = path.join(TARGET_ROOT, 'package.json');
   const requiredScripts = {
     test: 'playwright test --project=chromium --pass-with-no-tests',
+    'test:engine': 'node --test scripts/self-test.mjs',
     'test:headed': 'playwright test --headed',
     'test:ui': 'playwright test --ui',
     report: 'playwright show-report',
@@ -452,8 +466,10 @@ function mergeConsumerPackageJson() {
       devDependencies: requiredDevDeps,
       overrides: requiredOverrides,
     };
-    fs.writeFileSync(pkgPath, JSON.stringify(newPkg, null, 2) + '\n', 'utf8');
-    console.log(`🌱 Created: package.json`);
+    if (!dryRun) {
+      fs.writeFileSync(pkgPath, JSON.stringify(newPkg, null, 2) + '\n', 'utf8');
+    }
+    console.log(`${dryRun ? '🔍 [DRY-RUN] Would create' : '🌱 Created'}: package.json`);
     return;
   }
 
@@ -488,12 +504,58 @@ function mergeConsumerPackageJson() {
       }
     }
     if (modified) {
-      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
-      console.log(`🔧 Merged SOLID QE scripts & devDependencies into: package.json`);
+      if (!dryRun) {
+        fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+      }
+      console.log(
+        `${dryRun ? '🔍 [DRY-RUN] Would merge' : '🔧 Merged'} SOLID QE scripts & devDependencies into: package.json`
+      );
     }
   } catch {
     console.warn(`⚠️  Could not parse existing package.json; skipping script merge.`);
   }
+}
+
+/**
+ * Strips single-line (//), block (/* * /), and trailing commas outside string literals
+ * so real-world JSONC tsconfig.json files can be parsed and merged safely.
+ */
+function stripJsonCommentsAndTrailingCommas(raw) {
+  let out = '';
+  let inString = false;
+  let quoteChar = '';
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    const next = raw[i + 1];
+    if (inString) {
+      out += ch;
+      if (ch === '\\' && i + 1 < raw.length) {
+        out += raw[++i];
+      } else if (ch === quoteChar) {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inString = true;
+      quoteChar = ch;
+      out += ch;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      while (i < raw.length && raw[i] !== '\n') i++;
+      if (i < raw.length) out += '\n';
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < raw.length && !(raw[i] === '*' && raw[i + 1] === '/')) i++;
+      i++;
+      continue;
+    }
+    out += ch;
+  }
+  return out.replace(/,\s*([}\]])/g, '$1');
 }
 
 function mergeConsumerTsConfig() {
@@ -515,7 +577,7 @@ function mergeConsumerTsConfig() {
 
   try {
     const raw = fs.readFileSync(tsconfigPath, 'utf8');
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(stripJsonCommentsAndTrailingCommas(raw));
     parsed.compilerOptions = parsed.compilerOptions || {};
     if (!parsed.compilerOptions.baseUrl) {
       parsed.compilerOptions.baseUrl = '.';
@@ -529,11 +591,15 @@ function mergeConsumerTsConfig() {
       }
     }
     if (modified) {
-      fs.writeFileSync(tsconfigPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
-      console.log(`🔧 Merged @contracts/@components/@pages/@fixtures/@data aliases into: tsconfig.json`);
+      if (!dryRun) {
+        fs.writeFileSync(tsconfigPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+      }
+      console.log(
+        `${dryRun ? '🔍 [DRY-RUN] Would merge' : '🔧 Merged'} @contracts/@components/@pages/@fixtures/@data/@domains/@shared aliases into: tsconfig.json`
+      );
     }
   } catch {
-    console.warn(`⚠️  Could not auto-merge tsconfig.json (may contain comments); verify @* path aliases manually.`);
+    console.warn(`⚠️  Could not auto-merge tsconfig.json; verify @* path aliases manually.`);
   }
 }
 
@@ -546,8 +612,10 @@ function configurePlaywrightConfig() {
       /baseURL:\s*process\.env\.BASE_URL\s*\|\|\s*['"][^'"]+['"]/,
       `baseURL: process.env.BASE_URL || ${serializedUrl}`
     );
-    fs.writeFileSync(pwConfigPath, customized, 'utf8');
-    console.log(`🌱 Created: playwright.config.ts (baseURL -> ${resolvedUrl})`);
+    if (!dryRun) {
+      fs.writeFileSync(pwConfigPath, customized, 'utf8');
+    }
+    console.log(`${dryRun ? '🔍 [DRY-RUN] Would create' : '🌱 Created'}: playwright.config.ts (baseURL -> ${resolvedUrl})`);
   } else if (appUrl || resetDemo) {
     const existing = fs.readFileSync(pwConfigPath, 'utf8');
     const updated = existing.replace(
@@ -555,8 +623,10 @@ function configurePlaywrightConfig() {
       `baseURL: process.env.BASE_URL || ${serializedUrl}`
     );
     if (updated !== existing) {
-      fs.writeFileSync(pwConfigPath, updated, 'utf8');
-      console.log(`🔧 Updated baseURL in playwright.config.ts -> ${resolvedUrl}`);
+      if (!dryRun) {
+        fs.writeFileSync(pwConfigPath, updated, 'utf8');
+      }
+      console.log(`${dryRun ? '🔍 [DRY-RUN] Would update' : '🔧 Updated'} baseURL in playwright.config.ts -> ${resolvedUrl}`);
     }
   }
 }
@@ -585,8 +655,12 @@ function mergeConsumerGitignore() {
   if (missing.length === 0) return;
   const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
   const header = existing ? '\n# Added by agentic-solid-qe (secrets, session tokens, artifacts)\n' : '';
-  fs.writeFileSync(ignorePath, `${existing}${prefix}${header}${missing.join('\n')}\n`, 'utf8');
-  console.log(`${existing ? '🔧 Updated' : '🌱 Created'}: .gitignore (+${missing.length} entries: ${missing.join(', ')})`);
+  if (!dryRun) {
+    fs.writeFileSync(ignorePath, `${existing}${prefix}${header}${missing.join('\n')}\n`, 'utf8');
+  }
+  console.log(
+    `${dryRun ? '🔍 [DRY-RUN] Would update' : existing ? '🔧 Updated' : '🌱 Created'}: .gitignore (+${missing.length} entries: ${missing.join(', ')})`
+  );
 }
 
 function backupPreExistingInstructionFiles() {
@@ -602,10 +676,12 @@ function backupPreExistingInstructionFiles() {
     if (content.includes('agentic-solid-qe')) continue;
     const backupDest = path.join(TARGET_ROOT, '.agents/legacy-backups', item.backupName);
     if (!fs.existsSync(backupDest)) {
-      fs.mkdirSync(path.dirname(backupDest), { recursive: true });
-      fs.copyFileSync(existingPath, backupDest);
+      if (!dryRun) {
+        fs.mkdirSync(path.dirname(backupDest), { recursive: true });
+        fs.copyFileSync(existingPath, backupDest);
+      }
       console.log(
-        `📦 Backed up pre-existing instructions: ${item.relPath} -> ${rel(backupDest)} (discoverable via 'npm run migrate:skill -- --discover')`
+        `${dryRun ? '🔍 [DRY-RUN] Would back up' : '📦 Backed up'} pre-existing instructions: ${item.relPath} -> ${rel(backupDest)} (discoverable via 'npm run migrate:skill -- --discover')`
       );
     }
   }
@@ -625,9 +701,12 @@ const coreEnginePaths = [
   'scripts/audit-solid.mjs',
   'scripts/validate-tapes.mjs',
   'scripts/sync-skills.mjs',
+  'scripts/self-test.mjs',
 ];
 
-console.log(`\n🚀 Running agentic-solid-qe (${command}${resetDemo ? ' --reset' : ''}${includeDemo ? ' --demo' : ''}) -> ${TARGET_ROOT}\n`);
+console.log(
+  `\n🚀 Running agentic-solid-qe (${command}${resetDemo ? ' --reset' : ''}${includeDemo ? ' --demo' : ''}${dryRun ? ' --dry-run' : ''}) -> ${TARGET_ROOT}\n`
+);
 
 backupPreExistingInstructionFiles();
 
@@ -688,8 +767,10 @@ if (command === 'init') {
           `- **Base URL:** \`${resolvedUrl}\``
         );
       }
-      fs.writeFileSync(targetDomainMemory, existingMem, 'utf8');
-      console.log(`🔧 Updated Application Name / Base URL in .agents/domain/domain-memory.md`);
+      if (!dryRun) {
+        fs.writeFileSync(targetDomainMemory, existingMem, 'utf8');
+      }
+      console.log(`${dryRun ? '🔍 [DRY-RUN] Would update' : '🔧 Updated'} Application Name / Base URL in .agents/domain/domain-memory.md`);
     } else {
       console.log(`🛡️  Preserved existing: .agents/domain/domain-memory.md`);
     }
@@ -713,14 +794,18 @@ if (command === 'init') {
     });
   } else {
     console.log(`🛡️  Preserved existing: .agents/domain/domain-memory.md`);
-    fs.mkdirSync(targetShardsDir, { recursive: true });
+    if (!dryRun) {
+      fs.mkdirSync(targetShardsDir, { recursive: true });
+    }
 
     const existingMemory = fs.readFileSync(targetDomainMemory, 'utf8');
     if (!existingMemory.includes('Feature Shard Index')) {
       const shardMigrationBlock = `\n---\n\n## Feature Shard Index (Progressive Disclosure)\n\n| Feature / Domain Area | Routes | Shard Path | Summary |\n| :--- | :--- | :--- | :--- |\n`;
-      fs.appendFileSync(targetDomainMemory, shardMigrationBlock, 'utf8');
+      if (!dryRun) {
+        fs.appendFileSync(targetDomainMemory, shardMigrationBlock, 'utf8');
+      }
       console.log(
-        `✨ Upgraded .agents/domain/domain-memory.md with a 'Feature Shard Index' table (existing content preserved).`
+        `${dryRun ? '🔍 [DRY-RUN] Would upgrade' : '✨ Upgraded'} .agents/domain/domain-memory.md with a 'Feature Shard Index' table (existing content preserved).`
       );
     }
   }
@@ -768,9 +853,11 @@ if (orgBrainSource) {
 if (squadName) {
   const cleanSquad = squadName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const squadHubDir = path.join(TARGET_ROOT, '.agents/domain/domains', cleanSquad);
-  fs.mkdirSync(path.join(squadHubDir, 'shards'), { recursive: true });
-  for (const sub of ['api', 'components', 'pages', 'data', 'fixtures']) {
-    fs.mkdirSync(path.join(TARGET_ROOT, 'src/domains', cleanSquad, sub), { recursive: true });
+  if (!dryRun) {
+    fs.mkdirSync(path.join(squadHubDir, 'shards'), { recursive: true });
+    for (const sub of ['api', 'components', 'pages', 'data', 'fixtures']) {
+      fs.mkdirSync(path.join(TARGET_ROOT, 'src/domains', cleanSquad, sub), { recursive: true });
+    }
   }
   const today = new Date().toISOString().slice(0, 10);
   const hubFile = path.join(squadHubDir, 'index.md');
@@ -804,10 +891,16 @@ if (squadName) {
     const relHub = `.agents/domain/domains/${cleanSquad}/index.md`;
     if (!mem.includes(relHub)) {
       const row = `| **${cleanSquad} Domain** | \`@org/${cleanSquad}-squad\` | \`/${cleanSquad}\` | \`${relHub}\` | Tier 1 Squad Sub-Hub |\n`;
-      fs.appendFileSync(targetDomainMemory, row, 'utf8');
-      console.log(`🧭 Registered Tier 1 Squad Sub-Hub in .agents/domain/domain-memory.md: ${relHub}`);
+      if (!dryRun) {
+        fs.appendFileSync(targetDomainMemory, row, 'utf8');
+      }
+      console.log(
+        `${dryRun ? '🔍 [DRY-RUN] Would register' : '🧭 Registered'} Tier 1 Squad Sub-Hub in .agents/domain/domain-memory.md: ${relHub}`
+      );
     }
   }
 }
 
-console.log(`\n✅ Agentic-SOLID-QE (${command}) complete! Next steps: run 'npm install && npx playwright install chromium', then 'npm run coverage:gaps' or invoke '/01-cli-explorer'.\n`);
+console.log(
+  `\n✅ Agentic-SOLID-QE (${command}${dryRun ? ' --dry-run' : ''}) complete! Next steps: run 'npm install && npx playwright install chromium', then 'npm run coverage:gaps' or invoke '/01-cli-explorer'.\n`
+);

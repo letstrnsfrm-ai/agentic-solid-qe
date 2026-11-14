@@ -26,6 +26,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run audit:solid
       - run: npm run validate:tapes
+      - run: npm run test:engine
 
   playwright-smoke:
     name: Playwright PR Smoke Gate (@smoke | @p0)

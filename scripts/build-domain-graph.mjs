@@ -184,8 +184,7 @@ export function seedShardsFromTapes() {
 
   const existingGraph = buildDomainGraph({ writeToDisk: false });
   const indexedRoutes = new Set(Object.keys(existingGraph.routeIndex));
-  const shardsDir = path.join(DOMAIN_DIR, 'shards');
-  fs.mkdirSync(shardsDir, { recursive: true });
+  const domainMemoryPath = path.join(DOMAIN_DIR, 'domain-memory.md');
 
   const today = new Date().toISOString().slice(0, 10);
   const createdShards = [];
@@ -199,14 +198,33 @@ export function seedShardsFromTapes() {
       continue;
     }
     const scenarioId = tape.scenarioId || path.basename(entry.name, '.json');
-    const shardPath = path.join(shardsDir, `${scenarioId}.md`);
+
+    // Match a Tier 1 Squad Hub if scenarioId or routes start with a known squad prefix
+    const matchedHub = existingGraph.domainHubs.find(
+      (h) =>
+        scenarioId.startsWith(`${h.squad}-`) ||
+        (tape.semanticSteps ?? []).some(
+          (s) => typeof s.pageRoute === 'string' && s.pageRoute.startsWith(`/${h.squad}`)
+        )
+    );
+
+    const targetShardsDir = matchedHub
+      ? path.join(DOMAIN_DIR, 'domains', matchedHub.squad, 'shards')
+      : path.join(DOMAIN_DIR, 'shards');
+    fs.mkdirSync(targetShardsDir, { recursive: true });
+
+    const shardPath = path.join(targetShardsDir, `${scenarioId}.md`);
     if (fs.existsSync(shardPath)) continue;
 
     const routes = new Set();
     const components = new Set();
     for (const step of tape.semanticSteps ?? []) {
       if (step.componentCandidate) components.add(step.componentCandidate);
-      for (const candidate of [step.pageRoute, step.waitForUrl, step.action === 'goto' ? step.locatorContract?.value : null]) {
+      for (const candidate of [
+        step.pageRoute,
+        step.waitForUrl,
+        step.action === 'goto' ? step.locatorContract?.value : null,
+      ]) {
         if (typeof candidate === 'string' && candidate.startsWith('/') && !candidate.startsWith('//')) {
           routes.add(candidate.split('?')[0]);
         }
@@ -215,25 +233,79 @@ export function seedShardsFromTapes() {
     const unindexed = [...routes].filter((r) => !indexedRoutes.has(r));
     if (unindexed.length === 0 && existingGraph.summary.totalShards > 0) continue;
 
-    const routeLines = (unindexed.length > 0 ? unindexed : ['/']).map((r) => `- \`${r}\``).join('\n');
+    const routeList = unindexed.length > 0 ? unindexed : [...routes].length > 0 ? [...routes] : ['/'];
+    const routeLines = routeList.map((r) => `- \`${r}\``).join('\n');
     const compLines = [...components].map((c) => `- \`${c}\``).join('\n') || '- _TBD_';
     const apiLine = tape.apiBaseUrl ? `\n- **API Base URL:** \`${tape.apiBaseUrl}\`` : '';
+    const ownerSquad = matchedHub ? matchedHub.ownerSquad : '@org/unassigned';
+
+    const actorLines =
+      Array.isArray(tape.actors) && tape.actors.length > 0
+        ? `\n## Multi-Portal Actors\n` +
+          tape.actors
+            .map(
+              (a) =>
+                `- **${a.actorId}** (\`${a.role}\`): \`${a.portalBaseUrl}\`${a.storageStatePath ? ` (\`${a.storageStatePath}\`)` : ''}`
+            )
+            .join('\n') +
+          '\n'
+        : '';
+
+    const networkLines =
+      Array.isArray(tape.networkContracts) && tape.networkContracts.length > 0
+        ? `\n## Observed Backend API Contracts\n` +
+          tape.networkContracts
+            .map(
+              (nc) =>
+                `- \`${nc.method} ${nc.urlPattern}\` (Expected: \`${nc.expectedStatus}\`)${nc.clientCandidate ? ` -> \`${nc.clientCandidate}\`` : ''}${nc.responseSchemaSummary ? ` — \`${nc.responseSchemaSummary}\`` : ''}`
+            )
+            .join('\n') +
+          '\n'
+        : '';
 
     const content = `# Feature Shard: ${tape.title || scenarioId}
 
-- **Owner Squad:** \`@org/unassigned\`
+- **Owner Squad:** \`${ownerSquad}\`
 - **Last Verified:** \`${today}\`
 - **Source Tape:** \`.exploratory/tapes/${entry.name}\`${apiLine}
 
 ## Routes
 ${routeLines}
 
-## Component Candidates
+## Component & API Client Candidates
 ${compLines}
-`;
+${actorLines}${networkLines}`;
+
     fs.writeFileSync(shardPath, content, 'utf8');
-    createdShards.push(rel(shardPath));
-    for (const r of unindexed) indexedRoutes.add(r);
+    const shardRel = rel(shardPath);
+    createdShards.push(shardRel);
+    for (const r of routeList) indexedRoutes.add(r);
+
+    // Auto-index the newly seeded shard in Tier 1 Squad Hub or Tier 0 domain-memory.md
+    const routeSummary = routeList.map((r) => `\`${r}\``).join(', ');
+    const summaryText = (tape.title || scenarioId).replace(/\|/g, '-');
+    if (matchedHub) {
+      const hubIndexFile = path.join(ROOT, matchedHub.hubPath);
+      if (fs.existsSync(hubIndexFile)) {
+        const hubContent = fs.readFileSync(hubIndexFile, 'utf8');
+        if (!hubContent.includes(path.basename(shardPath))) {
+          const row = `| **${summaryText}** | ${routeSummary} | \`${shardRel}\` | Auto-seeded from Session Tape |\n`;
+          fs.appendFileSync(hubIndexFile, (hubContent.endsWith('\n') ? '' : '\n') + row, 'utf8');
+        }
+      }
+    } else if (fs.existsSync(domainMemoryPath)) {
+      const memContent = fs.readFileSync(domainMemoryPath, 'utf8');
+      if (!memContent.includes(path.basename(shardPath))) {
+        const row = `| **${summaryText}** | \`${ownerSquad}\` | ${routeSummary} | \`${shardRel}\` | Auto-seeded from \`${entry.name}\` |\n`;
+        const tableMarker = '| :--- | :--- | :--- | :--- | :--- |';
+        if (memContent.includes(tableMarker)) {
+          const updatedMem = memContent.replace(tableMarker, `${tableMarker}\n${row.trimEnd()}`);
+          fs.writeFileSync(domainMemoryPath, updatedMem, 'utf8');
+        } else {
+          fs.appendFileSync(domainMemoryPath, (memContent.endsWith('\n') ? '' : '\n') + row, 'utf8');
+        }
+      }
+    }
   }
 
   return createdShards;
@@ -244,7 +316,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (seedFromTapes) {
     const seeded = seedShardsFromTapes();
     if (seeded.length > 0) {
-      console.log(`🌱 Seeded ${seeded.length} shard(s) from Session Tapes: ${seeded.join(', ')}`);
+      console.log(`🌱 Seeded & indexed ${seeded.length} shard(s) from Session Tapes: ${seeded.join(', ')}`);
     } else {
       console.log('ℹ️  No new shards needed from Session Tapes.');
     }

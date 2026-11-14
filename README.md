@@ -312,6 +312,10 @@ For enterprise applications with 5–12 step conditional wizards (e.g., Motor/Ho
 If your team already uses `agentic-solid-qe` in an existing repository, upgrade in one command without touching your existing domain shards, pages, components, builders, or `.spec.ts` files:
 
 ```bash
+# Preview changes first without modifying any files:
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync --dry-run
+
+# Apply the non-destructive upgrade:
 npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync
 # Or via your package.json script:
 npm run upgrade:skills
@@ -319,7 +323,7 @@ npm run upgrade:skills
 
 - **Automatically Updated (`overwrite: true`):** `.agents/skills/*` (including [`complex-orchestration-guide.md`](./.agents/skills/02-solid-architect/references/complex-orchestration-guide.md)), `.agents/domain/session-tape.schema.json`, `scripts/*.mjs`, `AGENTS.md` (with automatic backup of any custom file to `.agents/legacy-backups/`), `.github/copilot-instructions.md`, `.github/prompts/*`, and `.claude/commands/*`.
 - **Seeded Only If Missing (`overwrite: false`):** [`src/contracts/api-client.contract.ts`](./src/contracts/api-client.contract.ts), [`src/contracts/wizard-step.contract.ts`](./src/contracts/wizard-step.contract.ts), [`src/shared/api/auth-token.bridge.ts`](./src/shared/api/auth-token.bridge.ts), and [`src/shared/data/relative-date.helper.ts`](./src/shared/data/relative-date.helper.ts).
-- **Non-Destructively Merged:** `@domains/*` and `@shared/*` path aliases in `tsconfig.json` and verification scripts in `package.json`.
+- **Non-Destructively Merged (JSONC-Safe):** `@domains/*` and `@shared/*` path aliases in `tsconfig.json` (even if your `tsconfig.json` uses `//` comments or trailing commas) and verification scripts in `package.json`.
 - **100% Preserved:** `.agents/domain/domain-memory.md`, `.agents/domain/shards/*.md`, `.agents/domain/domains/**`, `.exploratory/tapes/*.json`, `defects/*.md`, `src/{components,pages,data,fixtures,domains}/**`, and `tests/**/*.spec.ts`.
 
 ---
@@ -328,16 +332,17 @@ npm run upgrade:skills
 
 | Command (`npm run` or `npx cortex` / `npx asqe`) | Description |
 | :--- | :--- |
-| `npm run verify` | **Full Gate:** Runs `typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `playwright test`. |
-| `npx cortex init --url <url> --name "<App>"` | Initializes or resets a repository with a clean SOLID skeleton (`npm run init:app`). |
-| `npx cortex sync --squad <squad> [--org-brain <path>]` | Scaffolds a Tier 1 Squad Sub-Hub & `src/domains/<squad>/` module or syncs an Org Brain. |
+| `npm run verify` | **Full Gate:** Runs `typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `test:engine` + `playwright test`. |
+| `npm run test:engine` | Runs zero-browser `node --test` self-tests verifying `--dry-run`, legacy consumer `sync` upgrades, JSONC `tsconfig.json` merging, and `--seed-from-tapes` auto-indexing. |
+| `npx cortex init --url <url> --name "<App>" [--dry-run]` | Initializes or resets a repository with a clean SOLID skeleton (`npm run init:app`). |
+| `npx cortex sync [--squad <squad>] [--org-brain <path>] [--dry-run]` | Upgrades skills/schema/contracts non-destructively, scaffolds a Tier 1 Squad Sub-Hub & `src/domains/<squad>/` module, or syncs an Org Brain. |
 | `npx cortex migrate --discover` | Inventories legacy AI rules (`.cursorrules`, `CLAUDE.md`, backups), skills, helper scripts, and non-SOLID `.spec.ts` files. |
 | `npx cortex migrate <path> [--name <id>] [--apply]` | Analyzes and scaffolds legacy team skills, prompts, and helper scripts (`npm run migrate:skill`). |
 | `npx cortex graph` / `npm run domain:graph` | Compiles `.agents/domain/domain-graph.json` (routes, squad owners, published capabilities, stale shards). |
 | `npx cortex gaps` / `npm run coverage:gaps` | Outputs JSON snapshot of uncovered shards, stale shards, uncompiled Session Tapes, and recommended next skill. |
 | `npx cortex audit` / `npm run audit:solid` | Enforces `< 500`-token skills, `≤ 150`-line hubs/shards/components, zero `expect()` in `src/`, LSP contracts, and scoped DIP builders. |
 | `npm run validate:tapes` | Validates all `.exploratory/tapes/*.json` files against `.agents/domain/session-tape.schema.json`. |
-| `npm run upgrade:skills` | Upgrades core skills and scripts from `github:letstrnsfrm-ai/agentic-solid-qe` while preserving your domain brain. |
+| `npm run upgrade:skills` | Upgrades core skills, scripts, and missing contracts from `github:letstrnsfrm-ai/agentic-solid-qe` while preserving your domain brain. |
 
 ---
 
