@@ -3,8 +3,8 @@
  * CLI Installer, Onboarding Initializer & Upgrader for Agentic-SOLID-QE.
  *
  * Usage:
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync [target-dir]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync [target-dir]
  *   npm run init:app -- --url https://your-app.com --name "Your App"
  */
 import fs from 'node:fs';
@@ -241,10 +241,24 @@ function rel(dest) {
   return path.relative(TARGET_ROOT, dest) || '.';
 }
 
+function isUnsafeDest(dest) {
+  // Refuse to write through a symlinked destination or symlinked parent inside the target repo
+  let cur = dest;
+  while (cur.startsWith(TARGET_ROOT) && cur !== TARGET_ROOT) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      console.warn(`⚠️  Skipped symlinked path (refusing to write through symlink): ${rel(cur)}`);
+      return true;
+    }
+    cur = path.dirname(cur);
+  }
+  return false;
+}
+
 function copyRecursive(src, dest, { overwrite = true } = {}) {
   if (!fs.existsSync(src)) return;
   const stat = fs.lstatSync(src);
   if (stat.isSymbolicLink()) return;
+  if (isUnsafeDest(dest)) return;
   if (stat.isDirectory()) {
     if (!dryRun) {
       fs.mkdirSync(dest, { recursive: true });
@@ -268,6 +282,7 @@ function copyRecursive(src, dest, { overwrite = true } = {}) {
 }
 
 function writeFileSafe(dest, content, { overwrite = false } = {}) {
+  if (isUnsafeDest(dest)) return;
   if (!overwrite && fs.existsSync(dest)) {
     console.log(`⏭️  Skipped existing: ${rel(dest)}`);
     return;
@@ -539,7 +554,7 @@ function mergeConsumerPackageJson() {
     verify: 'npm run typecheck && npm run domain:graph && npm run audit:solid && npm run validate:tapes && npm test',
     'init:app': 'node scripts/sync-skills.mjs init --reset',
     'sync:skills': 'node scripts/sync-skills.mjs',
-    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.2.0 sync',
+    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync',
   };
   const requiredDevDeps = {
     '@playwright/cli': '0.1.22',
@@ -587,7 +602,8 @@ function mergeConsumerPackageJson() {
         (k === 'test' && pkg.scripts[k] === 'playwright test --project=chromium') ||
         (k === 'upgrade:skills' &&
           (pkg.scripts[k] === 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync' ||
-            pkg.scripts[k].includes('#v0.1.')))
+            pkg.scripts[k].includes('#v0.1.') ||
+            pkg.scripts[k].includes('#v0.2.')))
       ) {
         pkg.scripts[k] = v;
         modified = true;

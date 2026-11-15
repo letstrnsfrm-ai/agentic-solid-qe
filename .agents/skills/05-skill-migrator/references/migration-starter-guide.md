@@ -47,7 +47,7 @@ AGENTS.md                                        # Registered in Universal Skill
 ### Phase A — Safe Installation in an Existing Project
 Run in the root of the existing repository:
 ```bash
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --url https://your-app-url.com --name "Your App"
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 init . --url https://your-app-url.com --name "Your App"
 ```
 - **Non-Destructive Merge:** Merges `package.json` scripts and `tsconfig.json` `@*` path aliases without deleting existing `src/` or `tests/`.
 - **Automatic Instruction Backup:** If your repo already had a custom `AGENTS.md` or `.github/copilot-instructions.md`, `init` backs them up to `.agents/legacy-backups/` so `/05-skill-migrator` can migrate them cleanly.

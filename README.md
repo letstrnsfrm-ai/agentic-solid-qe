@@ -138,11 +138,11 @@ Any IDE AI agent (**Google Antigravity, Claude Code, GitHub Copilot, Cursor, or 
 - **Prompt 0 — Start Here: Ask the Master Orchestrator to Diagnose & Guide Your Next Step (`/00-master-orchestrator`):**
   > *"Invoke `/00-master-orchestrator` (read `.agents/skills/00-master-orchestrator/SKILL.md` and `references/master-orchestration-playbook.md`). Run `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`, explain how all the skills and features in `agentic-solid-qe` apply to our project, show our current Coverage Maturity Stage (Stage 0–4), and recommend the single next step to incrementally increase our automation coverage."*
 - **Prompt 1 — Install into an Existing Project & Discover Legacy Skills:**
-  > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md` and `AGENTS.md`). Inspect my current repository, explain how `agentic-solid-qe` fits my setup, run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe init .` non-destructively, and run `npm run migrate:skill -- --discover` to inventory my existing skills, prompts, scripts, and Playwright tests."*
+  > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md` and `AGENTS.md`). Inspect my current repository, explain how `agentic-solid-qe` fits my setup, run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 init .` non-destructively, and run `npm run migrate:skill -- --discover` to inventory my existing skills, prompts, scripts, and Playwright tests."*
 - **Prompt 2 — Migrate Existing Skills & Scripts with Full Guardrails (`/05-skill-migrator`):**
   > *"Run `/05-skill-migrator` (`npm run migrate:skill -- --discover`), walk me through the 4-Part Migration Triage Matrix for each of my existing skills/rules/scripts, migrate them with `--apply`, and verify all guardrails pass with `npm run verify`."*
 - **Prompt 3 — Upgrade an Existing `agentic-solid-qe` Consumer Repository Non-Destructively (`sync`):**
-  > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md`, `AGENTS.md`, and `.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`). Run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync` (`npm run upgrade:skills`) to non-destructively update our skills, `session-tape.schema.json`, scripts, and foundational contracts/shared helpers (`WizardStepContract`, `ApiClientContract`, `AuthTokenBridge`, `RelativeDateHelper`) without modifying our existing domain shards or tests, then run `npm run verify`."*
+  > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md`, `AGENTS.md`, and `.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`). Run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync` (`npm run upgrade:skills`) to non-destructively update our skills, `session-tape.schema.json`, scripts, and foundational contracts/shared helpers (`WizardStepContract`, `ApiClientContract`, `AuthTokenBridge`, `RelativeDateHelper`) without modifying our existing domain shards or tests, then run `npm run verify`."*
 - **Prompt 4 — Orchestrate Complex Multi-Step Wizards, Cross-Portal Handoffs & Backend APIs (1 Test at a Time):**
   > *"Read `.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`. Scaffold our application domains (`npx cortex sync --squad <domain>`), explore 1 critical business flow and its backend API contracts via `/01-cli-explorer`, and compile/verify 1 test at a time via `/02-solid-architect <scenario-id>`."*
 
@@ -154,8 +154,8 @@ When a user asks you (the AI Agent) to help them understand, install, upgrade, o
    - Inspect `package.json`, `playwright.config.ts`, `tsconfig.json`, and existing test folders (`tests/`, `e2e/`).
    - Recommend **Track 1** (single-app setup), **Track 2** (if `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.claude/commands/`, `.github/prompts/`, or custom helper scripts exist), **Track 3** (if multiple engineering squads share the repo), or **Track 4** (for multi-step wizards, multi-portal handoffs, backend API seeding, or upgrading an existing `agentic-solid-qe` installation).
 2. **Step 2 — Run Non-Destructive Initialization (`init`) or Consumer Upgrade (`sync`):**
-   - For first-time setup: execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --url <app-url> --name "<App Name>"`.
-   - For existing consumers upgrading: execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync` (`npm run upgrade:skills`).
+   - For first-time setup: execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 init . --url <app-url> --name "<App Name>"`.
+   - For existing consumers upgrading: execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync` (`npm run upgrade:skills`).
    - Both safely merge `package.json` scripts and `tsconfig.json` `@*` path aliases without deleting existing tests, seed missing foundational contracts/helpers (`src/contracts/*`, `src/shared/*`), and automatically back up any pre-existing custom `AGENTS.md` or `.github/copilot-instructions.md` into `.agents/legacy-backups/` so nothing is lost.
 3. **Step 3 — Auto-Discover Legacy Skills, Prompts, Scripts & Spec Gaps (`--discover`):**
    - Execute `npm run migrate:skill -- --discover` (`npx cortex migrate --discover`).
@@ -183,7 +183,7 @@ When a user asks you (the AI Agent) to help them understand, install, upgrade, o
 
 **Option A — Drop into any existing TypeScript/Playwright project (`npx`):**
 ```bash
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --url https://your-app-url.com --name "Your App"
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 init . --url https://your-app-url.com --name "Your App"
 npm install
 npx playwright install chromium
 ```
@@ -347,10 +347,10 @@ If your team already uses `agentic-solid-qe` in an existing repository, upgrade 
 
 ```bash
 # Preview changes first without modifying any files:
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync --dry-run
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync --dry-run
 
 # Apply the non-destructive upgrade:
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync
 # Or via your package.json script:
 npm run upgrade:skills
 ```

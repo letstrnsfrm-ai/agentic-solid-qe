@@ -200,11 +200,11 @@ export class CustomQuoteWidgetComponent implements IdentifiableComponent {
     assert.deepEqual(mergedTsConfig.compilerOptions.paths['@domains/*'], ['src/domains/*']);
     assert.deepEqual(mergedTsConfig.compilerOptions.paths['@shared/*'], ['src/shared/*']);
 
-    // Verify package.json preserved custom script and pinned upgrade:skills to #v0.2.0
+    // Verify package.json preserved custom script and pinned upgrade:skills to #v0.8.0
     const mergedPkg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'package.json'), 'utf8'));
     assert.equal(mergedPkg.scripts['custom:lint'], 'echo custom-lint');
     assert.equal(mergedPkg.scripts['orchestrate'], 'node scripts/analyze-coverage.mjs');
-    assert.equal(mergedPkg.scripts['upgrade:skills'], 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.2.0 sync');
+    assert.equal(mergedPkg.scripts['upgrade:skills'], 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync');
     assert.equal(mergedPkg.scripts['audit:security'], 'npm audit --audit-level=high');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1065,3 +1065,18 @@ test('8. Credential Leak Prevention: blocks hardcoded builder passwords & env fa
 
 
 
+
+test('sync refuses to write through a symlinked destination inside the consumer repo', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-symlink-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-outside-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true }), 'utf8');
+    fs.mkdirSync(path.join(tmp, '.agents'), { recursive: true });
+    fs.symlinkSync(outside, path.join(tmp, '.agents', 'skills'));
+    spawnSync(process.execPath, [path.join(__dirname, 'sync-skills.mjs'), 'sync', tmp], { encoding: 'utf8' });
+    assert.deepEqual(fs.readdirSync(outside), [], 'nothing may be written through the symlink');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
