@@ -833,7 +833,7 @@ function installGitPreCommitHook() {
   const hookPath = path.join(hooksDir, 'pre-commit');
   if (fs.existsSync(hookPath) && fs.lstatSync(hookPath).isSymbolicLink()) return;
 
-  const gateSnippet = `# agentic-solid-qe pre-commit secret & SOLID hygiene gate\nnode scripts/audit-solid.mjs && node scripts/validate-tapes.mjs\n`;
+  const gateSnippet = `# agentic-solid-qe pre-commit secret & SOLID hygiene gate\nif [ -f scripts/audit-solid.mjs ] && [ -f scripts/validate-tapes.mjs ]; then\n  node scripts/audit-solid.mjs && node scripts/validate-tapes.mjs || exit 1\nfi\n`;
   if (!fs.existsSync(hookPath)) {
     const hookContent = `#!/usr/bin/env sh\nset -e\n${gateSnippet}`;
     if (!dryRun) {
@@ -853,6 +853,15 @@ function installGitPreCommitHook() {
 
   const existingHook = fs.readFileSync(hookPath, 'utf8');
   if (existingHook.includes('scripts/audit-solid.mjs')) return;
+  const firstLine = existingHook.split('\n', 1)[0];
+  const isShell = /^#!.*\b(sh|bash|dash|zsh)\b/.test(firstLine);
+  const hasEarlyExit = /^\s*exec\s|^\s*exit\s+\d*\s*$/m.test(existingHook);
+  if (!isShell || hasEarlyExit) {
+    console.warn(
+      '⚠️  Existing .git/hooks/pre-commit is not a plain shell hook (or exits early); not modifying it. Add `node scripts/audit-solid.mjs && node scripts/validate-tapes.mjs` manually.'
+    );
+    return;
+  }
   const prefix = existingHook && !existingHook.endsWith('\n') ? '\n' : '';
   if (!dryRun) {
     fs.writeFileSync(hookPath, `${existingHook}${prefix}\n${gateSnippet}`, {

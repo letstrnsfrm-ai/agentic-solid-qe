@@ -1080,3 +1080,21 @@ test('sync refuses to write through a symlinked destination inside the consumer 
     fs.rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test('pre-commit hook: does not modify non-shell or early-exit hooks, and gate tolerates missing scripts', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-hook-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true }), 'utf8');
+    fs.mkdirSync(path.join(tmp, '.git', 'hooks'), { recursive: true });
+    const hook = path.join(tmp, '.git', 'hooks', 'pre-commit');
+    const original = '#!/usr/bin/env node\nconsole.log("custom");\n';
+    fs.writeFileSync(hook, original, { mode: 0o755 });
+    spawnSync(process.execPath, [path.join(__dirname, 'sync-skills.mjs'), 'sync', tmp], { encoding: 'utf8' });
+    assert.equal(fs.readFileSync(hook, 'utf8'), original, 'non-shell hook must be untouched');
+    fs.rmSync(hook);
+    spawnSync(process.execPath, [path.join(__dirname, 'sync-skills.mjs'), 'sync', tmp], { encoding: 'utf8' });
+    assert.match(fs.readFileSync(hook, 'utf8'), /\[ -f scripts\/audit-solid\.mjs \]/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
