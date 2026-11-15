@@ -1,6 +1,6 @@
 {
   "name": "agentic-solid-qe",
-  "version": "0.8.0",
+  "version": "0.9.1",
   "description": "Zero-API-key agent skill framework bridging Autonomous Exploratory Testing (@playwright/cli) and SOLID Playwright TypeScript Architecture.",
   "license": "MIT",
   "type": "module",
@@ -32,7 +32,7 @@
     "release:preview": "node scripts/generate-release-notes.mjs --dry-run",
     "init:app": "node scripts/sync-skills.mjs init --reset",
     "sync:skills": "node scripts/sync-skills.mjs",
-    "upgrade:skills": "npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync",
+    "upgrade:skills": "npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync",
     "audit:security": "npm audit --audit-level=high"
   },
   "engines": {

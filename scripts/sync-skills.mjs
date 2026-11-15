@@ -3,8 +3,8 @@
  * CLI Installer, Onboarding Initializer & Upgrader for Agentic-SOLID-QE.
  *
  * Usage:
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync [target-dir]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync [target-dir]
  *   npm run init:app -- --url https://your-app.com --name "Your App"
  */
 import fs from 'node:fs';
@@ -554,7 +554,7 @@ function mergeConsumerPackageJson() {
     verify: 'npm run typecheck && npm run domain:graph && npm run audit:solid && npm run validate:tapes && npm test',
     'init:app': 'node scripts/sync-skills.mjs init --reset',
     'sync:skills': 'node scripts/sync-skills.mjs',
-    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.8.0 sync',
+    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync',
   };
   const requiredDevDeps = {
     '@playwright/cli': '0.1.22',
@@ -603,7 +603,8 @@ function mergeConsumerPackageJson() {
         (k === 'upgrade:skills' &&
           (pkg.scripts[k] === 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync' ||
             pkg.scripts[k].includes('#v0.1.') ||
-            pkg.scripts[k].includes('#v0.2.')))
+            pkg.scripts[k].includes('#v0.2.') ||
+            pkg.scripts[k].includes('#v0.8.')))
       ) {
         pkg.scripts[k] = v;
         modified = true;
