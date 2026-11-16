@@ -215,27 +215,32 @@ function parseBuilderRef(refStr) {
  */
 function buildLocatorExpression(locatorContract, rootExpr = 'this.root') {
   if (!locatorContract) return `${rootExpr}`;
+  const effectiveRoot = locatorContract.iframeSelector
+    ? `page.frameLocator(${JSON.stringify(String(locatorContract.iframeSelector))})`
+    : locatorContract.portalScope
+      ? 'page'
+      : rootExpr;
   const strat = locatorContract.strategy;
   const val = JSON.stringify(String(locatorContract.value ?? ''));
   const exact = locatorContract.nameExact !== false;
 
   if (strat === 'getByRole') {
     const role = JSON.stringify(String(locatorContract.role || 'button'));
-    return `${rootExpr}.getByRole(${role}, { name: ${val}, exact: ${exact} })`;
+    return `${effectiveRoot}.getByRole(${role}, { name: ${val}, exact: ${exact} })`;
   }
   if (strat === 'getByLabel') {
-    return `${rootExpr}.getByLabel(${val}, { exact: ${exact} })`;
+    return `${effectiveRoot}.getByLabel(${val}, { exact: ${exact} })`;
   }
   if (strat === 'getByPlaceholder') {
-    return `${rootExpr}.getByPlaceholder(${val}, { exact: ${exact} })`;
+    return `${effectiveRoot}.getByPlaceholder(${val}, { exact: ${exact} })`;
   }
   if (strat === 'getByText') {
-    return `${rootExpr}.getByText(${val}, { exact: ${exact} })`;
+    return `${effectiveRoot}.getByText(${val}, { exact: ${exact} })`;
   }
   if (strat === 'getByTestId') {
-    return `${rootExpr}.getByTestId(${val})`;
+    return `${effectiveRoot}.getByTestId(${val})`;
   }
-  return `${rootExpr}.locator(${val})`;
+  return `${effectiveRoot}.locator(${val})`;
 }
 
 function buildRootLocatorExpression(parentScope) {
@@ -1256,6 +1261,7 @@ export { expect };
         groupMatchKeys.add(primaryPageFixture);
         groupMatchKeys.add(`${primaryPageFixture}.${step.__compiledComponentProp}`);
         const locRef = `${primaryPageFixture}.${step.__compiledComponentProp}.${step.__compiledLocatorProp}`;
+        const forceArg = step.locatorContract?.force ? '{ force: true }' : '';
         if (step.action === 'fill') {
           stmt = `await ${locRef}.fill(String(${inputExpr}));`;
         } else if (step.action === 'selectOption') {
@@ -1263,13 +1269,22 @@ export { expect };
         } else if (step.action === 'press') {
           stmt = `await ${locRef}.press(${JSON.stringify(step.key || 'Enter')});`;
         } else if (step.action === 'check') {
-          stmt = `await ${locRef}.check();`;
+          stmt = `await ${locRef}.check(${forceArg});`;
         } else if (step.action === 'uncheck') {
-          stmt = `await ${locRef}.uncheck();`;
+          stmt = `await ${locRef}.uncheck(${forceArg});`;
         } else if (step.action === 'hover') {
           stmt = `await ${locRef}.hover();`;
         } else {
-          stmt = `await ${locRef}.click();`;
+          stmt = `await ${locRef}.click(${forceArg});`;
+        }
+        if (step.opensPopup) {
+          if (!injectedFixtures.includes('page')) injectedFixtures.push('page');
+          const rawCall = stmt.replace(/^await\s+/, '').replace(/;$/, '');
+          stmt = `const [popupPage] = await Promise.all([\n  page.waitForEvent('popup'),\n  ${rawCall},\n]);\nawait popupPage.waitForLoadState();\nvoid popupPage;`;
+        }
+        if (step.dialogAction === 'accept' || step.dialogAction === 'dismiss') {
+          if (!injectedFixtures.includes('page')) injectedFixtures.push('page');
+          stmt = `page.once('dialog', (d) => d.${step.dialogAction}());\n${stmt}`;
         }
         if (step.capturesVariable) {
           const safeCapVar = assertSafeJsIdentifier(step.capturesVariable, 'capturesVariable');

@@ -1205,3 +1205,107 @@ test('11. compile-tape emits business-domain test.step() blocks and audit-solid 
   }
 });
 
+test('12. compile-tape compiles iframeSelector, portalScope, force, dialogAction, and opensPopup deterministically', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-complex-ui-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://quote.example.com', '--name', 'QuoteApp']);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    const tape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'complex-ui-widgets',
+      title: 'Customer completes complex widgets',
+      charter: 'happy-path-baseline',
+      tags: ['@p1', '@regression'],
+      recordedAt: '2026-10-25T12:00:00Z',
+      baseUrl: 'https://quote.example.com',
+      persona: { role: 'customer', dataBuilderRef: 'QuoteBuilder.defaultCustomer' },
+      preconditions: ['Customer is on quote form'],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Select comprehensive cover radio',
+          businessStep: 'Select coverage option',
+          action: 'check',
+          componentCandidate: 'CoverOptionsComponent',
+          locatorContract: { strategy: 'getByRole', role: 'radio', value: 'Comprehensive', force: true },
+        },
+        {
+          stepIndex: 2,
+          intent: 'Select insurer from portal listbox',
+          businessStep: 'Select coverage option',
+          action: 'click',
+          componentCandidate: 'CoverOptionsComponent',
+          locatorContract: { strategy: 'getByRole', role: 'option', value: 'Acme Insurer', portalScope: true },
+        },
+        {
+          stepIndex: 3,
+          intent: 'Enter card number in PCI iframe',
+          businessStep: 'Authorize payment',
+          action: 'fill',
+          inputDataRef: 'QuoteBuilder.defaultCustomer().cardNumber',
+          componentCandidate: 'PaymentFrameComponent',
+          locatorContract: {
+            iframeSelector: 'iframe[title="Secure Payment"]',
+            strategy: 'getByLabel',
+            value: 'Card Number',
+          },
+        },
+        {
+          stepIndex: 4,
+          intent: 'Open policy terms popup and accept confirm dialog',
+          businessStep: 'Confirm policy terms',
+          action: 'click',
+          dialogAction: 'accept',
+          opensPopup: true,
+          componentCandidate: 'PaymentFrameComponent',
+          locatorContract: { strategy: 'getByRole', role: 'button', value: 'View Terms' },
+        },
+      ],
+      networkContracts: [
+        { urlPattern: 'https://quote.example.com/api/bind', method: 'POST', expectedStatus: 200 },
+      ],
+      expectedStates: [
+        {
+          description: 'Confirmation is visible',
+          businessStep: 'Confirm policy terms',
+          assertionType: 'toBeVisible',
+          targetComponent: 'quotePage.paymentFrame',
+          targetProperty: 'viewTerms',
+          expectedValueRef: 'QuoteBuilder.defaultCustomer().cardNumber',
+        },
+      ],
+    };
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/complex-ui-widgets.json'),
+      JSON.stringify(tape, null, 2),
+      'utf8'
+    );
+
+    const compileRes = runNode(
+      path.join(tmpDir, 'scripts/compile-tape.mjs'),
+      ['complex-ui-widgets', '--apply'],
+      tmpDir
+    );
+    assert.equal(compileRes.status, 0, `compile failed: ${compileRes.stderr}\n${compileRes.stdout}`);
+
+    const coverComp = fs.readFileSync(path.join(tmpDir, 'src/components/cover-options.component.ts'), 'utf8');
+    assert.match(coverComp, /page\.getByRole\("option", \{ name: "Acme Insurer"/);
+
+    const payComp = fs.readFileSync(path.join(tmpDir, 'src/components/payment-frame.component.ts'), 'utf8');
+    assert.match(payComp, /page\.frameLocator\("iframe\[title=\\"Secure Payment\\"\]"\)\.getByLabel\("Card Number"/);
+
+    const specContent = fs.readFileSync(path.join(tmpDir, 'tests/complex-ui-widgets.spec.ts'), 'utf8');
+    assert.match(specContent, /\.check\(\{ force: true \}\)/);
+    assert.match(specContent, /page\.once\('dialog', \(d\) => d\.accept\(\)\)/);
+    assert.match(specContent, /page\.waitForEvent\('popup'\)/);
+
+    const passAudit = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(passAudit.status, 0, `Expected audit:solid to pass, got:\n${passAudit.stderr}`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+

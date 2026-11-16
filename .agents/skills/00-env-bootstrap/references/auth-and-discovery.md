@@ -15,8 +15,9 @@ Complex enterprise applications frequently use SSO (Okta/Azure AD/Auth0), MFA, o
    npx playwright-cli -s=auth open <baseUrl> --headed
    ```
 3. **Automated Login:** If standard credentials exist in `src/data/user.builder.ts` (via `process.env.TEST_USERNAME` / `process.env.TEST_PASSWORD`), fill and submit using `.playwright-cli/page-*.yml` refs.
-4. **Interactive SSO / MFA Assisted Login:** If the app requires human MFA/SSO approval, prompt the engineer:
+4. **Interactive SSO / MFA & Cookie Consent:** If the app requires human MFA/SSO approval, prompt the engineer:
    > *"Please complete the SSO/MFA challenge in the opened browser window and reply `ready` once you reach the authenticated landing page."*
+   Dismiss any cookie consent banner before running `state-save` so `.auth/<persona>.json` pre-seeds consent cookies for all downstream runs.
 5. Once authenticated, record the active cookie/`localStorage` **key names only (never raw cookie/token values)** in `.agents/domain/domain-memory.md` (Section 1: `Session Mechanism`) and reference `.auth/<persona>.json` in the Session Tape `persona.storageStatePath`.
 
 ---

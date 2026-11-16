@@ -249,3 +249,14 @@ export { expect };
 
 ## 10. Dynamic Risk-Persona Data Builders (`RelativeDateHelper`)
 Use `RelativeDateHelper` (`@shared/data/relative-date.helper`) inside `src/domains/<squad>/data/*.builder.ts` to compute dynamic policy effective dates, driver DOBs, and prior claim dates at runtime without hardcoded calendar strings.
+
+---
+
+## 11. Complex UI Resilience Patterns (Overlays, Iframes, Popups, Radios, Shadow DOM & Portals)
+- **Unpredictable Cookie/Promo Overlays:** Register `page.addLocatorHandler()` in `@shared/ui/overlay-handler` (wired via `app.fixture.ts`) and pre-seed consent in `.auth/<persona>.json` — never add `if (await banner.isVisible())` inside business steps.
+- **Iframes (`iframeSelector`):** Scope child locators with `page.frameLocator('iframe[title="..."]')` inside the Component constructor.
+- **Portal Dropdowns (`portalScope: true`):** When a combobox renders its `role="listbox"` at `document.body` outside `this.root`, root the option locator on `page` instead of `this.root`.
+- **Custom / `sr-only` Radio Buttons (`force: true`):** Target `getByRole('radio', { name })` or `getByLabel(...)`; use `.check({ force: true })` when a styled `<label>` intercepts pointer events.
+- **Shadow DOM:** Semantic locators (`getByRole`, `getByLabel`, `getByTestId`) pierce **open** Shadow DOM automatically; avoid XPath (`xpath=...`).
+- **Native Dialogs & New-Window Popups:** Register `page.once('dialog', (d) => d.accept())` before the trigger, and wrap popup triggers in `Promise.all([page.waitForEvent('popup'), trigger.click()])`.
+

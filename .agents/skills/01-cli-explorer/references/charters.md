@@ -73,6 +73,18 @@ While traversing any feature flow, automatically evaluate four quality dimension
    - Declare each participating portal and persona in root `actors` (`actorId`, `role`, `portalBaseUrl`, `dataBuilderRef`, `storageStatePath`).
    - Tag each step in `semanticSteps` and assertion in `expectedStates` with `actor` (e.g., `"customer"` vs. `"underwriter_agent"`) and pass runtime identifiers (`QuoteId`, `PolicyNumber`) across portals via `capturedVariables`.
 
+## 3b. Complex UI Challenges (Cookies, Popups, Dialogs, Radios, Shadow DOM, Iframes & Portals)
+
+| UI Challenge | During `@playwright/cli` Exploration | Encode in Session Tape / Deterministic Suite |
+| :--- | :--- | :--- |
+| **Cookie Banners & Promo Overlays** | Dismiss once and save `.auth/<persona>.json` (`state-save`) | Pre-seed consent in `.auth/<persona>.json` + rely on `registerOverlayHandlers(page)` (`page.addLocatorHandler`) in `src/shared/ui/overlay-handler.ts`. Do not pollute business steps with `if (visible)` checks. |
+| **Native JS Dialogs (`alert`/`confirm`/`prompt`)** | Run `npx playwright-cli -s=<session> dialog-accept` or `dialog-dismiss` | Set `dialogAction: "accept"` (or `"dismiss"`) on the triggering `semanticStep`. |
+| **New-Tab / OAuth / PDF Popups** | Run `tab-list` / `tab-select <idx>` to inspect the popup, then switch back | Set `opensPopup: true` on the triggering `semanticStep` (compiles to `Promise.all([page.waitForEvent('popup'), ...])`). |
+| **Custom / `sr-only` Radio Buttons & Checkboxes** | Target the accessible `getByRole('radio', { name })` or `getByLabel(...)` ref | If `<input>` is visually hidden behind a styled `<label>`, set `locatorContract.force: true` (compiles to `.check({ force: true })`). |
+| **Shadow DOM (Open vs. Closed)** | `getByRole`/`getByLabel`/`getByTestId` pierce **open** Shadow DOM automatically; never use XPath | Record semantic locators (`getByRole`/`getByLabel`/`getByTestId`). For **closed** Shadow DOM, target the host element + keyboard navigation (`press`). |
+| **Embedded `<iframe>` (e.g., Payment / 3DS)** | Inspect frame refs in `.playwright-cli/page-*.yml` | Set `locatorContract.iframeSelector` (compiles to `page.frameLocator(...)`). |
+| **Portal Dropdowns (`role="listbox"` at `body`)** | Snapshot after opening the combobox to see the portal listbox outside the form | Set `locatorContract.portalScope: true` on the option step so it roots on `page` instead of `this.root`. |
+
 ---
 
 ## 4. Checkpoint 2: Post-Exploration Session Debrief & 1-Test-at-a-Time Selection Matrix

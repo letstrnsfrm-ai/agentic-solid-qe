@@ -17,6 +17,7 @@ Never blindly overwrite a failing test selector or API payload without inspectin
 | **5** | External lookup timeout (`VRM`, `Postcode`, `Credit`, `Payment`) | Form hangs on 3rd-party lookup spinner in UAT/Staging | `502/503/504` from external 3rd-party sandbox domain | **3rd-Party Sandbox Outage** | Offer engineer opt-in `action: "route"` (`page.route()`) fallback stub for the flaky 3rd-party endpoint |
 | **6** | Locator missing or error banner shown on first-party app | Expected element absent; error alert or blank container rendered | `500` first-party API error or unhandled JS exception in `console error` | **Genuine App Regression** | Log `defects/DEFECT-<timestamp>.md`; preserve strict assertion in `.spec.ts` |
 | **7** | `expect(locator).toHaveText()` or API status/total mismatch | Dynamic premium/tax/underwriting referral decision differs from business rule | `200 OK` with unexpected business calculation | **Business Logic Defect** | Log `defects/DEFECT-<timestamp>.md`; escalate to engineering |
+| **8** | `intercepts pointer events`, hidden `<input>`, or missing portal/frame element | Cookie/promo overlay blocks click, `sr-only` radio fails `.check()`, or listbox/control lives in `document.body` portal, `<iframe>`, or Shadow DOM | `0` console errors; `2xx` API status | **Overlay / Portal / Frame / Shadow DOM Drift** | Add `registerOverlayHandlers` (`addLocatorHandler`), set `force: true` / `portalScope: true` / `iframeSelector`, or replace XPath with semantic locators |
 
 ---
 

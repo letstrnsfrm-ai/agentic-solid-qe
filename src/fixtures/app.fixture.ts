@@ -2,6 +2,7 @@ import { test as base, expect } from '@playwright/test';
 import { LoginPage } from '@pages/login.page';
 import { InventoryPage } from '@pages/inventory.page';
 import { CheckoutPage } from '@pages/checkout.page';
+import { registerOverlayHandlers } from '@shared/ui/overlay-handler';
 
 /**
  * Segregated Fixture Contract (OCP & ISP).
@@ -26,6 +27,7 @@ export const test = base.extend<AppFixtures>({
   },
   explorePause: [
     async ({ page }, use) => {
+      await registerOverlayHandlers(page);
       await use();
       if (!process.env.CI && process.env.PW_PAUSE_FOR_EXPLORE === '1') {
         await page.pause();

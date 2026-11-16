@@ -230,6 +230,15 @@
             "type": "string",
             "description": "Optional variable name (matching capturedVariables) extracted from this element or API response for cross-page/cross-portal verification."
           },
+          "dialogAction": {
+            "type": "string",
+            "enum": ["accept", "dismiss"],
+            "description": "Optional native browser dialog handler (alert/confirm/prompt) registered before this step executes."
+          },
+          "opensPopup": {
+            "type": "boolean",
+            "description": "Set true when this step opens a new tab/popup window (compiles with page.waitForEvent('popup'))."
+          },
           "componentCandidate": {
             "type": "string",
             "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
@@ -244,6 +253,14 @@
               "iframeSelector": {
                 "type": "string",
                 "description": "Optional iframe selector when the target control lives inside an embedded frame (e.g., PCI Payment iframe)."
+              },
+              "portalScope": {
+                "type": "boolean",
+                "description": "Set true when a dropdown listbox or popover renders in a document.body portal outside parentScope."
+              },
+              "force": {
+                "type": "boolean",
+                "description": "Optional force: true for custom/sr-only styled radio buttons or checkboxes intercepted by label overlays."
               },
               "parentScope": {
                 "type": "object",
