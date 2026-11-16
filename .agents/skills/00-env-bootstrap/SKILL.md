@@ -14,7 +14,7 @@ When invoked as `/00-env-bootstrap`, immediately execute:
    ```
 
 ## 2. Persona Auth & `storageState` Bootstrap (`references/auth-and-discovery.md`)
-For complex deployed apps behind SSO, MFA, or multi-step login:
+For SSO, MFA, or multi-step login (invoke `/playwright-cli` for full CLI command syntax):
 1. Launch a headed session via `npx playwright-cli -s=auth open <baseUrl> --headed` (add `--browser=chromium` if default `chrome` is unavailable).
 2. Execute credential fill from `src/data/user.builder.ts` (or pause for engineer interactive SSO/MFA completion).
 3. Persist reusable session state into `.auth/<persona>.json` (git-ignored) and record cookie/`localStorage` **key names only (never raw token/cookie values)** in `domain-memory.md`. Reopen idle sessions via `.playwright/cli.config.json` (`browser.contextOptions.storageState`).

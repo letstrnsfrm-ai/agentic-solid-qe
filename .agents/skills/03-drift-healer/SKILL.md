@@ -11,9 +11,9 @@ When invoked as `/03-drift-healer`:
 2. Extract failing `scenarioId`, actor/portal, step, locator/endpoint, and stack trace, then cross-reference `.exploratory/tapes/<scenarioId>.json` and Domain Shards.
 
 ## 2. Live `@playwright/cli` & API Differential Inspection (`references/healing-playbook.md`)
-1. Attach directly to the failing test by running `npx playwright test <spec> --debug=cli` (or `npm run test:explore -- <spec>`) and `npx playwright-cli -s=heal attach` (`--cdp=http://localhost:9222`), or open `<baseUrl> --headed`.
-2. Run `snapshot --filename=.playwright-cli/page-heal.yml`, check `eval "() => location.href"`, and run `console error`.
-3. Compare live UI, conditional wizard steps, `.auth/<persona>.json` validity, and backend API responses against the Session Tape.
+1. Invoke `/playwright-cli` for syntax, then attach to the failing test (`npx playwright test <spec> --debug=cli` or `npm run test:explore -- <spec>`) via `npx playwright-cli -s=heal attach` (`--cdp=http://localhost:9222`), or `open <baseUrl> --headed`.
+2. Run `snapshot --filename=.playwright-cli/page-heal.yml`, `eval "() => location.href"`, and `console error`.
+3. Compare live UI, wizard steps, `.auth/<persona>.json` validity, and API responses against the Session Tape.
 
 ## 3. 7-Way Root-Cause Classification & Action (`references/healing-playbook.md`)
 Present the diagnosis to the engineer:

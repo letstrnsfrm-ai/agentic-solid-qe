@@ -13,6 +13,7 @@ This repository uses a seven-skill, token-efficient Quality Engineering workflow
 | Diagnose failing `.spec.ts` tests against live deployed environments to separate real regressions from UI/locator drift | `03-drift-healer` | `.agents/skills/03-drift-healer/SKILL.md` |
 | Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and configure sharded CI/CD pipelines | `04-ci-pipeline` | `.agents/skills/04-ci-pipeline/SKILL.md` |
 | Onboard legacy/unorganized team skills, prompts, and helper scripts into `<500`-token `SKILL.md` bundles and 3-Tier Domain Shards | `05-skill-migrator` | `.agents/skills/05-skill-migrator/SKILL.md` |
+| Live browser CLI syntax (`open`, `attach`, `snapshot`, `click`, `fill`, `route`, `state-save`) without `--help` round trips | `playwright-cli` | `.agents/skills/playwright-cli/SKILL.md` |
 
 ## AI-Guided Project Installation, Consumer Upgrade & Legacy Skill Migration Protocol
 
