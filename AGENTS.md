@@ -41,4 +41,5 @@ When a user asks how to install, upgrade, or adopt `agentic-solid-qe` in an exis
 3. **Never place `expect()` inside `src/components/`, `src/pages/`, or `src/domains/**/api/*.client.ts`**. Components, Pages, and API Clients expose action methods, `readonly` semantic `Locator` properties, or typed `ApiResponseEnvelope<T>` responses; web-first assertions (`await expect(...).toBeVisible()`) belong strictly in `tests/*.spec.ts`.
 4. **Cap every file in `src/components/` (and `src/domains/**/components/`) at 150 lines** (Single Responsibility Principle).
 5. **Never hardcode credentials or magic strings in `tests/*.spec.ts`**; always consume builders from `src/data/` (or `src/domains/<squad>/data/`) and fixtures from `src/fixtures/app.fixture.ts`.
-6. **Before completing any code generation or healing task**, run `npm run verify` (`typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `playwright test`).
+6. **Always group `tests/*.spec.ts` actions and assertions into business-domain `await test.step('<Business behaviour>', ...)` blocks** (never UI mechanics like `click`, `fill`, `locator`, `button`) so Playwright HTML reports show business behaviour.
+7. **Before completing any code generation or healing task**, run `npm run verify` (`typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `playwright test`).

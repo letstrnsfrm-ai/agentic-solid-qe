@@ -152,6 +152,11 @@
         "properties": {
           "stepIndex": { "type": "integer", "minimum": 1 },
           "intent": { "type": "string" },
+          "businessStep": {
+            "type": "string",
+            "minLength": 3,
+            "description": "High-level business behaviour step name for test.step() grouping in Playwright HTML reports (e.g., 'Authenticate as standard customer')."
+          },
           "actor": {
             "type": "string",
             "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
@@ -312,6 +317,11 @@
         "additionalProperties": false,
         "properties": {
           "description": { "type": "string" },
+          "businessStep": {
+            "type": "string",
+            "minLength": 3,
+            "description": "High-level business behaviour step name matching a semanticStep businessStep or defining an outcome verification step for test.step() grouping."
+          },
           "actor": {
             "type": "string",
             "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",

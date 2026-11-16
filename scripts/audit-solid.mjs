@@ -327,6 +327,27 @@ for (const file of specFiles) {
       );
     }
   }
+
+  // Require business-domain test.step() blocks for HTML report readability
+  if (/\btest\s*\(/.test(codeWithoutComments) && !/\btest\.step\s*\(/.test(codeWithoutComments)) {
+    violations.push(
+      `[BDD/Business Step Rule] ${specRel} does not use test.step(). Wrap high-level business behaviours in await test.step('...', async () => { ... }) so HTML reports show business behaviour instead of implementation steps.`
+    );
+  }
+
+  const IMPLEMENTATION_JARGON_REGEX =
+    /\b(?:click|fill|press|hover|locator|selector|xpath|css|dom|getbyrole|getbylabel|getbytestid|getbyplaceholder|getbytext|input\s+field|button|checkbox|dropdown)\b/i;
+  for (const stepMatch of codeWithoutComments.matchAll(
+    /\btest\.step\s*\(\s*(['"`])((?:\\.|(?!\1).)+)\1/g
+  )) {
+    const stepTitle = stepMatch[2].trim();
+    const jargonMatch = stepTitle.match(IMPLEMENTATION_JARGON_REGEX);
+    if (jargonMatch) {
+      violations.push(
+        `[Business Language Rule] ${specRel} uses UI implementation jargon ('${jargonMatch[0]}') in test.step(${JSON.stringify(stepTitle)}). Describe high-level business behaviour instead of UI mechanics.`
+      );
+    }
+  }
 }
 
 // 6. Audit src/, tests/, .agents/skills/, .agents/domain/, .exploratory/tapes/, .claude/, .github/, and defects/ for leaked secrets, Trojan-Source Unicode, and prompt injection

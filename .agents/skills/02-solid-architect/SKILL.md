@@ -22,8 +22,9 @@ Run `npm run coverage:gaps`, select `<scenario-id>` (or `nextSingleScenarioToAut
   - Wire Pages, API Clients, and Multi-Portal contexts (`browser.newContext({ storageState })`) into `test.extend<>()`.
 - **LSP (`contracts/`) & DIP (`data/`):**
   - Centralize risk profiles, relative dates (`RelativeDateHelper`), and constants in `*.builder.ts`.
-- **CI Tags & Cross-Portal State (`tests/*.spec.ts`):**
-  - Apply `tags` (`@p0`, `@smoke`, `@regression`) and assert `capturedVariables` across UI steps, portals, and API responses.
+- **Business-Domain `test.step()`, CI Tags & Cross-Portal State (`tests/*.spec.ts`):**
+  - Wrap actions & assertions in business-behaviour `test.step()` blocks (never UI mechanics).
+  - Apply `tags` (`@p0`, `@smoke`, `@regression`) and assert `capturedVariables` across portals/APIs.
 
 ## 3. Self-Healing Verification Gate (FR-3.3)
 Run and heal until green:

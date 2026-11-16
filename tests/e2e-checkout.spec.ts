@@ -14,24 +14,32 @@ test.describe('Swag Labs End-to-End Checkout [@p0 @smoke @checkout] (Compiled fr
     const customer = CheckoutBuilder.defaultCustomer();
     const expectedSummary = CheckoutBuilder.backpackOrderSummary();
 
-    await loginPage.open();
-    await loginPage.loginAs(standardUser);
+    await test.step('Authenticate as standard customer', async () => {
+      await loginPage.open();
+      await loginPage.loginAs(standardUser);
+    });
 
-    await inventoryPage.catalog.addItemToCart(backpack.name);
-    await inventoryPage.header.openCart();
+    await test.step('Select product and proceed to checkout', async () => {
+      await inventoryPage.catalog.addItemToCart(backpack.name);
+      await inventoryPage.header.openCart();
+      await checkoutPage.cart.proceedToCheckout();
+    });
 
-    await checkoutPage.cart.proceedToCheckout();
-    await checkoutPage.form.submitCustomerInfo(customer);
+    await test.step('Provide customer details and verify order totals with tax', async () => {
+      await checkoutPage.form.submitCustomerInfo(customer);
 
-    await expect(checkoutPage.summary.subtotalLabel).toContainText(expectedSummary.subtotalText);
-    await expect(checkoutPage.summary.taxLabel).toContainText(expectedSummary.taxText);
-    await expect(checkoutPage.summary.totalLabel).toContainText(expectedSummary.totalText);
+      await expect(checkoutPage.summary.subtotalLabel).toContainText(expectedSummary.subtotalText);
+      await expect(checkoutPage.summary.taxLabel).toContainText(expectedSummary.taxText);
+      await expect(checkoutPage.summary.totalLabel).toContainText(expectedSummary.totalText);
+    });
 
-    await checkoutPage.summary.finishOrder();
+    await test.step('Complete purchase and verify order confirmation', async () => {
+      await checkoutPage.summary.finishOrder();
 
-    await expect(checkoutPage.summary.confirmationHeading).toHaveText(
-      CheckoutBuilder.confirmationHeading()
-    );
-    await expect(checkoutPage.header.cartBadge).toBeHidden();
+      await expect(checkoutPage.summary.confirmationHeading).toHaveText(
+        CheckoutBuilder.confirmationHeading()
+      );
+      await expect(checkoutPage.header.cartBadge).toBeHidden();
+    });
   });
 });

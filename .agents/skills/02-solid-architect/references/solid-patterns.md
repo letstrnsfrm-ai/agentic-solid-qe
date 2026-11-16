@@ -102,9 +102,17 @@ import { test as base, expect } from '@playwright/test';
 
 ---
 
-## 6. Multi-Page Spec & Cross-Page State (`tests/*.spec.ts`)
+## 6. Multi-Page Spec, Business-Domain `test.step()` & Cross-Page State (`tests/*.spec.ts`)
 - Include the Session Tape `scenarioId` and `tags` (`@p0`, `@smoke`, `@regression`) in the `test.describe` or `test` title/details.
-- When `capturedVariables` is present in the tape, read the runtime value from the source page locator (`const capturedTotal = await ...textContent()`) or API response (`source: "apiResponseJson"`) and assert it on downstream pages/portals using web-first assertions (`await expect(...)`).
+- **Business-Domain `test.step()` Grouping (HTML Report Readability):** Wrap related actions and their immediate outcome assertions inside `await test.step('<Business behaviour>', async () => { ... })`. Describe *what* the user/business achieves (e.g., `"Authenticate as standard customer"`, `"Complete purchase and verify order confirmation"`), never UI mechanics (`click`, `fill`, `locator`, `button`).
+- When `capturedVariables` is present in the tape, declare `let capturedVar = '';` before `test.step()` blocks, assign it inside the producing step, and assert it in downstream `test.step()` blocks using web-first assertions (`await expect(...)`).
+```ts
+await test.step('Authenticate as standard customer', async () => {
+  await loginPage.open();
+  await loginPage.loginAs(standardUser);
+  await expect(inventoryPage.header.pageTitle).toHaveText(ProductBuilder.catalogTitle());
+});
+```
 
 ---
 

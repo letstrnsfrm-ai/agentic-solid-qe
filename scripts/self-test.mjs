@@ -1098,3 +1098,110 @@ test('pre-commit hook: does not modify non-shell or early-exit hooks, and gate t
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('11. compile-tape emits business-domain test.step() blocks and audit-solid enforces business language', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-bstep-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://shop.example.com', '--name', 'ShopApp']);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    const tape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'checkout-business-steps',
+      title: 'Customer completes checkout',
+      charter: 'happy-path-baseline',
+      tags: ['@p0', '@smoke'],
+      recordedAt: '2026-10-25T12:00:00Z',
+      baseUrl: 'https://shop.example.com',
+      persona: {
+        role: 'customer',
+        dataBuilderRef: 'CustomerBuilder.standardCustomer',
+      },
+      preconditions: ['Customer is on the storefront'],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Open login page',
+          businessStep: 'Authenticate customer account',
+          action: 'goto',
+          componentCandidate: 'LoginPage',
+          locatorContract: { strategy: 'url', value: '/' },
+        },
+        {
+          stepIndex: 2,
+          intent: 'Enter customer email',
+          businessStep: 'Authenticate customer account',
+          action: 'fill',
+          inputDataRef: 'CustomerBuilder.standardCustomer().email',
+          componentCandidate: 'LoginFormComponent',
+          locatorContract: { strategy: 'getByLabel', value: 'Email', nameExact: true },
+        },
+        {
+          stepIndex: 3,
+          intent: 'Submit order',
+          businessStep: 'Confirm purchase and verify receipt',
+          action: 'click',
+          componentCandidate: 'OrderSummaryComponent',
+          locatorContract: { strategy: 'getByRole', role: 'button', value: 'Place Order', nameExact: true },
+        },
+      ],
+      networkContracts: [
+        { urlPattern: 'https://shop.example.com/api/orders', method: 'POST', expectedStatus: 201 },
+      ],
+      expectedStates: [
+        {
+          description: 'Order confirmation heading is visible',
+          businessStep: 'Confirm purchase and verify receipt',
+          assertionType: 'toBeVisible',
+          targetComponent: 'loginPage.orderSummary',
+          targetProperty: 'placeOrder',
+          expectedValueRef: 'CustomerBuilder.confirmationText()',
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/checkout-business-steps.json'),
+      JSON.stringify(tape, null, 2),
+      'utf8'
+    );
+
+    const compileRes = runNode(
+      path.join(tmpDir, 'scripts/compile-tape.mjs'),
+      ['checkout-business-steps', '--apply'],
+      tmpDir
+    );
+    assert.equal(compileRes.status, 0, `compile failed: ${compileRes.stderr}\n${compileRes.stdout}`);
+
+    const specPath = path.join(tmpDir, 'tests/checkout-business-steps.spec.ts');
+    const specContent = fs.readFileSync(specPath, 'utf8');
+    assert.match(specContent, /await test\.step\("Authenticate customer account", async \(\) => \{/);
+    assert.match(specContent, /await test\.step\("Confirm purchase and verify receipt", async \(\) => \{/);
+
+    // Compiled spec should pass audit:solid
+    const passAudit = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(passAudit.status, 0, `Expected audit:solid to pass, got:\n${passAudit.stderr}`);
+
+    // Spec without test.step() must fail [BDD/Business Step Rule]
+    fs.writeFileSync(
+      specPath,
+      `import { test, expect } from '@fixtures/app.fixture';\nimport { CustomerBuilder } from '@data/customer.builder';\ntest('raw test', async ({ loginPage }) => {\n  const c = CustomerBuilder.standardCustomer();\n  await loginPage.open('/');\n  await expect(loginPage.orderSummary.placeOrder).toBeVisible();\n});\n`,
+      'utf8'
+    );
+    const missingStepAudit = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(missingStepAudit.status, 1, 'Expected audit:solid to fail without test.step()');
+    assert.match(missingStepAudit.stderr, /\[BDD\/Business Step Rule\]/);
+
+    // Spec with UI-implementation jargon in test.step() must fail [Business Language Rule]
+    fs.writeFileSync(
+      specPath,
+      `import { test, expect } from '@fixtures/app.fixture';\nimport { CustomerBuilder } from '@data/customer.builder';\ntest('jargon test', async ({ loginPage }) => {\n  const c = CustomerBuilder.standardCustomer();\n  await test.step('Click the Place Order button and fill email input field', async () => {\n    await loginPage.open('/');\n    await expect(loginPage.orderSummary.placeOrder).toBeVisible();\n  });\n});\n`,
+      'utf8'
+    );
+    const jargonAudit = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(jargonAudit.status, 1, 'Expected audit:solid to fail on UI jargon in test.step()');
+    assert.match(jargonAudit.stderr, /\[Business Language Rule\]/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

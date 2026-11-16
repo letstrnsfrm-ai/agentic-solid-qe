@@ -1186,7 +1186,39 @@ export { expect };
       .map(([cls, alias]) => `import { ${cls} } from '${alias}';`)
       .join('\n');
 
-    const stepStatements = [];
+    const toBusinessStepFallback = (componentCandidate, action) => {
+      const base = stripClassSuffix(String(componentCandidate || 'Workflow'), [
+        'StepComponent',
+        'Component',
+        'Page',
+        'ApiClient',
+        'Client',
+        'Wizard',
+        'Form',
+        'Modal',
+        'Dialog',
+        'Banner',
+        'List',
+        'Header',
+      ]);
+      const words = base
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+        .replace(/[^a-zA-Z0-9]+/g, ' ')
+        .trim()
+        .toLowerCase();
+      const label = words || 'application';
+      if (action === 'apiCall') {
+        return `Execute ${label} service operation`;
+      }
+      if (label === 'login' || label === 'auth' || label === 'authentication') {
+        return 'Authenticate user session';
+      }
+      return `Complete ${label} workflow`;
+    };
+
+    const capturedVarsDeclared = new Set();
+    const businessGroups = [];
     const primaryPageFixture = pageFixtureDescriptors.keys().next().value;
 
     for (const step of tape.semanticSteps || []) {
@@ -1194,29 +1226,35 @@ export { expect };
       const inputExpr = parsedInput?.callExpression || 'undefined';
 
       let stmt = '';
+      const groupMatchKeys = new Set();
       if (step.action === 'apiCall' && step.componentCandidate) {
         const apiDesc = apiClientImports.get(step.componentCandidate);
         const apiFix = apiDesc?.fixtureProp || 'apiClient';
+        groupMatchKeys.add(apiFix);
         const payloadArg = step.inputDataRef ? `, ${inputExpr}` : '';
         const endpointArg = JSON.stringify(step.locatorContract?.value || '/api/v1/resource');
         if (step.capturesVariable) {
           const safeCapVar = assertSafeJsIdentifier(step.capturesVariable, 'capturesVariable');
+          capturedVarsDeclared.add(safeCapVar);
           const cv = (tape.capturedVariables || []).find((c) => c.name === safeCapVar);
           const lastJsonKey = cv?.jsonPath ? cv.jsonPath.replace(/^data\./, '').split('.').pop() : '';
           if (lastJsonKey) {
             assertSafeJsIdentifier(lastJsonKey, 'jsonPath segment');
           }
           const keyAccessExpr = lastJsonKey ? `?.[${JSON.stringify(lastJsonKey)}] ?? ''` : '';
-          stmt = `const ${safeCapVar}Res = await ${apiFix}.executeRequest(${endpointArg}${payloadArg});\n    const ${safeCapVar} = String((${safeCapVar}Res.body as Record<string, unknown>)${keyAccessExpr});`;
+          stmt = `const ${safeCapVar}Res = await ${apiFix}.executeRequest(${endpointArg}${payloadArg});\n${safeCapVar} = String((${safeCapVar}Res.body as Record<string, unknown>)${keyAccessExpr});`;
         } else {
           stmt = `await ${apiFix}.executeRequest(${endpointArg}${payloadArg});`;
         }
       } else if (step.action === 'goto') {
         const targetRoute = step.locatorContract?.value || step.pageRoute || '/';
         if (primaryPageFixture) {
+          groupMatchKeys.add(primaryPageFixture);
           stmt = `await ${primaryPageFixture}.open(${JSON.stringify(targetRoute)});`;
         }
       } else if (primaryPageFixture && step.__compiledComponentProp && step.__compiledLocatorProp) {
+        groupMatchKeys.add(primaryPageFixture);
+        groupMatchKeys.add(`${primaryPageFixture}.${step.__compiledComponentProp}`);
         const locRef = `${primaryPageFixture}.${step.__compiledComponentProp}.${step.__compiledLocatorProp}`;
         if (step.action === 'fill') {
           stmt = `await ${locRef}.fill(String(${inputExpr}));`;
@@ -1235,7 +1273,8 @@ export { expect };
         }
         if (step.capturesVariable) {
           const safeCapVar = assertSafeJsIdentifier(step.capturesVariable, 'capturesVariable');
-          stmt += `\n    const ${safeCapVar} = (await ${locRef}.textContent()) ?? '';`;
+          capturedVarsDeclared.add(safeCapVar);
+          stmt += `\n${safeCapVar} = (await ${locRef}.textContent()) ?? '';`;
         }
       }
 
@@ -1243,13 +1282,25 @@ export { expect };
         if (step.conditionRef) {
           const condParsed = parseBuilderRef(step.conditionRef);
           const condExpr = condParsed?.callExpression || 'true';
-          stmt = `if (${condExpr}) {\n      ${stmt.replace(/\n/g, '\n      ')}\n    }`;
+          stmt = `if (${condExpr}) {\n  ${stmt.replace(/\n/g, '\n  ')}\n}`;
         }
-        stepStatements.push(`    // Step ${Number(step.stepIndex) || 1}: ${sanitizeCodeComment(step.intent)}\n    ${stmt}`);
+        const stepTitle = step.businessStep
+          ? sanitizeCodeComment(step.businessStep)
+          : toBusinessStepFallback(step.componentCandidate, step.action);
+        const lastGroup = businessGroups[businessGroups.length - 1];
+        if (lastGroup && lastGroup.title === stepTitle) {
+          lastGroup.statements.push(stmt);
+          for (const k of groupMatchKeys) lastGroup.matchKeys.add(k);
+        } else {
+          businessGroups.push({
+            title: stepTitle,
+            matchKeys: groupMatchKeys,
+            statements: [stmt],
+          });
+        }
       }
     }
 
-    const assertionStatements = [];
     for (const state of tape.expectedStates || []) {
       if (!isSafeMemberRef(state.targetComponent) || !isSafeMemberRef(state.targetProperty)) {
         throw new Error(
@@ -1262,28 +1313,63 @@ export { expect };
         ? parsedExpected.varName
         : parsedExpected?.callExpression || '';
 
-      if (state.assertionType === 'toBeVisible' || state.assertionType === 'toBeHidden') {
-        assertionStatements.push(
-          `    // Verify: ${sanitizeCodeComment(state.description)}\n    await expect(${targetExpr}).${state.assertionType}();`
-        );
+      const assertStmt =
+        state.assertionType === 'toBeVisible' || state.assertionType === 'toBeHidden'
+          ? `await expect(${targetExpr}).${state.assertionType}();`
+          : `await expect(${targetExpr}).${state.assertionType}(String(${valExpr}));`;
+
+      if (state.businessStep) {
+        const targetTitle = sanitizeCodeComment(state.businessStep);
+        const existingGroup = [...businessGroups].reverse().find((g) => g.title === targetTitle);
+        if (existingGroup) {
+          existingGroup.statements.push(assertStmt);
+        } else {
+          businessGroups.push({
+            title: targetTitle,
+            matchKeys: new Set(),
+            statements: [assertStmt],
+          });
+        }
       } else {
-        assertionStatements.push(
-          `    // Verify: ${sanitizeCodeComment(state.description)}\n    await expect(${targetExpr}).${state.assertionType}(String(${valExpr}));`
-        );
+        const matchingGroup = [...businessGroups]
+          .reverse()
+          .find(
+            (g) =>
+              g.matchKeys.has(state.targetComponent) ||
+              g.matchKeys.has(state.targetComponent.split('.')[0])
+          );
+        if (matchingGroup) {
+          matchingGroup.statements.push(assertStmt);
+        } else if (businessGroups.length > 0) {
+          businessGroups[businessGroups.length - 1].statements.push(assertStmt);
+        } else {
+          businessGroups.push({
+            title: 'Verify expected business outcomes',
+            matchKeys: new Set(),
+            statements: [assertStmt],
+          });
+        }
       }
     }
 
     const personaCall =
       parseBuilderRef(tape.persona?.dataBuilderRef)?.callExpression || null;
     const personaPreamble = personaCall ? `    const persona = ${personaCall};\n    void persona;\n` : '';
+    const capturedVarsPreamble = [...capturedVarsDeclared]
+      .map((v) => `    let ${v} = '';\n`)
+      .join('');
+    const stepBlocks = businessGroups.map((group) => {
+      const body = group.statements
+        .map((s) => `      ${s.replace(/\n/g, '\n      ')}`)
+        .join('\n');
+      return `    await test.step(${JSON.stringify(group.title)}, async () => {\n${body}\n    });`;
+    });
 
     const specCode = `import { test, expect } from '${fixtureAlias}';
 ${builderImportLines ? builderImportLines + '\n' : ''}
 test.describe(${JSON.stringify(`${tape.title} [${tagsSuffix}] (Compiled from Session Tape: ${scenarioId})`)}, () => {
   test(${JSON.stringify(`${tape.title} ${tagsSuffix}`)}, async ({ ${injectedFixtures.join(', ')} }) => {
-${personaPreamble}${stepStatements.join('\n\n')}
-
-${assertionStatements.join('\n\n')}
+${personaPreamble}${capturedVarsPreamble}${stepBlocks.join('\n\n')}
   });
 });
 `;
