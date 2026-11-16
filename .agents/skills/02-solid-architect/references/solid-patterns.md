@@ -260,3 +260,23 @@ Use `RelativeDateHelper` (`@shared/data/relative-date.helper`) inside `src/domai
 - **Shadow DOM:** Semantic locators (`getByRole`, `getByLabel`, `getByTestId`) pierce **open** Shadow DOM automatically; avoid XPath (`xpath=...`).
 - **Native Dialogs & New-Window Popups:** Register `page.once('dialog', (d) => d.accept())` before the trigger, and wrap popup triggers in `Promise.all([page.waitForEvent('popup'), trigger.click()])`.
 
+---
+
+## 12. High-Scale Worker-Scoped Auth & API Seeding (`{ scope: 'worker' }`)
+When scaling to 500+ specs, avoid repeating UI login or token minting per test. Use worker-scoped fixtures (`{ scope: 'worker' }`) in `src/domains/<squad>/fixtures/` to share an authenticated `APIRequestContext` or `.auth/<persona>.json` session across all tests in a Playwright worker:
+```ts
+export const test = base.extend<{}, { workerApi: MotorQuoteApiClient }>({
+  workerApi: [
+    async ({ playwright }, use) => {
+      const apiContext = await playwright.request.newContext({
+        baseURL: process.env.API_BASE_URL,
+      });
+      await use(new MotorQuoteApiClient(apiContext, process.env.API_BASE_URL!, '.auth/underwriter.json'));
+      await apiContext.dispose();
+    },
+    { scope: 'worker' },
+  ],
+});
+```
+
+

@@ -1308,4 +1308,28 @@ test('12. compile-tape compiles iframeSelector, portalScope, force, dialogAction
   }
 });
 
+test('13. analyze-coverage --summary/--squad and audit-solid --squad produce token-bounded scoped output', () => {
+  const summaryRes = runNode(path.join(REPO_ROOT, 'scripts/analyze-coverage.mjs'), ['--summary'], REPO_ROOT);
+  assert.equal(summaryRes.status, 0, `analyze-coverage --summary failed: ${summaryRes.stderr}`);
+  assert.match(summaryRes.stdout, /"mode": "compact-summary"/);
+  assert.match(summaryRes.stdout, /"counts":/);
+
+  const squadCovRes = runNode(
+    path.join(REPO_ROOT, 'scripts/analyze-coverage.mjs'),
+    ['--squad', 'nonexistent-squad', '--summary'],
+    REPO_ROOT
+  );
+  assert.equal(squadCovRes.status, 0, `analyze-coverage --squad failed: ${squadCovRes.stderr}`);
+  assert.match(squadCovRes.stdout, /"squadFilter": "nonexistent-squad"/);
+  assert.match(squadCovRes.stdout, /"automatedSpecs": 0/);
+
+  const squadAuditRes = runNode(
+    path.join(REPO_ROOT, 'scripts/audit-solid.mjs'),
+    ['--squad', 'nonexistent-squad'],
+    REPO_ROOT
+  );
+  assert.equal(squadAuditRes.status, 0, `audit-solid --squad failed: ${squadAuditRes.stderr}`);
+});
+
+
 

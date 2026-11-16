@@ -11,6 +11,26 @@ import { buildDomainGraph } from './build-domain-graph.mjs';
 const ROOT = process.cwd();
 const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
 
+const args = process.argv.slice(2);
+let filterSquad = null;
+let forceSummary = false;
+let forceFull = false;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--squad' && args[i + 1]) {
+    filterSquad = args[++i].trim().toLowerCase();
+  } else if (args[i].startsWith('--squad=')) {
+    filterSquad = args[i].slice('--squad='.length).trim().toLowerCase();
+  } else if (args[i] === '--summary') {
+    forceSummary = true;
+  } else if (args[i] === '--full') {
+    forceFull = true;
+  }
+}
+if (filterSquad && !/^[a-z0-9-]+$/.test(filterSquad)) {
+  console.error(`❌ Invalid --squad value '${filterSquad}'. Must match ^[a-z0-9-]+$.`);
+  process.exit(1);
+}
+
 function walkFiles(dir, extFilter) {
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -279,41 +299,89 @@ if (missingAuthSessions.length > 0) {
   recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /00-master-orchestrator to plan the next incremental coverage stage, /01-cli-explorer for the next single P1/P2 business scenario or backend API contract, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
 }
 
-const report = {
-  masterOrchestratorSkill: '/00-master-orchestrator',
-  coverageMaturityStage,
-  targetApp: {
-    appName,
-    baseUrl,
-    needsTargetUrlConfig,
-    savedAuthSessions,
-    missingAuthSessions,
-  },
-  federatedBrain: {
-    domainGraphPath: '.agents/domain/domain-graph.json',
-    domainHubs: domainGraph.domainHubs,
-    routeIndex: domainGraph.routeIndex,
-    staleShards,
-  },
-  domainShards: shards,
-  uncoveredShards,
-  recordedSessionTapes: tapes,
-  uncompiledTapes,
-  discoveredApiContracts,
-  unimplementedApiClients,
-  nextSingleScenarioToAutomate,
-  openDefects,
-  automatedSpecs: specsWithContent.map(({ rawContent, ...rest }) => rest),
-  existingArchitecture: {
-    contracts,
-    pages,
-    components,
-    wizardSteps,
-    dataBuilders,
-    apiClients,
-  },
-  recommendedNextAction,
-};
+const matchSquad = (p) =>
+  !filterSquad || String(p || '').toLowerCase().includes(filterSquad);
+
+const scopedShards = shards.filter((s) => !filterSquad || s.squad === filterSquad || matchSquad(s.path));
+const scopedUncovered = uncoveredShards.filter(matchSquad);
+const scopedStale = staleShards.filter(matchSquad);
+const scopedTapes = tapes.filter((t) => !filterSquad || matchSquad(t.file) || matchSquad(t.scenarioId));
+const scopedUncompiled = uncompiledTapes.filter(matchSquad);
+const scopedSpecs = specsWithContent
+  .filter((s) => !filterSquad || matchSquad(s.file))
+  .map(({ rawContent, ...rest }) => rest);
+
+const isCompact = !forceFull && (forceSummary || scopedSpecs.length + scopedTapes.length > 25);
+
+const report = isCompact
+  ? {
+      masterOrchestratorSkill: '/00-master-orchestrator',
+      mode: 'compact-summary',
+      ...(filterSquad ? { squadFilter: filterSquad } : {}),
+      coverageMaturityStage,
+      targetApp: {
+        appName,
+        baseUrl,
+        needsTargetUrlConfig,
+        savedAuthSessionsCount: savedAuthSessions.length,
+        missingAuthSessions,
+      },
+      counts: {
+        domainShards: scopedShards.length,
+        uncoveredShards: scopedUncovered.length,
+        staleShards: scopedStale.length,
+        recordedTapes: scopedTapes.length,
+        uncompiledTapes: scopedUncompiled.length,
+        automatedSpecs: scopedSpecs.length,
+        components: components.length,
+        pages: pages.length,
+        wizardSteps: wizardSteps.length,
+        apiClients: apiClients.length,
+        openDefects: openDefects.length,
+      },
+      topUncoveredShards: scopedUncovered.slice(0, 10),
+      topUncompiledTapes: scopedUncompiled.slice(0, 10),
+      topStaleShards: scopedStale.slice(0, 10),
+      topOpenDefects: openDefects.slice(0, 10),
+      nextSingleScenarioToAutomate,
+      recommendedNextAction,
+    }
+  : {
+      masterOrchestratorSkill: '/00-master-orchestrator',
+      ...(filterSquad ? { squadFilter: filterSquad } : {}),
+      coverageMaturityStage,
+      targetApp: {
+        appName,
+        baseUrl,
+        needsTargetUrlConfig,
+        savedAuthSessions,
+        missingAuthSessions,
+      },
+      federatedBrain: {
+        domainGraphPath: '.agents/domain/domain-graph.json',
+        domainHubs: domainGraph.domainHubs,
+        routeIndex: domainGraph.routeIndex,
+        staleShards: scopedStale,
+      },
+      domainShards: scopedShards,
+      uncoveredShards: scopedUncovered,
+      recordedSessionTapes: scopedTapes,
+      uncompiledTapes: scopedUncompiled,
+      discoveredApiContracts,
+      unimplementedApiClients,
+      nextSingleScenarioToAutomate,
+      openDefects,
+      automatedSpecs: scopedSpecs,
+      existingArchitecture: {
+        contracts,
+        pages: pages.filter(matchSquad),
+        components: components.filter(matchSquad),
+        wizardSteps: wizardSteps.filter(matchSquad),
+        dataBuilders: dataBuilders.filter(matchSquad),
+        apiClients: apiClients.filter(matchSquad),
+      },
+      recommendedNextAction,
+    };
 
 console.log('📊 Agentic-SOLID-QE Coverage & Federated Brain Snapshot:\n');
 console.log(JSON.stringify(report, null, 2));

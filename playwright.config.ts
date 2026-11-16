@@ -20,9 +20,11 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 4 : undefined,
-  reporter: process.env.CI
-    ? [['html', { open: 'never' }], ['github'], ['junit', { outputFile: 'test-results/junit.xml' }]]
-    : [['list'], ['html', { open: 'never' }]],
+  reporter: process.env.PW_BLOB_REPORT === '1'
+    ? [['blob']]
+    : process.env.CI
+      ? [['html', { open: 'never' }], ['github'], ['junit', { outputFile: 'test-results/junit.xml' }]]
+      : [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: process.env.BASE_URL || 'https://www.saucedemo.com',
     // Match your app's test-id attribute (e.g. 'data-testid'); unused if you locate by role/label/placeholder.

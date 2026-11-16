@@ -15,6 +15,20 @@ const MAX_DOMAIN_LINES = 150;
 const MAX_SKILL_TOKENS = 500;
 const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
 
+const args = process.argv.slice(2);
+let filterSquad = null;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--squad' && args[i + 1]) {
+    filterSquad = args[++i].trim().toLowerCase();
+  } else if (args[i].startsWith('--squad=')) {
+    filterSquad = args[i].slice('--squad='.length).trim().toLowerCase();
+  }
+}
+if (filterSquad && !/^[a-z0-9-]+$/.test(filterSquad)) {
+  console.error(`❌ Invalid --squad value '${filterSquad}'. Must match ^[a-z0-9-]+$.`);
+  process.exit(1);
+}
+
 let violations = [];
 
 function walkFiles(dir, extFilter) {
@@ -68,6 +82,7 @@ const squadShardFiles = [];
 if (fs.existsSync(domainsRoot)) {
   for (const entry of fs.readdirSync(domainsRoot, { withFileTypes: true })) {
     if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
+    if (filterSquad && entry.name !== filterSquad) continue;
     const hubFile = path.join(domainsRoot, entry.name, 'index.md');
     if (fs.existsSync(hubFile)) squadHubFiles.push(hubFile);
     squadShardFiles.push(...walkFiles(path.join(domainsRoot, entry.name, 'shards'), '.md'));
@@ -145,13 +160,21 @@ function stripComments(code) {
 
 // 2. Audit Components & Wizard Steps across src/components, src/steps, src/shared/components, and src/domains/*/{components,steps}
 const componentFiles = [
-  ...new Set([
-    ...walkFiles(path.join(ROOT, 'src/components'), '.ts'),
-    ...walkFiles(path.join(ROOT, 'src/steps'), '.step.ts'),
-    ...walkFiles(path.join(ROOT, 'src/shared/components'), '.ts'),
-    ...walkFiles(path.join(ROOT, 'src/domains'), '.component.ts'),
-    ...walkFiles(path.join(ROOT, 'src/domains'), '.step.ts'),
-  ]),
+  ...new Set(
+    filterSquad
+      ? [
+          ...walkFiles(path.join(ROOT, 'src/shared/components'), '.ts'),
+          ...walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.component.ts'),
+          ...walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.step.ts'),
+        ]
+      : [
+          ...walkFiles(path.join(ROOT, 'src/components'), '.ts'),
+          ...walkFiles(path.join(ROOT, 'src/steps'), '.step.ts'),
+          ...walkFiles(path.join(ROOT, 'src/shared/components'), '.ts'),
+          ...walkFiles(path.join(ROOT, 'src/domains'), '.component.ts'),
+          ...walkFiles(path.join(ROOT, 'src/domains'), '.step.ts'),
+        ]
+  ),
 ];
 for (const file of componentFiles) {
   const content = fs.readFileSync(file, 'utf8');
@@ -178,10 +201,12 @@ for (const file of componentFiles) {
 }
 
 // 3. Audit Pages across src/pages and src/domains/*/pages (SRP Zero expect())
-const pageFiles = [
-  ...walkFiles(path.join(ROOT, 'src/pages'), '.ts'),
-  ...walkFiles(path.join(ROOT, 'src/domains'), '.page.ts'),
-];
+const pageFiles = filterSquad
+  ? walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.page.ts')
+  : [
+      ...walkFiles(path.join(ROOT, 'src/pages'), '.ts'),
+      ...walkFiles(path.join(ROOT, 'src/domains'), '.page.ts'),
+    ];
 for (const file of pageFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const codeOnly = stripComments(content);
@@ -193,10 +218,12 @@ for (const file of pageFiles) {
 }
 
 // 3a. Audit Backend API Clients across src/api and src/domains/*/api (SRP Zero expect() & LSP ApiClientContract)
-const apiClientFiles = [
-  ...walkFiles(path.join(ROOT, 'src/api'), '.client.ts'),
-  ...walkFiles(path.join(ROOT, 'src/domains'), '.client.ts'),
-];
+const apiClientFiles = filterSquad
+  ? walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.client.ts')
+  : [
+      ...walkFiles(path.join(ROOT, 'src/api'), '.client.ts'),
+      ...walkFiles(path.join(ROOT, 'src/domains'), '.client.ts'),
+    ];
 for (const file of apiClientFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const codeOnly = stripComments(content);
@@ -273,7 +300,9 @@ if (fs.existsSync(srcDomainsDir)) {
 }
 
 // 5. Audit Specs (OCP/ISP Fixture injection + Scoped DIP Data Builder & URL rules)
-const specFiles = walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
+const specFiles = filterSquad
+  ? walkFiles(path.join(ROOT, 'tests', filterSquad), '.spec.ts')
+  : walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
 
 for (const file of specFiles) {
   const specRel = rel(file);
