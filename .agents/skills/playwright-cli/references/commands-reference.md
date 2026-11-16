@@ -110,3 +110,23 @@ npx playwright-cli -s=explore screenshot --filename=defects/evidence.png
 npx playwright-cli -s=explore tracing-start
 npx playwright-cli -s=explore tracing-stop
 ```
+
+---
+
+## 7. Human-Driven Codegen Recording & Pause-Anywhere Debugging
+
+```bash
+# Record human browser actions into native Playwright TypeScript code
+npx playwright-cli -s=record recording-start
+# ... user completes the flow in the connected browser ...
+npx playwright-cli -s=record recording-stop
+
+# Or launch Playwright's standalone codegen recorder for a fresh start
+npx playwright codegen https://app.example.com -o .exploratory/recordings/new-flow.ts
+
+# Pause a test at any file:line during --debug=cli
+npx playwright-cli -s=record pause-at tests/e2e-checkout.spec.ts:24
+npx playwright-cli -s=record resume
+npx playwright-cli -s=record step-over
+```
+

@@ -8,7 +8,7 @@ description: Autonomous feature discovery, multi-page/multi-portal exploration, 
 ## 1. Zero-Prompt Auto-Start: Recon & Gap Analysis (FR-1.1)
 When invoked as `/01-cli-explorer` (invoke `/playwright-cli` for CLI syntax without `--help` round trips):
 1. Run `npm run coverage:gaps` and read `.agents/domain/domain-memory.md` (+ `shards/*.md`).
-2. Start **Fresh Recon** (`npx playwright-cli -s=explore open <baseUrl> --headed`) **or Resume-from-Spec (`A ➔ B ➔ C`)** via `npm run test:explore` / `--debug=cli` + `playwright-cli attach` (`references/charters.md` §0b).
+2. Start **Fresh Recon** (`npx playwright-cli -s=explore open <baseUrl> --headed`), **Resume-from-Spec (`A ➔ B ➔ C`)** via `npm run test:explore` / `--debug` + `playwright-cli attach`, or **Human Codegen Recording** (`recording-start` / `playwright codegen`, `references/charters.md` §0b–0c).
 3. **Checkpoint 1:** Present **Top 3 Uncovered Scenarios** (`references/charters.md`) and pick **1** to explore.
 
 ## 2. Multi-Page, Multi-Portal & API Recon (FR-1.2, FR-1.3)

@@ -35,6 +35,20 @@ When Point A of an E2E journey is already automated in `tests/*.spec.ts` (for ex
    - **Linear E2E Expansion:** Append the newly discovered `B ➔ C` `semanticSteps`, `networkContracts`, and `expectedStates` to the existing parent `.exploratory/tapes/<scenario>.json` and recompile with `npx cortex compile <scenario> --apply --force-spec`.
    - **Downstream Branching Scenario:** Emit a new `.exploratory/tapes/<downstream-scenario>.json` with `resumesFrom: { scenarioId, specFile, resumeStep }` so `/02-solid-architect` reuses Point A's existing Page/Component classes.
 
+## 0c. Human-Driven Codegen Recording Mode (Fresh Start or Pause Anywhere)
+
+When the user prefers to click through a flow themselves in a connected browser and generate native Playwright codegen scripts before converting to SOLID automation:
+1. **Option 1 — Fresh Start:**
+   - Run `npx playwright-cli -s=record open <baseUrl> --headed` followed by `npx playwright-cli -s=record recording-start` (or `npx playwright codegen <baseUrl> -o .exploratory/recordings/<scenario>.ts`).
+   - User completes the business flow manually in the browser, then run `npx playwright-cli -s=record recording-stop`.
+2. **Option 2 — Start from Existing Spec & Pause Anywhere:**
+   - Run `npm run test:explore -- tests/<spec>.spec.ts -g "<test>"` (auto-pauses after Point A), **or** run `npx playwright test tests/<spec>.spec.ts --debug` / temporary `await page.pause()` / `pause-at <file:line>` to pause at any chosen step mid-flow.
+   - Attach and record from that exact state: `npx playwright-cli -s=record attach --cdp=http://localhost:9222` + `npx playwright-cli -s=record recording-start` (or click **Record** in Playwright Inspector).
+   - User completes the new downstream flow from the paused point, then run `npx playwright-cli -s=record recording-stop` (and `detach`).
+3. **Convert Codegen Script into SOLID Automation:**
+   - Save the recorded script to `.exploratory/recordings/<scenario>.ts` and ingest it via `npm run migrate:skill -- .exploratory/recordings/<scenario>.ts --name <scenario> --apply` (or translate directly into `.exploratory/tapes/<scenario>.json` with `businessStep` and optional `resumesFrom`).
+   - Validate (`npm run validate:tapes`) and compile **1 test at a time** via `/02-solid-architect <scenario>` (`npx cortex compile <scenario> --apply`) + `npm run verify` so secrets move to Data Builders, components stay `<= 150` lines, and `test.step()` uses business-domain language.
+
 ---
 
 ## 1. Multi-Oracle Quality Checks (Executed During Exploration)
