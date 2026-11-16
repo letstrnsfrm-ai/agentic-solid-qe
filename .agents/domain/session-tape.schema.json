@@ -113,6 +113,16 @@
       "items": { "type": "string" },
       "minItems": 1
     },
+    "resumesFrom": {
+      "type": "object",
+      "description": "Optional Point-A prerequisite spec or parent Session Tape from which this scenario resumed exploration via playwright-cli attach.",
+      "additionalProperties": false,
+      "properties": {
+        "scenarioId": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "specFile": { "type": "string", "minLength": 1 },
+        "resumeStep": { "type": "string", "minLength": 3 }
+      }
+    },
     "capturedVariables": {
       "type": "array",
       "description": "Optional cross-page or cross-portal runtime values captured during earlier UI or API steps (e.g. generated Quote ID, Policy Number, Referral ID, dynamic premium) to assert or use on subsequent steps.",

@@ -15,6 +15,6 @@ When invoked as `/00-master-orchestrator` or `/master-orchestrator`, immediately
 Advance automation coverage **1 test at a time**:
 1. **Stage 0 — Onboarding & Auth:** Run `npx cortex init` / `sync`, migrate legacy rules/scripts (`/05-skill-migrator`), and capture `.auth/<persona>.json` + route shards (`/00-env-bootstrap`).
 2. **Stage 1 — P0 Baseline (`@p0`):** Explore uncovered shards via `/01-cli-explorer` (`happy-path-baseline`), compile 1 tape via `/02-solid-architect <scenario>`, and run `npm run verify`.
-3. **Stage 2 — Persona & Boundary Expansion (`@smoke` / `@regression`):** Layer `multi-persona-auth`, `boundary-analysis`, `state-interruption`, and `accessibility-audit` tapes reusing SOLID components/builders.
+3. **Stage 2 — Persona & E2E Continuation (`@smoke` / `@regression`):** Layer `multi-persona-auth`, `boundary-analysis`, and `state-interruption` tapes, or resume from Point-A specs (`test:explore` + `attach`) for `B ➔ C` flows.
 4. **Stage 3 — Wizards, APIs & Multi-Portal:** Add `WizardStepContract`, `ApiClientContract` + `AuthTokenBridge`, and `cross-portal-handoff` flows.
 5. **Stage 4 — CI/CD & Drift Healing:** Curate sharded pipelines (`/04-ci-pipeline`) and heal live drift (`/03-drift-healer`).

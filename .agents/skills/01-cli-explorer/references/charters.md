@@ -13,6 +13,28 @@ When a Quality Engineer asks to explore a feature they do not know end-to-end ye
    - Dynamic runtime values generated along the flow (e.g., Order ID, Quote Reference, Calculated Tax/Total) that must be verified on downstream pages (`capturedVariables`).
    - Network/API requests (`GET`/`POST`/`PUT`/`DELETE`) triggered during page transitions (`networkContracts`).
 
+## 0b. Resume-from-Spec Exploration Mode (Point A ➔ Point B ➔ Point C)
+
+When Point A of an E2E journey is already automated in `tests/*.spec.ts` (for example, login, quote creation, or cart setup) and you want to explore downstream **Point B ➔ Point C** business scenarios without manually replaying Point A:
+1. **Run Point A and Pause Automatically (Zero Spec Edits):**
+   ```bash
+   npm run test:explore -- tests/<point-a>.spec.ts -g "<test title>"
+   ```
+   `npm run test:explore` sets `PW_PAUSE_FOR_EXPLORE=1` (triggering `await page.pause()` in `src/fixtures/app.fixture.ts` after the test's automated steps finish) and `EXPLORE_CDP_PORT=9222` (non-CI only).
+   - *Alternative (`--debug=cli`):* Run `npx playwright test tests/<point-a>.spec.ts -g "<test title>" --debug=cli` (or place a temporary `await page.pause()` at a specific `test.step()`).
+2. **Attach `@playwright/cli` to the Paused Browser at Point A:**
+   ```bash
+   npx playwright-cli -s=explore attach --cdp=http://localhost:9222
+   # Or, when launched with --debug=cli:
+   npx playwright-cli -s=explore attach
+   ```
+3. **Explore Point B ➔ Point C Live:**
+   - Run `npx playwright-cli -s=explore snapshot --filename=.playwright-cli/page-point-a.yml` and continue traversing Point B and Point C (`click`, `fill`, `console error`, `snapshot`).
+   - When done, detach cleanly (`npx playwright-cli -s=explore detach`) without killing the test runner, or press Resume in the Playwright Inspector.
+4. **Emit or Extend the Session Tape:**
+   - **Linear E2E Expansion:** Append the newly discovered `B ➔ C` `semanticSteps`, `networkContracts`, and `expectedStates` to the existing parent `.exploratory/tapes/<scenario>.json` and recompile with `npx cortex compile <scenario> --apply --force-spec`.
+   - **Downstream Branching Scenario:** Emit a new `.exploratory/tapes/<downstream-scenario>.json` with `resumesFrom: { scenarioId, specFile, resumeStep }` so `/02-solid-architect` reuses Point A's existing Page/Component classes.
+
 ---
 
 ## 1. Multi-Oracle Quality Checks (Executed During Exploration)

@@ -19,6 +19,7 @@
     "test:engine": "node --test scripts/self-test.mjs",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
+    "test:explore": "PW_PAUSE_FOR_EXPLORE=1 EXPLORE_CDP_PORT=9222 playwright test --project=chromium --headed --timeout=0",
     "report": "playwright show-report",
     "typecheck": "tsc --noEmit",
     "domain:graph": "node scripts/build-domain-graph.mjs",

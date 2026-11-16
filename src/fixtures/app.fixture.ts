@@ -11,6 +11,7 @@ export interface AppFixtures {
   loginPage: LoginPage;
   inventoryPage: InventoryPage;
   checkoutPage: CheckoutPage;
+  explorePause: void;
 }
 
 export const test = base.extend<AppFixtures>({
@@ -23,6 +24,15 @@ export const test = base.extend<AppFixtures>({
   checkoutPage: async ({ page }, use) => {
     await use(new CheckoutPage(page));
   },
+  explorePause: [
+    async ({ page }, use) => {
+      await use();
+      if (!process.env.CI && process.env.PW_PAUSE_FOR_EXPLORE === '1') {
+        await page.pause();
+      }
+    },
+    { auto: true },
+  ],
 });
 
 export { expect };

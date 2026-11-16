@@ -9,6 +9,10 @@ try {
 }
 
 const hasAuthSetup = fs.existsSync('tests/auth.setup.ts');
+const exploreCdpPort =
+  !process.env.CI && /^\d{4,5}$/.test(process.env.EXPLORE_CDP_PORT || '')
+    ? Number(process.env.EXPLORE_CDP_PORT)
+    : undefined;
 
 export default defineConfig({
   testDir: './tests',
@@ -37,7 +41,12 @@ export default defineConfig({
     ...(hasAuthSetup ? [{ name: 'setup', testMatch: /.*\.setup\.ts/ }] : []),
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        ...(exploreCdpPort
+          ? { launchOptions: { args: [`--remote-debugging-port=${exploreCdpPort}`] } }
+          : {}),
+      },
       ...(hasAuthSetup ? { dependencies: ['setup'] } : {}),
     },
     {
