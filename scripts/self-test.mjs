@@ -1331,5 +1331,33 @@ test('13. analyze-coverage --summary/--squad and audit-solid --squad produce tok
   assert.equal(squadAuditRes.status, 0, `audit-solid --squad failed: ${squadAuditRes.stderr}`);
 });
 
+test('14. audit-solid detects orphaned skill references and sync preserves local-overrides.md', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-skill-retention-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://app.example.com', '--name', 'RetentionApp']);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
 
+    const refsDir = path.join(tmpDir, '.agents/skills/01-cli-explorer/references');
+    const overridePath = path.join(refsDir, 'local-overrides.md');
+    const customOverride = '# Team Local Overrides\nAlways use tenant X-Test-Org header.\n';
+    fs.writeFileSync(overridePath, customOverride, 'utf8');
 
+    // local-overrides.md must NOT trigger [Orphaned Skill Reference]
+    const passAudit = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(passAudit.status, 0, `Expected audit:solid to ignore local-overrides.md, got:\n${passAudit.stderr}`);
+
+    // sync must preserve local-overrides.md
+    const syncRes = runNode(SYNC_SCRIPT, ['sync', tmpDir]);
+    assert.equal(syncRes.status, 0, `sync failed: ${syncRes.stderr}`);
+    assert.equal(fs.readFileSync(overridePath, 'utf8'), customOverride, 'Expected sync to preserve local-overrides.md');
+
+    // Unindexed reference file MUST trigger [Orphaned Skill Reference]
+    fs.writeFileSync(path.join(refsDir, 'unindexed-guide.md'), '# Unindexed\n', 'utf8');
+    const failAudit = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(failAudit.status, 1, 'Expected audit:solid to fail on unindexed reference file');
+    assert.match(failAudit.stderr, /\[Orphaned Skill Reference\]/);
+    assert.match(failAudit.stderr, /unindexed-guide\.md/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

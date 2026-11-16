@@ -70,6 +70,19 @@ for (const file of skillFiles) {
       `[NFR Token Budget] ${rel(file)} is ~${estimatedTokens} tokens (max ${MAX_SKILL_TOKENS}). Move detailed templates to references/.`
     );
   }
+
+  const refsDir = path.join(path.dirname(file), 'references');
+  if (fs.existsSync(refsDir)) {
+    for (const refFile of walkFiles(refsDir, '.md')) {
+      const refName = path.basename(refFile);
+      if (refName === 'local-overrides.md') continue;
+      if (!content.includes(refName)) {
+        violations.push(
+          `[Orphaned Skill Reference] ${rel(refFile)} is not indexed in ${rel(file)}. Link every reference file from SKILL.md so progressive disclosure never loses knowledge.`
+        );
+      }
+    }
+  }
 }
 
 // 1b. Audit 3-Tier Federated Domain Memory (Tier 0 Hub + Tier 1 Squad Hubs + Tier 2 Shards <= 150 lines)

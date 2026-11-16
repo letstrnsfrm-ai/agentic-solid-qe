@@ -267,6 +267,11 @@ function copyRecursive(src, dest, { overwrite = true } = {}) {
       copyRecursive(path.join(src, entry), path.join(dest, entry), { overwrite });
     }
   } else {
+    const normalizedDest = dest.replace(/\\/g, '/');
+    if (normalizedDest.endsWith('/references/local-overrides.md') && fs.existsSync(dest)) {
+      console.log(`🛡️  Preserved local override: ${rel(dest)}`);
+      return;
+    }
     if (!overwrite && fs.existsSync(dest)) {
       console.log(`⏭️  Skipped existing: ${rel(dest)}`);
       return;
