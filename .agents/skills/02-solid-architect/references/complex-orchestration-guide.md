@@ -253,3 +253,25 @@ Teams that already have `agentic-solid-qe` enabled in their repositories receive
    npx cortex sync --squad agent-portal
    npm run verify
    ```
+
+---
+
+## 5. Pattern D: Point-to-Point Handoffs (`resumesFrom`) for Huge Flows
+
+When `npm run coverage:gaps` flags a tape in `handoffRecommendations[]`, split it into Point-A ➔ Point-B segments instead of duplicating long UI preambles:
+
+```json
+"resumesFrom": {
+  "scenarioId": "motor-quote-part-1",
+  "specFile": "tests/motor-quote-part-1.spec.ts",
+  "resumeStep": "Payment and policy issuance",
+  "handoffStrategy": "api-seed",
+  "seedClientRef": "MotorQuoteApiClient.seedRatedQuote()"
+}
+```
+
+`compile-tape.mjs` compiles `resumesFrom` into a Playwright `test.info().annotations` lineage marker plus a `test.step(...)` fast-forward preamble:
+- `api-seed`: invokes `seedClientRef` via the injected `ApiClientContract` fixture.
+- `checkpoint-state`: restores cookies & variables from `.exploratory/checkpoints/<scenarioId>.json` (gitignored).
+- `ui-prereq`: records Point-A ➔ Point-B lineage and `resumeStep` for `npm run test:explore` / `playwright-cli attach`.
+

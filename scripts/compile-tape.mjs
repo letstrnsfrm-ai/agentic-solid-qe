@@ -1383,6 +1383,66 @@ export { expect };
       }
     }
 
+    const extraNodeImports = [];
+    let resumesFromPreamble = '';
+    if (tape.resumesFrom && typeof tape.resumesFrom === 'object') {
+      const rf = tape.resumesFrom;
+      const strategy =
+        rf.handoffStrategy ||
+        (rf.checkpointPath ? 'checkpoint-state' : rf.seedClientRef ? 'api-seed' : 'ui-prereq');
+      const parentLabel = sanitizeCodeComment(rf.scenarioId || rf.specFile || 'point-a');
+      const annotationDesc = `${parentLabel} (${strategy}${rf.resumeStep ? `: ${sanitizeCodeComment(rf.resumeStep)}` : ''})`;
+
+      if (strategy === 'checkpoint-state') {
+        extraNodeImports.push("import fs from 'node:fs';", "import path from 'node:path';");
+        if (!injectedFixtures.includes('context')) {
+          injectedFixtures.push('context');
+        }
+        const safeCheckpointRel =
+          rf.checkpointPath ||
+          `.exploratory/checkpoints/${String(rf.scenarioId || 'point-a').replace(/[^a-z0-9-]/g, '-')}.json`;
+        resumesFromPreamble = `    test.info().annotations.push({ type: 'resumesFrom', description: ${JSON.stringify(annotationDesc)} });
+    await test.step(${JSON.stringify(`Restore Point-A checkpoint state (${parentLabel})`)}, async () => {
+      const checkpointFile = path.resolve(process.cwd(), ${JSON.stringify(safeCheckpointRel)});
+      if (!fs.existsSync(checkpointFile)) {
+        throw new Error(${JSON.stringify(`Missing Point-A checkpoint state at ${safeCheckpointRel}. Run the parent spec or 'npm run test:explore' first.`)});
+      }
+      const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8')) as {
+        cookies?: Parameters<typeof context.addCookies>[0];
+        variables?: Record<string, string>;
+      };
+      if (Array.isArray(checkpoint.cookies) && checkpoint.cookies.length > 0) {
+        await context.addCookies(checkpoint.cookies);
+      }
+      void checkpoint.variables;
+    });\n\n`;
+      } else if (strategy === 'api-seed') {
+        const parsedSeed = rf.seedClientRef ? parseBuilderRef(rf.seedClientRef) : null;
+        let seedCallStmt = `// Seed prerequisite state for ${parentLabel} via ApiClientContract`;
+        if (parsedSeed) {
+          const apiDesc = apiClientImports.get(parsedSeed.className);
+          if (apiDesc) {
+            if (!injectedFixtures.includes(apiDesc.fixtureProp)) {
+              injectedFixtures.push(apiDesc.fixtureProp);
+            }
+            const methodPart = parsedSeed.callExpression.slice(parsedSeed.className.length + 1);
+            seedCallStmt = `await ${apiDesc.fixtureProp}.${methodPart};`;
+          } else {
+            seedCallStmt = `await ${parsedSeed.callExpression};`;
+          }
+        }
+        resumesFromPreamble = `    test.info().annotations.push({ type: 'resumesFrom', description: ${JSON.stringify(annotationDesc)} });
+    await test.step(${JSON.stringify(`Seed Point-A prerequisite state via API (${parentLabel})`)}, async () => {
+      ${seedCallStmt}
+    });\n\n`;
+      } else {
+        resumesFromPreamble = `    test.info().annotations.push({ type: 'resumesFrom', description: ${JSON.stringify(annotationDesc)} });
+    await test.step(${JSON.stringify(`Resume from Point-A prerequisite (${parentLabel})`)}, async () => {
+      // Prerequisite spec: ${sanitizeCodeComment(rf.specFile || rf.scenarioId || 'point-a')}
+    });\n\n`;
+      }
+    }
+
     const personaCall =
       parseBuilderRef(tape.persona?.dataBuilderRef)?.callExpression || null;
     const personaPreamble = personaCall ? `    const persona = ${personaCall};\n    void persona;\n` : '';
@@ -1396,11 +1456,12 @@ export { expect };
       return `    await test.step(${JSON.stringify(group.title)}, async () => {\n${body}\n    });`;
     });
 
-    const specCode = `import { test, expect } from '${fixtureAlias}';
+    const nodeImportsBlock = extraNodeImports.length > 0 ? extraNodeImports.join('\n') + '\n' : '';
+    const specCode = `${nodeImportsBlock}import { test, expect } from '${fixtureAlias}';
 ${builderImportLines ? builderImportLines + '\n' : ''}
 test.describe(${JSON.stringify(`${tape.title} [${tagsSuffix}] (Compiled from Session Tape: ${scenarioId})`)}, () => {
   test(${JSON.stringify(`${tape.title} ${tagsSuffix}`)}, async ({ ${injectedFixtures.join(', ')} }) => {
-${personaPreamble}${capturedVarsPreamble}${stepBlocks.join('\n\n')}
+${personaPreamble}${capturedVarsPreamble}${resumesFromPreamble}${stepBlocks.join('\n\n')}
   });
 });
 `;

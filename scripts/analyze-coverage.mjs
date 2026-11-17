@@ -106,6 +106,8 @@ for (const cf of apiClientFilePaths) {
 const discoveredApiContracts = [];
 const unimplementedApiClientSet = new Set();
 const missingAuthSessionSet = new Set();
+const handoffRecommendations = [];
+const MILESTONE_REGEX = /\b(checkout|submit|payment|order|quote|policy|claim|approve|create|register|confirm)\b/i;
 
 const tapeFiles = walkFiles(path.join(ROOT, '.exploratory/tapes'), '.json');
 const tapes = tapeFiles.map((f) => {
@@ -149,12 +151,66 @@ const tapes = tapeFiles.map((f) => {
       }
     }
 
+    const steps = Array.isArray(data.semanticSteps) ? data.semanticSteps : [];
+    const stepCount = steps.length;
+    const distinctRoutes = [
+      ...new Set(
+        steps
+          .map((s) => s.pageRoute || (s.action === 'goto' ? s.locatorContract?.value : null))
+          .filter(Boolean)
+      ),
+    ];
+    const distinctPortals = [
+      ...new Set(steps.map((s) => s.portalUrl).filter(Boolean)),
+    ];
+    let milestoneStepIndex = 0;
+    for (let idx = 0; idx < steps.length - 1; idx++) {
+      const s = steps[idx];
+      if (
+        s.capturesVariable ||
+        s.action === 'apiCall' ||
+        MILESTONE_REGEX.test(`${s.intent || ''} ${s.businessStep || ''}`)
+      ) {
+        milestoneStepIndex = s.stepIndex || idx + 1;
+      }
+    }
+
+    const splitReasons = [];
+    if (stepCount >= 10) splitReasons.push(`stepCount=${stepCount} (>= 10)`);
+    if (distinctRoutes.length >= 3) splitReasons.push(`distinctRoutes=${distinctRoutes.length} (>= 3)`);
+    if (distinctPortals.length >= 2 || (Array.isArray(data.actors) && data.actors.length >= 2)) {
+      splitReasons.push('cross-portal/multi-actor boundary');
+    }
+    if (milestoneStepIndex > 0 && stepCount >= 6) {
+      splitReasons.push(`state-creation milestone at step ${milestoneStepIndex}`);
+    }
+
+    if (!data.resumesFrom && splitReasons.length > 0) {
+      const suggestedSplitStep =
+        milestoneStepIndex > 0 ? Math.min(milestoneStepIndex + 1, stepCount) : Math.ceil(stepCount / 2) + 1;
+      const hasApiSignals =
+        (Array.isArray(data.networkContracts) && data.networkContracts.length > 0) ||
+        steps.some((s) => s.action === 'apiCall');
+      const recommendedHandoffStrategy = hasApiSignals ? 'api-seed' : 'checkpoint-state';
+      handoffRecommendations.push({
+        scenarioId,
+        stepCount,
+        distinctRoutesCount: distinctRoutes.length,
+        reasons: splitReasons,
+        suggestedSplitStep,
+        recommendedHandoffStrategy,
+        suggestedNextAction: `Split '${scenarioId}' at step ${suggestedSplitStep} into '${scenarioId}-part-1' -> '${scenarioId}-part-2' with resumesFrom ({ scenarioId: '${scenarioId}-part-1', handoffStrategy: '${recommendedHandoffStrategy}' }) or run 'npm run test:explore' to attach at Point B.`,
+      });
+    }
+
     return {
       scenarioId,
       charter: data.charter,
       persona: data.persona?.role,
       actors: Array.isArray(data.actors) ? data.actors.map((a) => a.actorId) : [],
       apiContractCount: Array.isArray(data.networkContracts) ? data.networkContracts.length : 0,
+      stepCount,
+      resumesFrom: data.resumesFrom || null,
       title: data.title,
       compiledToSpec: matchingSpec ? matchingSpec.file : null,
     };
@@ -328,6 +384,10 @@ const upgradeStatus = {
   pendingUpgradePatches,
 };
 
+const scopedHandoffRecommendations = handoffRecommendations.filter(
+  (h) => !filterSquad || matchSquad(h.scenarioId)
+);
+
 const isCompact = !forceFull && (forceSummary || scopedSpecs.length + scopedTapes.length > 25);
 
 const report = isCompact
@@ -357,11 +417,13 @@ const report = isCompact
         apiClients: apiClients.length,
         openDefects: openDefects.length,
         pendingUpgradePatches: pendingUpgradePatches.length,
+        handoffRecommendations: scopedHandoffRecommendations.length,
       },
       topUncoveredShards: scopedUncovered.slice(0, 10),
       topUncompiledTapes: scopedUncompiled.slice(0, 10),
       topStaleShards: scopedStale.slice(0, 10),
       topOpenDefects: openDefects.slice(0, 10),
+      topHandoffRecommendations: scopedHandoffRecommendations.slice(0, 5),
       nextSingleScenarioToAutomate,
       recommendedNextAction,
     }
@@ -387,6 +449,7 @@ const report = isCompact
       uncoveredShards: scopedUncovered,
       recordedSessionTapes: scopedTapes,
       uncompiledTapes: scopedUncompiled,
+      handoffRecommendations: scopedHandoffRecommendations,
       discoveredApiContracts,
       unimplementedApiClients,
       nextSingleScenarioToAutomate,

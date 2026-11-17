@@ -52,11 +52,16 @@ const VALID_PARENT_SCOPE_KEYS = new Set(
 );
 const VALID_NETWORK_KEYS = new Set(Object.keys(schema.properties.networkContracts.items.properties));
 const VALID_STATE_KEYS = new Set(Object.keys(schema.properties.expectedStates.items.properties));
+const VALID_RESUMES_FROM_KEYS = new Set(Object.keys(schema.properties.resumesFrom.properties));
+const VALID_HANDOFF_STRATEGIES = new Set(
+  schema.properties.resumesFrom.properties.handoffStrategy.enum
+);
 
 export const SAFE_MEMBER_REF_REGEX = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*(\(\))?)*$/;
 export const SAFE_CLASS_NAME_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const SAFE_JSON_PATH_REGEX = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 export const SAFE_STORAGE_STATE_REGEX = /^\.auth\/[a-z0-9_-]+\.json$/;
+export const SAFE_CHECKPOINT_PATH_REGEX = /^\.exploratory\/checkpoints\/[a-z0-9-]+\.json$/;
 export const FORBIDDEN_IDENTIFIERS = new Set([
   '__proto__',
   'prototype',
@@ -248,6 +253,61 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
   if (tape.tags !== undefined) {
     if (!Array.isArray(tape.tags) || tape.tags.some((t) => typeof t !== 'string' || !/^@[a-z0-9-]+$/.test(t))) {
       errors.push(`[${file}] tags must be an array of '@kebab-case' strings (e.g. '@p0', '@smoke').`);
+    }
+  }
+
+  if (tape.resumesFrom !== undefined) {
+    if (!tape.resumesFrom || typeof tape.resumesFrom !== 'object' || Array.isArray(tape.resumesFrom)) {
+      errors.push(`[${file}] resumesFrom must be an object when provided.`);
+    } else {
+      const rf = tape.resumesFrom;
+      checkUnknownKeys(rf, VALID_RESUMES_FROM_KEYS, `[${file} resumesFrom]`, errors);
+      if (rf.scenarioId !== undefined) {
+        if (typeof rf.scenarioId !== 'string' || !/^[a-z0-9-]+$/.test(rf.scenarioId)) {
+          errors.push(`[${file}] Invalid resumesFrom.scenarioId '${rf.scenarioId}'. Must match ^[a-z0-9-]+$.`);
+        } else if (rf.scenarioId === tape.scenarioId) {
+          errors.push(`[${file}] resumesFrom.scenarioId '${rf.scenarioId}' cannot reference itself.`);
+        }
+      }
+      if (rf.specFile !== undefined) {
+        if (
+          typeof rf.specFile !== 'string' ||
+          !rf.specFile.trim() ||
+          rf.specFile.includes('..') ||
+          path.isAbsolute(rf.specFile) ||
+          !/^tests\/[a-zA-Z0-9_./-]+\.spec\.ts$/.test(rf.specFile)
+        ) {
+          errors.push(
+            `[${file}] Invalid resumesFrom.specFile '${rf.specFile}'. Must be a safe relative path under tests/*.spec.ts.`
+          );
+        }
+      }
+      if (rf.resumeStep !== undefined && (typeof rf.resumeStep !== 'string' || rf.resumeStep.trim().length < 3)) {
+        errors.push(`[${file}] resumesFrom.resumeStep must be a string with at least 3 characters.`);
+      }
+      if (rf.handoffStrategy !== undefined && !VALID_HANDOFF_STRATEGIES.has(rf.handoffStrategy)) {
+        errors.push(
+          `[${file}] Invalid resumesFrom.handoffStrategy '${rf.handoffStrategy}'. Must be one of: api-seed, checkpoint-state, ui-prereq.`
+        );
+      }
+      if (rf.seedClientRef !== undefined && !isSafeMemberRef(rf.seedClientRef)) {
+        errors.push(
+          `[${file}] Invalid resumesFrom.seedClientRef '${rf.seedClientRef}'. Must be a safe ApiClient/Builder member reference.`
+        );
+      }
+      if (
+        rf.checkpointPath !== undefined &&
+        (typeof rf.checkpointPath !== 'string' || !SAFE_CHECKPOINT_PATH_REGEX.test(rf.checkpointPath))
+      ) {
+        errors.push(
+          `[${file}] Invalid resumesFrom.checkpointPath '${rf.checkpointPath}'. Must match .exploratory/checkpoints/<scenario-id>.json.`
+        );
+      }
+      if (rf.handoffStrategy === 'api-seed' && !rf.seedClientRef && !rf.scenarioId) {
+        errors.push(
+          `[${file}] resumesFrom with handoffStrategy 'api-seed' requires either seedClientRef or scenarioId.`
+        );
+      }
     }
   }
 

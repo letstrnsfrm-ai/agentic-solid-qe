@@ -110,6 +110,21 @@ While traversing any feature flow, automatically evaluate four quality dimension
 
 ---
 
+## 3d. Point-to-Point Segmentation & Handoff Recommendations
+
+Avoid re-running huge 10+ step flows from Step 1 during exploration or CI. `npm run coverage:gaps` (`analyze-coverage.mjs`) automatically flags oversized unsegmented tapes in `handoffRecommendations[]` when any of these signals trigger:
+- `semanticSteps >= 10`
+- `>= 3` distinct `pageRoute` transitions
+- Cross-portal / multi-actor boundary (`actors.length >= 2` or `>= 2` distinct `portalUrl`s)
+- State-creation milestone (`capturesVariable`, `apiCall`, or checkout/submit/quote/policy/claim milestone) with `>= 6` total steps
+
+When flagged (or when resuming from Point A via `npm run test:explore` + `playwright-cli attach`), emit a Point-B Session Tape with `resumesFrom`:
+- **`api-seed` (Fastest):** Set `handoffStrategy: "api-seed"` and `seedClientRef: "<ApiClient>.<seedMethod>()"` to create Point-A state via `ApiClientContract` before Point-B UI steps.
+- **`checkpoint-state`:** Set `handoffStrategy: "checkpoint-state"` and `checkpointPath: ".exploratory/checkpoints/<point-a-id>.json"` (gitignored) to restore saved cookies & captured variables.
+- **`ui-prereq`:** Set `handoffStrategy: "ui-prereq"` with `specFile` and `resumeStep` to document Point-A ➔ Point-B lineage in Playwright reports.
+
+---
+
 ## 4. Checkpoint 2: Post-Exploration Session Debrief & 1-Test-at-a-Time Selection Matrix
 
 Once feature exploration finishes, present this structured debrief so the Quality Engineer selects **1 critical scenario at a time** to compile and stabilize before moving to the next:

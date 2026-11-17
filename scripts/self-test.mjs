@@ -1577,5 +1577,146 @@ test('17. accessibility (toMatchAriaSnapshot) and visual-regression (toHaveScree
   }
 });
 
+test('18. Point-to-Point segmentation, handoffRecommendations, and resumesFrom compilation', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-handoff-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://shop.example.com', '--name', 'ShopApp']);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    // 1. Huge 10-step, 3-route tape triggers handoffRecommendations in analyze-coverage.mjs
+    const hugeSteps = Array.from({ length: 10 }, (_, idx) => ({
+      stepIndex: idx + 1,
+      intent: idx === 4 ? 'Submit quote for rating' : `Complete step ${idx + 1}`,
+      businessStep: idx < 5 ? 'Capture quote details' : 'Finalize policy payment',
+      pageRoute: idx < 3 ? '/step-1' : idx < 7 ? '/step-2' : '/step-3',
+      action: 'click',
+      componentCandidate: 'QuoteWizardComponent',
+      locatorContract: { strategy: 'getByRole', role: 'button', value: `Next ${idx + 1}`, nameExact: true },
+    }));
+    const hugeTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'huge-motor-flow',
+      title: 'Huge end-to-end motor flow',
+      charter: 'happy-path-baseline',
+      tags: ['@p0'],
+      recordedAt: '2026-11-17T10:00:00Z',
+      baseUrl: 'https://shop.example.com',
+      persona: { role: 'customer', dataBuilderRef: 'CustomerBuilder.standardCustomer' },
+      preconditions: ['Customer is logged in'],
+      semanticSteps: hugeSteps,
+      networkContracts: [],
+      expectedStates: [
+        {
+          description: 'Policy issued',
+          assertionType: 'toBeVisible',
+          targetComponent: 'quoteWizard',
+          targetProperty: 'root',
+          expectedValueRef: 'CustomerBuilder.expectedStatus',
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/huge-motor-flow.json'),
+      JSON.stringify(hugeTape, null, 2),
+      'utf8'
+    );
+
+    const covRes = runNode(path.join(tmpDir, 'scripts/analyze-coverage.mjs'), [], tmpDir);
+    assert.equal(covRes.status, 0, `analyze-coverage failed: ${covRes.stderr}`);
+    const jsonStart = covRes.stdout.indexOf('{');
+    const covJson = JSON.parse(covRes.stdout.slice(jsonStart));
+    assert.equal(covJson.handoffRecommendations.length, 1);
+    assert.equal(covJson.handoffRecommendations[0].scenarioId, 'huge-motor-flow');
+    assert.equal(covJson.handoffRecommendations[0].recommendedHandoffStrategy, 'checkpoint-state');
+    assert.ok(covJson.handoffRecommendations[0].suggestedSplitStep >= 5);
+
+    // 2. Segmented Point-B tape with checkpoint-state handoff validates and compiles cleanly
+    const checkpointTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'motor-payment-part-2',
+      title: 'Motor payment resumed from checkpoint',
+      charter: 'happy-path-baseline',
+      tags: ['@p0', '@smoke'],
+      recordedAt: '2026-11-17T10:05:00Z',
+      baseUrl: 'https://shop.example.com',
+      persona: { role: 'customer', dataBuilderRef: 'CustomerBuilder.standardCustomer' },
+      resumesFrom: {
+        scenarioId: 'huge-motor-flow',
+        specFile: 'tests/huge-motor-flow.spec.ts',
+        resumeStep: 'Finalize policy payment',
+        handoffStrategy: 'checkpoint-state',
+        checkpointPath: '.exploratory/checkpoints/huge-motor-flow.json',
+      },
+      preconditions: ['Point-A checkpoint state captured'],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Confirm policy payment',
+          businessStep: 'Confirm policy payment',
+          action: 'click',
+          componentCandidate: 'PaymentSummaryComponent',
+          locatorContract: { strategy: 'getByRole', role: 'button', value: 'Pay Now', nameExact: true },
+        },
+      ],
+      networkContracts: [],
+      expectedStates: [
+        {
+          description: 'Confirmation banner visible',
+          businessStep: 'Confirm policy payment',
+          assertionType: 'toBeVisible',
+          targetComponent: 'paymentSummary',
+          targetProperty: 'root',
+          expectedValueRef: 'CustomerBuilder.expectedStatus',
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/motor-payment-part-2.json'),
+      JSON.stringify(checkpointTape, null, 2),
+      'utf8'
+    );
+
+    const validateRes = runNode(path.join(tmpDir, 'scripts/validate-tapes.mjs'), [], tmpDir);
+    assert.equal(validateRes.status, 0, `validate-tapes failed: ${validateRes.stderr}`);
+
+    const compileRes = runNode(
+      path.join(tmpDir, 'scripts/compile-tape.mjs'),
+      ['motor-payment-part-2', '--apply'],
+      tmpDir
+    );
+    assert.equal(compileRes.status, 0, `compile-tape failed: ${compileRes.stderr}\n${compileRes.stdout}`);
+
+    const specContent = fs.readFileSync(path.join(tmpDir, 'tests/motor-payment-part-2.spec.ts'), 'utf8');
+    assert.match(specContent, /test\.info\(\)\.annotations\.push\(\{ type: 'resumesFrom'/);
+    assert.match(specContent, /Restore Point-A checkpoint state \(huge-motor-flow\)/);
+    assert.match(specContent, /\.exploratory\/checkpoints\/huge-motor-flow\.json/);
+
+    // 3. Invalid self-referencing resumesFrom or bad checkpointPath is rejected by validate-tapes
+    const invalidTape = {
+      ...checkpointTape,
+      scenarioId: 'bad-handoff',
+      resumesFrom: {
+        scenarioId: 'bad-handoff',
+        handoffStrategy: 'checkpoint-state',
+        checkpointPath: '../outside.json',
+      },
+    };
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/bad-handoff.json'),
+      JSON.stringify(invalidTape, null, 2),
+      'utf8'
+    );
+    const badValidate = runNode(path.join(tmpDir, 'scripts/validate-tapes.mjs'), [], tmpDir);
+    assert.notEqual(badValidate.status, 0, 'validate-tapes must reject self-referencing/traversal resumesFrom');
+    fs.rmSync(path.join(tmpDir, '.exploratory/tapes/bad-handoff.json'));
+
+    const auditRes = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(auditRes.status, 0, `audit-solid failed: ${auditRes.stderr}`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+
 
 

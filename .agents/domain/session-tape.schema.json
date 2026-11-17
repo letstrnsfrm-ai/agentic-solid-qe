@@ -117,12 +117,27 @@
     },
     "resumesFrom": {
       "type": "object",
-      "description": "Optional Point-A prerequisite spec or parent Session Tape from which this scenario resumed exploration via playwright-cli attach.",
+      "description": "Optional Point-A prerequisite spec or parent Session Tape from which this scenario resumed exploration via playwright-cli attach or API/checkpoint handoff.",
       "additionalProperties": false,
       "properties": {
         "scenarioId": { "type": "string", "pattern": "^[a-z0-9-]+$" },
         "specFile": { "type": "string", "minLength": 1 },
-        "resumeStep": { "type": "string", "minLength": 3 }
+        "resumeStep": { "type": "string", "minLength": 3 },
+        "handoffStrategy": {
+          "type": "string",
+          "enum": ["api-seed", "checkpoint-state", "ui-prereq"],
+          "description": "Strategy used to fast-forward Point-A state without re-running the entire UI flow."
+        },
+        "seedClientRef": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*(\\(\\))?)*$",
+          "description": "ApiClientContract or Data Builder reference invoked when handoffStrategy is 'api-seed' (e.g., QuoteApiClient.seedApprovedQuote())."
+        },
+        "checkpointPath": {
+          "type": "string",
+          "pattern": "^\\.exploratory/checkpoints/[a-z0-9-]+\\.json$",
+          "description": "Relative path to a saved checkpoint state file (.exploratory/checkpoints/<scenarioId>.json) used when handoffStrategy is 'checkpoint-state'."
+        }
       }
     },
     "capturedVariables": {
