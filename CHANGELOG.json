@@ -1,7 +1,20 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.23.0",
+  "latestVersion": "0.24.0",
   "releases": [
+    {
+      "version": "0.24.0",
+      "date": "2026-11-17",
+      "highlights": [
+        "Incremental Java & C# (.NET) Legacy Test Migration (`05-skill-migrator` + `migrate:skill --discover` / `--legacy`): Auto-installs side-by-side in `e2e-playwright/` on `init .`, ranks Selenium UI & RestAssured/RestSharp/HttpClient API tests into Waves 1–3, decomposes monoliths into atomic slices, bridges into Session Tapes, and tracks parity in `.agents/domain/migration-manifest.json`.",
+        "1,000+ Test Scale Guardrails (`audit:solid` & `validate:tapes`): Enforces Page (<=250), Fixture (<=200), Builder (<=200), and spec (`<=10` tests/file) caps, required CI tags, `test.only`/`waitForTimeout`/`networkidle` bans, Tier-1 squad hub thresholds, stale/duplicate route warnings, duplicate `scenarioId` rejection, and fast local `verify` (`test:smoke`) vs. `test:regression`.",
+        "Accessibility & Visual Regression Charters (`toMatchAriaSnapshot` & `toHaveScreenshot`) plus Point-to-Point `resumesFrom` segmentation and `handoffRecommendations`."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync the v0.24.0 skills, scale guardrails, and Java/C# legacy test migrator.",
+        "Inside a Java or C# repo, run `npm run migrate:skill -- --discover` to rank Wave 1–3 legacy tests for incremental migration."
+      ]
+    },
     {
       "version": "0.23.0",
       "date": "2026-11-17",
