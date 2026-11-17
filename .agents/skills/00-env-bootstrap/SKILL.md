@@ -22,4 +22,4 @@ For SSO, MFA, or multi-step login (invoke `/playwright-cli` for full CLI command
 ## 3. Unfamiliar App Navigation & Mandatory Shard Seeding
 1. After SPA load, run `npx playwright-cli -s=auth snapshot --filename=.playwright-cli/page-landing.yml` and inspect landmarks (`navigation`, `banner`, `main`, links).
 2. Scaffold initial feature shards in `.agents/domain/shards/<feature>.md` (≤ 150 lines) and register them in `domain-memory.md`, then run `npm run domain:graph`.
-3. Close the session (`npx playwright-cli -s=auth close`) and ask which discovered feature to explore via `/01-cli-explorer`.
+3. Close the session (`npx playwright-cli -s=auth close`) and ask the human which discovered feature to prioritize so the agent can execute `01-cli-explorer` (or return to `00-master-orchestrator`).

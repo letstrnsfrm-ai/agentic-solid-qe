@@ -59,12 +59,13 @@ flowchart LR
 
 ## Master Orchestrator Entry Point (`/00-master-orchestrator`) & 5-Stage Incremental Coverage Progression
 
-Whether you are a human engineer or an AI agent entering a repository for the first time, invoke **`/00-master-orchestrator`** (or `/master-orchestrator` / `npx cortex orchestrate`) as your single entry point.
+> **Operating Model — Human = Direction & Review; Agent = Autonomous Execution:**  
+> Humans should **never** need to manually edit generated `src/` SOLID files, Session Tapes, or run routine test/healing commands. Simply invoke **`/00-master-orchestrator`** (or state your QE goal in plain language) to steer priorities and review results — your AI agent executes everything end-to-end via the underlying skills.
 
 ### What `/00-master-orchestrator` Does Automatically
 1. **Runs Live Project Diagnostics:** Executes `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`, and reads `.agents/domain/domain-memory.md` + the [Master Orchestration Playbook](./.agents/skills/00-master-orchestrator/references/master-orchestration-playbook.md).
-2. **Explains All Framework Capabilities:** Maps your team's needs across all skills (`/00-env-bootstrap` through `/05-skill-migrator`), SOLID contracts (`IdentifiableComponent`, `ErrorBannerContract`, `WizardStepContract`, `ApiClientContract`), shared utilities (`AuthTokenBridge`, `RelativeDateHelper`), and the 3-Tier Federated Brain (`--squad`, `--org-brain`).
-3. **Presents a Project Maturity & Next-Action Blueprint:** Classifies the repository into its **Onboarding Track (Tracks 1–4)** and current **Coverage Maturity Stage (`Stage 0`–`Stage 4`)**, and recommends the **single next command** to run.
+2. **Autonomously Executes the Right Skill Chain:** Routes your intent (`Grow Coverage`, `Run & Fix Tests`, `Migrate Legacy`, `Setup/Auth`, `CI/Release`) through `00-env-bootstrap` → `01-cli-explorer` → `02-solid-architect` → `03-drift-healer` → `04-ci-pipeline` → `05-skill-migrator` and runs `npm run verify`.
+3. **Pauses Only at Human Review Gates:** Stops only when you need to pick 1 scenario from the Debrief Matrix, confirm ambiguous app bugs vs. UI drift, approve a legacy migration wave, or complete interactive MFA/CAPTCHA.
 
 ### The 5-Stage Incremental Coverage Ladder (`1 Test at a Time`)
 

@@ -124,8 +124,8 @@ Whenever `/00-master-orchestrator` runs, present this concise summary to the use
   - **SOLID Suite:** `<C>` Components, `<W>` Wizard Steps, `<G>` Pages, `<A>` API Clients, `<B>` Data Builders, `<X>` Specs
   - **Legacy Artifacts Discovered:** `<L>` unmigrated prompts/skills/scripts, `<D>` open defects
 
-#### 🎯 Recommended Next Step (1 Test at a Time)
-1. **Primary Action:** `<Exact /skill or npx cortex command>`
+#### 🎯 Autonomous Agent Action & Human Review Gate (1 Test at a Time)
+1. **Agent Executing Now:** `<Sub-skill / CLI chain the agent is running autonomously>`
 2. **Why Now:** `<1-sentence explanation tied to current maturity stage>`
-3. **Next Incremental Milestone:** `<What unlocks after this step passes npm run verify>`
+3. **Human Review Gate:** `<Exact decision/approval needed from the human, or "None — reporting verified results">`
 ```

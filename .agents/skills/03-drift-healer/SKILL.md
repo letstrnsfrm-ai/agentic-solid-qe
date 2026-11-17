@@ -16,7 +16,7 @@ When invoked as `/03-drift-healer`:
 3. Compare live UI, wizard steps, `.auth/<persona>.json` validity, and API responses against the Session Tape.
 
 ## 3. 7-Way Root-Cause Classification & Action (`references/healing-playbook.md`)
-Present the diagnosis to the engineer:
-- **Case A — Genuine App Regression / Business Logic Defect:** Never weaken assertions. Capture `playwright-cli screenshot`, log `defects/DEFECT-<timestamp>.md`, and annotate with `test.fixme()` / `test.fail()`.
-- **Case B — Expired `.auth/<persona>.json` Session (`401/403`):** Re-capture persona auth via `/00-env-bootstrap` before modifying code.
-- **Case C — UI Locator, Conditional Wizard (`WizardStepContract`), Backend API Seeder (`ApiClientContract`), or 3rd-Party Sandbox Drift:** Upon confirmation, heal `.exploratory/tapes/<scenarioId>.json`, `src/`, and Domain Shards, then run `npm run verify`.
+Present diagnosis for human review (auto-heal clear drift):
+- **Case A — App Regression:** Never weaken assertions. Capture `playwright-cli screenshot`, log `defects/DEFECT-<timestamp>.md`, mark `test.fixme()`/`test.fail()`.
+- **Case B — Expired `.auth/<persona>.json` (`401/403`):** Re-capture auth via `00-env-bootstrap` (pause only for MFA/CAPTCHA).
+- **Case C — UI/Wizard/API/Sandbox Drift:** Heal tape, `src/`, and Shards autonomously, then run `npm run verify`.

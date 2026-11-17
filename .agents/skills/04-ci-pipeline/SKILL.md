@@ -20,4 +20,4 @@ When invoked as `/04-ci-pipeline`, immediately execute:
 1. Inspect or scaffold `.github/workflows/playwright-ci.yml` or `.azure-pipelines/playwright-ci.yml` (`references/ci-templates.md`) with:
    - Pre-flight quality gates (`npm run typecheck`, `npm run audit:solid`, `npm run validate:tapes`).
    - Affected-PR smoke routing (`--only-changed`), sharded `--shard` matrix with `PW_BLOB_REPORT=1`, and `playwright merge-reports --reporter=html`.
-2. Run `npm run verify` to confirm 100% pipeline readiness.
+2. Run `npm run verify` autonomously and present the CI workflow summary for human review.

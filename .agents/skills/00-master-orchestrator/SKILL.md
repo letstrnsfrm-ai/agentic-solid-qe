@@ -1,20 +1,26 @@
 ---
 name: 00-master-orchestrator
-description: Master Orchestrator and entry-point advisor for Agentic-SOLID-QE. Diagnoses project state, explains all skills/features, recommends onboarding tracks, and guides users or AI agents through the 5-Stage Incremental Coverage Ladder. Invoke /00-master-orchestrator or /master-orchestrator anytime.
+description: Autonomous single entry point for Agentic-SOLID-QE. Human gives direction and reviews; the agent executes diagnostics, test runs, coverage growth, compilation, drift healing, and CI setup via sub-skills.
 ---
 
-# Skill 00-Master: Master Orchestrator & Coverage Advisor
+# Skill 00-Master: Autonomous QE Orchestrator
 
-## 1. Zero-Prompt Auto-Start: Live Project Diagnostic
-When invoked as `/00-master-orchestrator` or `/master-orchestrator`, immediately:
+> **Operating Contract:** Human = **direction & review only** (never ask the human to edit generated files or run routine CLI/test commands). Agent = **autonomous executor** via sub-skills, pausing only at human review gates (`references/master-orchestration-playbook.md`).
+
+## 1. Auto-Start & Intent-to-Skill Execution
+On `/00-master-orchestrator` or any plain-language QE request:
 1. Run `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`.
-2. Read `.agents/domain/domain-memory.md` and `.agents/skills/00-master-orchestrator/references/master-orchestration-playbook.md`.
-3. Present the **Project Maturity & Next-Action Blueprint** (`Onboarding Track 1–4`, `coverageMaturityStage 0–4`, `upgradeStatus`, and exact next `/skill` or `npx cortex` command).
+2. Read `.agents/domain/domain-memory.md` and `references/master-orchestration-playbook.md`.
+3. Present a concise **Maturity & Execution Plan**, then **execute** the matching chain:
+   - **Setup/Auth:** `00-env-bootstrap` ➔ `domain:graph` *(pause only for MFA/CAPTCHA)*.
+   - **Grow Coverage:** `01-cli-explorer` ➔ *(human picks 1 scenario)* ➔ `02-solid-architect` ➔ `npm run verify`.
+   - **Run & Fix Tests:** `playwright test` ➔ `03-drift-healer` ➔ `npm run verify` *(pause only on ambiguous bug vs. drift)*.
+   - **Migrate Legacy:** `05-skill-migrator` ➔ *(human approves triage)* ➔ `02-solid-architect` ➔ `npm run verify`.
+   - **CI/Release:** `04-ci-pipeline` ➔ `npm run verify`.
 
-## 2. 5-Stage Incremental Coverage Ladder (`references/master-orchestration-playbook.md`)
-Advance automation coverage **1 test at a time**:
-1. **Stage 0 — Onboarding & Auth:** Run `npx cortex init` / `sync`, migrate legacy rules/scripts (`/05-skill-migrator`), and capture `.auth/<persona>.json` + route shards (`/00-env-bootstrap`).
-2. **Stage 1 — P0 Baseline (`@p0`):** Explore uncovered shards via `/01-cli-explorer` (`happy-path-baseline`), compile 1 tape via `/02-solid-architect <scenario>`, and run `npm run verify`.
-3. **Stage 2 — Persona & E2E Continuation (`@smoke` / `@regression`):** Layer `multi-persona-auth`, `boundary-analysis`, and `state-interruption` tapes, or resume from Point-A specs (`test:explore` + `attach`) for `B ➔ C` flows.
-4. **Stage 3 — Wizards, APIs & Multi-Portal:** Add `WizardStepContract`, `ApiClientContract` + `AuthTokenBridge`, and `cross-portal-handoff` flows.
-5. **Stage 4 — CI/CD & Drift Healing:** Curate sharded pipelines (`/04-ci-pipeline`) and heal live drift (`/03-drift-healer`).
+## 2. 5-Stage Coverage Ladder (`1 Test at a Time`)
+1. **Stage 0:** `init`/`sync`, `05-skill-migrator`, `00-env-bootstrap` (`.auth/*.json`).
+2. **Stage 1 (`@p0`):** `01-cli-explorer` ➔ `02-solid-architect` ➔ `verify`.
+3. **Stage 2 (`@smoke`/`@regression`):** `multi-persona-auth`, `boundary-analysis`, `state-interruption`.
+4. **Stage 3:** `WizardStepContract`, `ApiClientContract`, `cross-portal-handoff`.
+5. **Stage 4:** `04-ci-pipeline` + continuous `03-drift-healer`.

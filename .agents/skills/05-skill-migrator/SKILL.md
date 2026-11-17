@@ -27,6 +27,6 @@ Pause and present to the engineer:
 3. **Session Tape Bridge:** Draft `.exploratory/tapes/<id>.json` for live `@playwright/cli` verification and `/02-solid-architect` compilation.
 
 ## 3. Apply, Verify & Track Parity
-Upon engineer confirmation:
-1. Re-run with `--apply` (updates `.agents/domain/migration-manifest.json`).
-2. Verify live locators via `@playwright/cli` (if UI), compile via `npm run compile:tape`, and run `npm run verify`.
+Upon human approval, the agent executes:
+1. Re-run with `--apply` (writes tapes, SOLID scaffolds, and `migration-manifest.json`).
+2. Verify via `@playwright/cli` (if UI), compile via `02-solid-architect`, and run `npm run verify`.

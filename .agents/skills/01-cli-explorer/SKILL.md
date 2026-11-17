@@ -22,5 +22,5 @@ Traverse with multi-oracle checks (`references/charters.md`):
 - **Shards:** Update `.agents/domain/shards/<feature>.md` (≤ 150 lines).
 
 ## 4. Debrief & Tape Emission (FR-1.5)
-1. **Checkpoint 2:** Present the **Session Debrief Matrix** (`references/charters.md`).
-2. Extend parent tape (`B ➔ C`) or emit `.exploratory/tapes/<scenario-id>.json` (`resumesFrom`), run `npm run validate:tapes` + `npm run domain:graph -- --seed-from-tapes`, and hand off to `/02-solid-architect <scenario-id>`.
+1. **Checkpoint 2:** Present the **Session Debrief Matrix** (`references/charters.md`) for human selection.
+2. Emit/extend `.exploratory/tapes/<scenario-id>.json`, run `npm run validate:tapes` + `npm run domain:graph -- --seed-from-tapes`, and autonomously run `02-solid-architect` on `<scenario-id>`.

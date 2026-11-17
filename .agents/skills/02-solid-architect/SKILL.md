@@ -27,7 +27,7 @@ Run `npm run coverage:gaps`, select `<scenario-id>` (or `nextSingleScenarioToAut
   - Apply `tags` (`@p0`, `@smoke`, `@regression`) and assert `capturedVariables` across portals/APIs.
 
 ## 3. Self-Healing Verification Gate (FR-3.3)
-Run and heal until green:
+Heal autonomously until green, then report via `00-master-orchestrator`:
 ```bash
 npm run verify
 ```

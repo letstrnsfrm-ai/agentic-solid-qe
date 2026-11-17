@@ -1,18 +1,23 @@
 # AGENTS.md — Universal Agent Instructions (`agentic-solid-qe`)
 
-This repository uses a seven-skill, token-efficient Quality Engineering workflow powered by `@playwright/cli` and `@playwright/test`, led by the **`00-master-orchestrator`** entry point.
+This repository uses a seven-skill, token-efficient Quality Engineering workflow powered by `@playwright/cli` and `@playwright/test`, led by **`00-master-orchestrator`** as the single user-facing entry point.
+
+## Human-vs-Agent Operating Model (Direction & Review vs. Autonomous Execution)
+
+- **Human = Director & Reviewer:** Invokes `/00-master-orchestrator` (or states any QE goal in plain language), sets priorities, completes interactive MFA/CAPTCHA when gated, and reviews plans, defects, or PRs. **Never ask the human to manually edit generated SOLID files, Session Tapes, or run routine CLI/test/healing commands.**
+- **Agent = Autonomous Executor:** Routes all plain-language QE requests through `00-master-orchestrator` by default, executes diagnostics, test runs, `@playwright/cli` exploration, `compile:tape`, drift healing, and `npm run verify` end-to-end, and pauses only at explicit human decision/review gates.
 
 ## Skill Routing Table
 
 | Task Intent | Skill to Activate | Skill Path |
 | :--- | :--- | :--- |
-| **Master Entry Point:** Understand all framework skills/features, diagnose repo maturity, recommend an onboarding track, or plan how to incrementally increase automation coverage | `00-master-orchestrator` (`/00-master-orchestrator` or `/master-orchestrator`) | `.agents/skills/00-master-orchestrator/SKILL.md` |
-| Bootstrap target URL, capture reusable persona `storageState` auth sessions, or map top-level routes in an unfamiliar app | `00-env-bootstrap` | `.agents/skills/00-env-bootstrap/SKILL.md` |
-| Explore a feature, map multi-page flows, run API/state/a11y heuristics, triage defects, or curate Session Tapes | `01-cli-explorer` | `.agents/skills/01-cli-explorer/SKILL.md` |
-| Compile Session Tapes into SOLID Playwright TypeScript Components, Pages, Fixtures, Data Builders, and `.spec.ts` files | `02-solid-architect` | `.agents/skills/02-solid-architect/SKILL.md` |
-| Diagnose failing `.spec.ts` tests against live deployed environments to separate real regressions from UI/locator drift | `03-drift-healer` | `.agents/skills/03-drift-healer/SKILL.md` |
-| Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and configure sharded CI/CD pipelines | `04-ci-pipeline` | `.agents/skills/04-ci-pipeline/SKILL.md` |
-| Onboard legacy/unorganized team skills, prompts, and helper scripts into `<500`-token `SKILL.md` bundles and 3-Tier Domain Shards | `05-skill-migrator` | `.agents/skills/05-skill-migrator/SKILL.md` |
+| **Default Single Entry Point (All QE Requests):** Understand features, run tests, expand coverage, fix broken tests, migrate legacy suites, or set up CI | `00-master-orchestrator` (`/00-master-orchestrator` or `/master-orchestrator`) | `.agents/skills/00-master-orchestrator/SKILL.md` |
+| *(Internal / Shortcut)* Bootstrap target URL, capture reusable persona `storageState` auth sessions, or map top-level routes | `00-env-bootstrap` | `.agents/skills/00-env-bootstrap/SKILL.md` |
+| *(Internal / Shortcut)* Explore a feature, map multi-page flows, run API/state/a11y heuristics, triage defects, or curate Session Tapes | `01-cli-explorer` | `.agents/skills/01-cli-explorer/SKILL.md` |
+| *(Internal / Shortcut)* Compile Session Tapes into SOLID Playwright TypeScript Components, Pages, Fixtures, Data Builders, and `.spec.ts` files | `02-solid-architect` | `.agents/skills/02-solid-architect/SKILL.md` |
+| *(Internal / Shortcut)* Diagnose failing `.spec.ts` tests against live deployed environments to separate real regressions from UI/locator drift | `03-drift-healer` | `.agents/skills/03-drift-healer/SKILL.md` |
+| *(Internal / Shortcut)* Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and configure sharded CI/CD pipelines | `04-ci-pipeline` | `.agents/skills/04-ci-pipeline/SKILL.md` |
+| *(Internal / Shortcut)* Onboard legacy/unorganized team skills, prompts, Java/C# tests, and helper scripts into `<500`-token bundles & Session Tapes | `05-skill-migrator` | `.agents/skills/05-skill-migrator/SKILL.md` |
 | Live browser CLI syntax (`open`, `attach`, `snapshot`, `click`, `fill`, `route`, `state-save`) without `--help` round trips | `playwright-cli` | `.agents/skills/playwright-cli/SKILL.md` |
 
 ## AI-Guided Project Installation, Consumer Upgrade & Legacy Skill Migration Protocol
@@ -45,3 +50,4 @@ When a user asks how to install, upgrade, or adopt `agentic-solid-qe` in an exis
 6. **Always group `tests/*.spec.ts` actions and assertions into business-domain `await test.step('<Business behaviour>', ...)` blocks** (never UI mechanics like `click`, `fill`, `locator`, `button`) so Playwright HTML reports show business behaviour.
 7. **Before completing any code generation or healing task**, run `npm run verify` (`typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `playwright test`).
 8. **Lossless Skill Knowledge & Upgrade-Safe Overrides:** Keep every `.agents/skills/<skill>/SKILL.md` `≤ 500` tokens as a **Router + Reference Index**, store 100% of detailed templates/playbooks in `references/*.md` (verified by `audit:solid` `[Orphaned Skill Reference]` so no reference file is unindexed), and place team-specific skill customizations in `.agents/skills/<skill>/references/local-overrides.md` (preserved across `npx cortex sync`).
+9. **Never Offload Execution or Generated Code Edits to the Human:** The human directs priorities and reviews outcomes via `00-master-orchestrator`. The agent executes all test runs, coverage exploration, tape compilation, drift healing, and `npm run verify` gates autonomously, pausing only for scenario/triage approval or interactive MFA/CAPTCHA.
