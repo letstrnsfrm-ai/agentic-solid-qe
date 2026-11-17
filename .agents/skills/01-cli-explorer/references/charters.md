@@ -101,6 +101,15 @@ While traversing any feature flow, automatically evaluate four quality dimension
 
 ---
 
+## 3c. Non-Functional Charters: Accessibility & Visual Regression
+
+| Charter | `@playwright/cli` Exploration Oracle | Session Tape `expectedStates[]` Encoding |
+| :--- | :--- | :--- |
+| **`accessibility`** | Verify landmarks (`main`, `nav`, `banner`), heading hierarchy (`h1`->`h2`), keyboard Tab order, and accessible names in `.playwright-cli/page-*.yml`. | Use `assertionType: "toMatchAriaSnapshot"` targeting the component/landmark `root` with an ARIA YAML snapshot builder ref in `expectedValueRef`. |
+| **`visual-regression`** | Identify dynamic regions (timestamps, avatars, live counters) that fluctuate across runs. | Use `assertionType: "toHaveScreenshot"` with `maskSelectors: ["[data-testid='timestamp']"]` and `maxDiffPixelRatio: 0.02` (compiles with `animations: 'disabled'`). |
+
+---
+
 ## 4. Checkpoint 2: Post-Exploration Session Debrief & 1-Test-at-a-Time Selection Matrix
 
 Once feature exploration finishes, present this structured debrief so the Quality Engineer selects **1 critical scenario at a time** to compile and stabilize before moving to the next:

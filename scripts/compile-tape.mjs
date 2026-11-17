@@ -1328,10 +1328,26 @@ export { expect };
         ? parsedExpected.varName
         : parsedExpected?.callExpression || '';
 
-      const assertStmt =
-        state.assertionType === 'toBeVisible' || state.assertionType === 'toBeHidden'
-          ? `await expect(${targetExpr}).${state.assertionType}();`
-          : `await expect(${targetExpr}).${state.assertionType}(String(${valExpr}));`;
+      let assertStmt;
+      if (state.assertionType === 'toBeVisible' || state.assertionType === 'toBeHidden') {
+        assertStmt = `await expect(${targetExpr}).${state.assertionType}();`;
+      } else if (state.assertionType === 'toHaveScreenshot') {
+        const ratio =
+          typeof state.maxDiffPixelRatio === 'number' &&
+          state.maxDiffPixelRatio >= 0 &&
+          state.maxDiffPixelRatio <= 1
+            ? state.maxDiffPixelRatio
+            : 0.02;
+        const masks = Array.isArray(state.maskSelectors)
+          ? state.maskSelectors
+              .filter((s) => typeof s === 'string' && s.trim().length > 0 && !/[`$\r\n]/.test(s))
+              .map((s) => `${targetExpr}.page().locator(${JSON.stringify(s.trim())})`)
+          : [];
+        const maskProp = masks.length > 0 ? `, mask: [${masks.join(', ')}]` : '';
+        assertStmt = `await expect(${targetExpr}).toHaveScreenshot(String(${valExpr}), { animations: 'disabled', maxDiffPixelRatio: ${ratio}${maskProp} });`;
+      } else {
+        assertStmt = `await expect(${targetExpr}).${state.assertionType}(String(${valExpr}));`;
+      }
 
       if (state.businessStep) {
         const targetTitle = sanitizeCodeComment(state.businessStep);

@@ -1492,4 +1492,90 @@ test('16. cortex report emits sanitized schemaVersion 1.0.0 telemetry and blocks
   assert.match(ssrfRes.stderr, /SSRF protection/);
 });
 
+test('17. accessibility (toMatchAriaSnapshot) and visual-regression (toHaveScreenshot with maskSelectors) tapes validate and compile cleanly', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-a11y-visual-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://app.example.com', '--name', 'VisualA11yApp']);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    const a11yTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'checkout-a11y-visual',
+      title: 'Checkout Accessibility and Visual Baseline',
+      charter: 'visual-regression',
+      tags: ['@regression', '@visual'],
+      recordedAt: '2026-11-17T12:00:00.000Z',
+      baseUrl: 'https://app.example.com',
+      persona: {
+        role: 'standard',
+        dataBuilderRef: 'UserBuilder.standardUser',
+      },
+      preconditions: ['User is on checkout summary'],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Navigate to checkout summary',
+          businessStep: 'Navigate to checkout summary',
+          action: 'goto',
+          componentCandidate: 'CheckoutSummaryPage',
+          locatorContract: {
+            strategy: 'url',
+            value: '/checkout',
+          },
+        },
+      ],
+      networkContracts: [],
+      expectedStates: [
+        {
+          description: 'Checkout summary matches accessible ARIA structure',
+          businessStep: 'Verify accessibility tree and visual layout',
+          assertionType: 'toMatchAriaSnapshot',
+          targetComponent: 'checkoutSummary',
+          targetProperty: 'root',
+          expectedValueRef: 'CheckoutSummaryBuilder.ariaSnapshot',
+        },
+        {
+          description: 'Checkout summary matches visual baseline with timestamp masked',
+          businessStep: 'Verify accessibility tree and visual layout',
+          assertionType: 'toHaveScreenshot',
+          targetComponent: 'checkoutSummary',
+          targetProperty: 'root',
+          expectedValueRef: 'CheckoutSummaryBuilder.screenshotName',
+          maskSelectors: ["[data-testid='live-timestamp']"],
+          maxDiffPixelRatio: 0.01,
+        },
+      ],
+    };
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/checkout-a11y-visual.json'),
+      JSON.stringify(a11yTape, null, 2),
+      'utf8'
+    );
+
+    const validateRes = runNode(path.join(tmpDir, 'scripts/validate-tapes.mjs'), [], tmpDir);
+    assert.equal(validateRes.status, 0, `validate-tapes failed: ${validateRes.stderr}`);
+
+    const compileRes = runNode(
+      path.join(tmpDir, 'scripts/compile-tape.mjs'),
+      ['checkout-a11y-visual', '--apply'],
+      tmpDir
+    );
+    assert.equal(compileRes.status, 0, `compile-tape failed: ${compileRes.stderr}\n${compileRes.stdout}`);
+
+    const specContent = fs.readFileSync(path.join(tmpDir, 'tests/checkout-a11y-visual.spec.ts'), 'utf8');
+    assert.match(specContent, /\.toMatchAriaSnapshot\(/);
+    assert.match(specContent, /\.toHaveScreenshot\(/);
+    assert.match(specContent, /animations: 'disabled'/);
+    assert.match(specContent, /maxDiffPixelRatio: 0\.01/);
+    assert.match(specContent, /mask: \[checkoutSummary\.root\.page\(\)\.locator\("\[data-testid='live-timestamp'\]"\)\]/);
+
+    const auditRes = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(auditRes.status, 0, `audit-solid failed: ${auditRes.stderr}`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+
 

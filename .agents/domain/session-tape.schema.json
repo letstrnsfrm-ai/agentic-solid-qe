@@ -41,7 +41,9 @@
         "chaos-network-500",
         "multi-persona-auth",
         "api-contract",
-        "cross-portal-handoff"
+        "cross-portal-handoff",
+        "accessibility",
+        "visual-regression"
       ]
     },
     "tags": {
@@ -365,8 +367,26 @@
               "toHaveURL",
               "toHaveValue",
               "toHaveStatus",
-              "toMatchObject"
+              "toMatchObject",
+              "toMatchAriaSnapshot",
+              "toHaveScreenshot"
             ]
+          },
+          "maskSelectors": {
+            "type": "array",
+            "description": "Optional CSS/data-testid selectors to mask dynamic regions (timestamps, avatars, live counters) in toHaveScreenshot assertions.",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          },
+          "maxDiffPixelRatio": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Optional allowed pixel diff ratio for toHaveScreenshot (e.g., 0.02)."
           },
           "targetComponent": {
             "type": "string",
