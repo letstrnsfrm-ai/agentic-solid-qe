@@ -21,6 +21,32 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+const legacyMigratorUrl = new URL('./legacy-test-migrator.mjs', import.meta.url);
+const legacyMigrator = fs.existsSync(legacyMigratorUrl)
+  ? await import(legacyMigratorUrl.href)
+  : {
+      applyLegacyMigrationPlan: () => null,
+      buildLegacyMigrationPlan: () => ({ found: false }),
+      discoverLegacyTests: () => ({
+        detected: false,
+        stacks: [],
+        buildFiles: [],
+        summary: { totalTests: 0, javaTests: 0, csharpTests: 0, apiTests: 0, uiTests: 0, hybridTests: 0, wave1Count: 0, wave2Count: 0, wave3Count: 0, pageObjectsCount: 0 },
+        recommendedNext: null,
+        tests: [],
+        pageObjects: {},
+      }),
+      loadMigrationManifest: () => null,
+      syncDiscoveryToManifest: () => null,
+    };
+const {
+  applyLegacyMigrationPlan,
+  buildLegacyMigrationPlan,
+  discoverLegacyTests,
+  loadMigrationManifest,
+  syncDiscoveryToManifest,
+} = legacyMigrator;
+
 const ROOT = process.cwd();
 const MAX_SKILL_TOKENS = 500;
 const MAX_DOMAIN_LINES = 150;
@@ -40,6 +66,7 @@ const CORE_ENGINE_SCRIPTS = new Set([
   'scripts/build-domain-graph.mjs',
   'scripts/compile-tape.mjs',
   'scripts/migrate-skill.mjs',
+  'scripts/legacy-test-migrator.mjs',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',
   'scripts/validate-tapes.mjs',
@@ -56,6 +83,10 @@ let skillNameArg = '';
 let squadArg = '';
 let applyChanges = false;
 let discoverMode = false;
+let legacyTargetArg = '';
+let legacyRootArg = '';
+let sliceIndexArg = 0;
+let staticOnlyFlag = false;
 
 for (let i = 0; i < rawArgs.length; i++) {
   const arg = rawArgs[i];
@@ -63,6 +94,8 @@ for (let i = 0; i < rawArgs.length; i++) {
     applyChanges = true;
   } else if (arg === '--discover' || arg === '--scan') {
     discoverMode = true;
+  } else if (arg === '--static-only') {
+    staticOnlyFlag = true;
   } else if (arg === '--name' && rawArgs[i + 1]) {
     skillNameArg = rawArgs[++i];
   } else if (arg.startsWith('--name=')) {
@@ -71,6 +104,18 @@ for (let i = 0; i < rawArgs.length; i++) {
     squadArg = rawArgs[++i];
   } else if (arg.startsWith('--squad=')) {
     squadArg = arg.slice('--squad='.length);
+  } else if (arg === '--legacy' && rawArgs[i + 1]) {
+    legacyTargetArg = rawArgs[++i];
+  } else if (arg.startsWith('--legacy=')) {
+    legacyTargetArg = arg.slice('--legacy='.length);
+  } else if (arg === '--legacy-root' && rawArgs[i + 1]) {
+    legacyRootArg = rawArgs[++i];
+  } else if (arg.startsWith('--legacy-root=')) {
+    legacyRootArg = arg.slice('--legacy-root='.length);
+  } else if (arg === '--slice' && rawArgs[i + 1]) {
+    sliceIndexArg = Math.max(0, Number.parseInt(rawArgs[++i], 10) || 0);
+  } else if (arg.startsWith('--slice=')) {
+    sliceIndexArg = Math.max(0, Number.parseInt(arg.slice('--slice='.length), 10) || 0);
   } else if (!arg.startsWith('-') && !sourceArg) {
     sourceArg = arg;
   }
@@ -343,6 +388,21 @@ function runWorkspaceDiscovery() {
     ? fs.readFileSync(domainMemoryPath, 'utf8').split('\n').length
     : 0;
 
+  const existingManifest = loadMigrationManifest(ROOT);
+  const resolvedLegacyRoot = legacyRootArg
+    ? path.resolve(ROOT, legacyRootArg)
+    : existingManifest?.legacySourceRoot
+      ? path.resolve(ROOT, existingManifest.legacySourceRoot)
+      : ['e2e-playwright', 'qe-playwright'].includes(path.basename(scanRoot))
+        ? path.dirname(scanRoot)
+        : scanRoot;
+
+  const legacyDiscovery = discoverLegacyTests(resolvedLegacyRoot);
+  if (legacyDiscovery.tests.length > 0 && !sourceArg) {
+    const relLegacyRoot = path.relative(ROOT, resolvedLegacyRoot).replace(/\\/g, '/') || '.';
+    syncDiscoveryToManifest(ROOT, legacyDiscovery, relLegacyRoot);
+  }
+
   const discoveryReport = {
     mode: 'workspace-discovery',
     workspaceRoot: scanRoot,
@@ -353,6 +413,16 @@ function runWorkspaceDiscovery() {
     },
     discoveredLegacySkillsAndPrompts: discoveredLegacySkills,
     standaloneHelperScripts,
+    legacyTestMigration: {
+      detected: legacyDiscovery.detected,
+      stacks: legacyDiscovery.stacks,
+      legacySourceRoot: path.relative(ROOT, resolvedLegacyRoot).replace(/\\/g, '/') || '.',
+      summary: legacyDiscovery.summary,
+      recommendedNext: legacyDiscovery.recommendedNext,
+      wave1Candidates: legacyDiscovery.tests.filter((t) => t.wave === 1).slice(0, 10),
+      wave2Candidates: legacyDiscovery.tests.filter((t) => t.wave === 2).slice(0, 10),
+      wave3MonolithsToDecompose: legacyDiscovery.tests.filter((t) => t.wave === 3).slice(0, 10),
+    },
     existingPlaywrightSuiteAudit: {
       totalSpecsScanned: specFiles.length,
       specsPassingSolidGuardrails: specFiles.length - specGuardrailGaps.length,
@@ -361,7 +431,9 @@ function runWorkspaceDiscovery() {
     recommendedAgentWorkflow: [
       discoveredLegacySkills.length > 0
         ? `1. Run dry-run triage for each discovered skill (${discoveredLegacySkills[0].dryRunCommand}), present the 4-Part Migration Triage Matrix to the user, and apply with '--apply'.`
-        : `1. No unmigrated legacy prompt/rule files detected in standard locations. If the user has skills in a custom path, run: npm run migrate:skill -- <path> --name <skill-id>`,
+        : legacyDiscovery.recommendedNext
+          ? `1. Port Wave ${legacyDiscovery.recommendedNext.wave} legacy ${legacyDiscovery.recommendedNext.kind.toUpperCase()} test '${legacyDiscovery.recommendedNext.id}': ${legacyDiscovery.recommendedNext.command}`
+          : `1. No unmigrated legacy prompt/rule files detected in standard locations. If the user has skills in a custom path, run: npm run migrate:skill -- <path> --name <skill-id>`,
       specGuardrailGaps.length > 0
         ? `2. Refactor ${specGuardrailGaps.length} non-SOLID spec(s) via '/02-solid-architect' so they consume '@fixtures/app.fixture' and typed Data Builders from 'src/data/'.`
         : `2. All ${specFiles.length} existing spec(s) satisfy SOLID fixture and Data Builder guardrails.`,
@@ -378,21 +450,72 @@ if (discoverMode) {
   runWorkspaceDiscovery();
 }
 
+if (legacyTargetArg) {
+  const existingManifest = loadMigrationManifest(ROOT);
+  const resolvedLegacyRoot = legacyRootArg
+    ? path.resolve(ROOT, legacyRootArg)
+    : existingManifest?.legacySourceRoot
+      ? path.resolve(ROOT, existingManifest.legacySourceRoot)
+      : ['e2e-playwright', 'qe-playwright'].includes(path.basename(ROOT))
+        ? path.dirname(ROOT)
+        : ROOT;
+
+  const plan = buildLegacyMigrationPlan(resolvedLegacyRoot, legacyTargetArg, {
+    sliceIndex: sliceIndexArg,
+    staticOnly: staticOnlyFlag,
+    baseUrl: process.env.BASE_URL || 'http://localhost:3000',
+  });
+
+  if (!plan.found) {
+    console.error(`❌ Legacy test '${legacyTargetArg}' not found under ${resolvedLegacyRoot}.`);
+    console.error(`   Run 'npm run migrate:skill -- --discover' to list discovered legacy test IDs.`);
+    process.exit(1);
+  }
+
+  let applied = null;
+  if (applyChanges) {
+    const relLegacyRoot = path.relative(ROOT, resolvedLegacyRoot).replace(/\\/g, '/') || '.';
+    applied = applyLegacyMigrationPlan(ROOT, plan, relLegacyRoot);
+  }
+
+  console.log('🧪 Agentic-SOLID-QE Legacy Java/C# Test Migration Plan:\n');
+  console.log(
+    JSON.stringify(
+      {
+        mode: applyChanges ? 'applied' : 'dry-run-preview',
+        legacyTest: plan.legacyTest,
+        selectedSlice: plan.selectedSlice,
+        verificationMode: plan.verificationMode,
+        cliVerificationCommands: plan.cliVerificationCommands,
+        compileCommand: plan.compileCommand,
+        applied,
+        draftTape: plan.draftTape,
+      },
+      null,
+      2
+    )
+  );
+  process.exit(0);
+}
+
 if (!sourceArg) {
   console.log(`
 🧭 Agentic-SOLID-QE Skill & Script Migrator (05-skill-migrator)
 
 Usage:
   npm run migrate:skill -- --discover
+  npm run migrate:skill -- --legacy <test-id-or-file> [--slice <n>] [--static-only] [--apply]
   npm run migrate:skill -- <path-to-legacy-skill-or-dir> [--name <skill-id>] [--squad <squad>] [--apply]
 
 Examples:
   npm run migrate:skill -- --discover
+  npm run migrate:skill -- --legacy java-checkout-smoke-test --apply
   npm run migrate:skill -- ./legacy-prompts/checkout-helper.md --name 06-checkout-seeder --squad checkout
   npm run migrate:skill -- ./old-team-skills/api-sync/ --name 06-api-sync --apply
 
 Starter Guide:
   See .agents/skills/05-skill-migrator/references/migration-starter-guide.md
+  See .agents/skills/05-skill-migrator/references/legacy-java-csharp-migration-guide.md
 `);
   process.exit(0);
 }

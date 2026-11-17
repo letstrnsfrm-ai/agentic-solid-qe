@@ -1717,6 +1717,161 @@ test('18. Point-to-Point segmentation, handoffRecommendations, and resumesFrom c
   }
 });
 
+test('19. Java & C# legacy Selenium/API init side-by-side, value discovery, monolith slicing, and tape bridge pass guardrails', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-legacy-'));
+  try {
+    // 1. Seed a mock Java Maven + C# .NET repo
+    fs.writeFileSync(path.join(tmpDir, 'pom.xml'), '<project><artifactId>legacy-qe</artifactId></project>\n', 'utf8');
+    fs.mkdirSync(path.join(tmpDir, 'src/test/java/pages'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src/test/java/tests'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'dotnet/Tests'), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/test/java/pages/LoginPage.java'),
+      `package pages;
+import org.openqa.selenium.*;
+public class LoginPage {
+  private By usernameInput = By.id("user-name");
+}
+`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/test/java/pages/CheckoutPage.java'),
+      `package pages;
+public class CheckoutPage {}
+`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/test/java/pages/ReceiptPage.java'),
+      `package pages;
+public class ReceiptPage {}
+`,
+      'utf8'
+    );
+
+    // Wave 1 small @Smoke UI test + Wave 1 RestAssured API test + Wave 3 Monolith
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/test/java/tests/AuthSmokeTest.java'),
+      `package tests;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.openqa.selenium.*;
+public class AuthSmokeTest {
+  @Test
+  @Tag("smoke")
+  public void loginSmokeTest() {
+    driver.get("https://app.example.com/login");
+    driver.findElement(By.id("user-name")).sendKeys("alice");
+    driver.findElement(By.id("login-btn")).click();
+    Assertions.assertTrue(true);
+  }
+}
+`,
+      'utf8'
+    );
+
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/test/java/tests/MonolithCheckoutTest.java'),
+      `package tests;
+import org.junit.jupiter.api.Test;
+public class MonolithCheckoutTest {
+  @Test
+  public void fullEndToEndCheckoutFlow() {
+    given().post("/api/seed-cart");
+    LoginPage loginPage = new LoginPage();
+    CheckoutPage checkoutPage = new CheckoutPage();
+    ReceiptPage receiptPage = new ReceiptPage();
+    driver.get("https://app.example.com/login");
+    driver.get("https://app.example.com/checkout");
+    driver.get("https://app.example.com/receipt");
+    Assertions.assertEquals(1, 1);
+    Assertions.assertEquals(2, 2);
+    Assertions.assertEquals(3, 3);
+    Assertions.assertEquals(4, 4);
+    Assertions.assertEquals(5, 5);
+  }
+}
+`,
+      'utf8'
+    );
+
+    fs.writeFileSync(
+      path.join(tmpDir, 'dotnet/Tests/OrdersApiTests.cs'),
+      `using NUnit.Framework;
+using RestSharp;
+namespace Legacy.Tests {
+  public class OrdersApiTests {
+    [Test]
+    [Category("Smoke")]
+    public void GetOrdersReturnsOk() {
+      var client = new RestClient("https://app.example.com");
+      var req = new RestRequest("/api/orders", Method.Get);
+      Assert.AreEqual(200, 200);
+    }
+  }
+}
+`,
+      'utf8'
+    );
+
+    // 2. Run `init .` at the Java/C# root -> should auto-install into e2e-playwright/
+    const initRes = runNode(SYNC_SCRIPT, ['init', '.'], tmpDir);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}\n${initRes.stdout}`);
+
+    const pwRoot = path.join(tmpDir, 'e2e-playwright');
+    assert.ok(fs.existsSync(path.join(pwRoot, 'package.json')), 'Expected side-by-side e2e-playwright/package.json');
+    assert.ok(
+      fs.existsSync(path.join(pwRoot, '.agents/domain/migration-manifest.json')),
+      'Expected seeded migration-manifest.json'
+    );
+
+    // 3. Run `migrate:skill -- --discover` inside e2e-playwright/
+    const discRes = runNode(path.join(pwRoot, 'scripts/migrate-skill.mjs'), ['--discover'], pwRoot);
+    assert.equal(discRes.status, 0, `discover failed: ${discRes.stderr}\n${discRes.stdout}`);
+    const discJson = JSON.parse(discRes.stdout.slice(discRes.stdout.indexOf('{')));
+    assert.equal(discJson.legacyTestMigration.detected, true);
+    assert.ok(discJson.legacyTestMigration.summary.javaTests >= 2);
+    assert.ok(discJson.legacyTestMigration.summary.csharpTests >= 1);
+    assert.ok(discJson.legacyTestMigration.wave1Candidates.length >= 2);
+    assert.ok(discJson.legacyTestMigration.wave3MonolithsToDecompose.length >= 1);
+
+    const monolith = discJson.legacyTestMigration.wave3MonolithsToDecompose[0];
+    assert.ok(monolith.suggestedSlices.length >= 3, 'Expected monolith to decompose into api-seeder, auth, and ui slices');
+
+    // 4. Port Wave 1 C# RestSharp API test -> Session Tape -> validate -> compile -> audit:solid
+    const csApiTest = discJson.legacyTestMigration.wave1Candidates.find((t) => t.language === 'csharp');
+    assert.ok(csApiTest, 'Expected C# API test in Wave 1');
+
+    const portRes = runNode(
+      path.join(pwRoot, 'scripts/migrate-skill.mjs'),
+      ['--legacy', csApiTest.id, '--static-only', '--apply'],
+      pwRoot
+    );
+    assert.equal(portRes.status, 0, `legacy port failed: ${portRes.stderr}\n${portRes.stdout}`);
+
+    const tapePath = path.join(pwRoot, `.exploratory/tapes/${csApiTest.id}.json`);
+    assert.ok(fs.existsSync(tapePath), 'Expected emitted draft Session Tape');
+
+    const valRes = runNode(path.join(pwRoot, 'scripts/validate-tapes.mjs'), [], pwRoot);
+    assert.equal(valRes.status, 0, `validate-tapes failed: ${valRes.stderr}\n${valRes.stdout}`);
+
+    const compRes = runNode(path.join(pwRoot, 'scripts/compile-tape.mjs'), [csApiTest.id, '--apply'], pwRoot);
+    assert.equal(compRes.status, 0, `compile-tape failed: ${compRes.stderr}\n${compRes.stdout}`);
+
+    const covRes = runNode(path.join(pwRoot, 'scripts/analyze-coverage.mjs'), [], pwRoot);
+    assert.equal(covRes.status, 0, `analyze-coverage failed: ${covRes.stderr}`);
+    const covJson = JSON.parse(covRes.stdout.slice(covRes.stdout.indexOf('{')));
+    assert.equal(covJson.legacyMigrationProgress.verified, 1);
+
+    const auditRes = runNode(path.join(pwRoot, 'scripts/audit-solid.mjs'), [], pwRoot);
+    assert.equal(auditRes.status, 0, `audit-solid failed: ${auditRes.stderr}`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 
 
 

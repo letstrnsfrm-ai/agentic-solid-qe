@@ -388,6 +388,45 @@ const scopedHandoffRecommendations = handoffRecommendations.filter(
   (h) => !filterSquad || matchSquad(h.scenarioId)
 );
 
+let legacyMigrationProgress = null;
+const migrationManifestPath = path.join(ROOT, '.agents/domain/migration-manifest.json');
+if (fs.existsSync(migrationManifestPath)) {
+  try {
+    const mm = JSON.parse(fs.readFileSync(migrationManifestPath, 'utf8'));
+    const items = Object.values(mm.items || {});
+    const countsByStatus = { discovered: 0, decomposed: 0, taped: 0, verified: 0 };
+    let nextRecommendedLegacyTest = null;
+    for (const item of items) {
+      const hasCompiledSpec =
+        Array.isArray(item.tapes) &&
+        item.tapes.some((tp) => {
+          const sid = path.basename(tp, '.json');
+          return specsWithContent.some((s) => s.rawContent.includes(sid));
+        });
+      const effectiveStatus = hasCompiledSpec ? 'verified' : item.status || 'discovered';
+      countsByStatus[effectiveStatus] = (countsByStatus[effectiveStatus] || 0) + 1;
+      if (!nextRecommendedLegacyTest && effectiveStatus === 'discovered') {
+        nextRecommendedLegacyTest = {
+          id: item.id,
+          wave: item.wave,
+          kind: item.kind,
+          file: item.file,
+          command: `npm run migrate:skill -- --legacy ${item.id}`,
+        };
+      }
+    }
+    legacyMigrationProgress = {
+      stacks: mm.stacks || [],
+      legacySourceRoot: mm.legacySourceRoot || '..',
+      totalLegacyTests: items.length,
+      ...countsByStatus,
+      nextRecommendedLegacyTest,
+    };
+  } catch {
+    /* ignore malformed migration manifest */
+  }
+}
+
 const isCompact = !forceFull && (forceSummary || scopedSpecs.length + scopedTapes.length > 25);
 
 const report = isCompact
@@ -397,6 +436,7 @@ const report = isCompact
       ...(filterSquad ? { squadFilter: filterSquad } : {}),
       coverageMaturityStage,
       upgradeStatus,
+      ...(legacyMigrationProgress ? { legacyMigrationProgress } : {}),
       targetApp: {
         appName,
         baseUrl,
@@ -432,6 +472,7 @@ const report = isCompact
       ...(filterSquad ? { squadFilter: filterSquad } : {}),
       coverageMaturityStage,
       upgradeStatus,
+      ...(legacyMigrationProgress ? { legacyMigrationProgress } : {}),
       targetApp: {
         appName,
         baseUrl,

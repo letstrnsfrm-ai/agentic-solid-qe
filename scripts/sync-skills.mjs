@@ -13,6 +13,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  detectLegacyTestProject,
+  discoverLegacyTests,
+  syncDiscoveryToManifest,
+} from './legacy-test-migrator.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,6 +82,7 @@ let resetDemo = false;
 let includeDemo = false;
 let dryRun = false;
 let forceOverwrite = false;
+let hereFlag = false;
 
 const positional = [];
 for (let i = 0; i < rawArgs.length; i++) {
@@ -89,6 +95,8 @@ for (let i = 0; i < rawArgs.length; i++) {
     dryRun = true;
   } else if (arg === '--force') {
     forceOverwrite = true;
+  } else if (arg === '--here') {
+    hereFlag = true;
   } else if (arg === '--url' && rawArgs[i + 1]) {
     appUrl = rawArgs[++i];
   } else if (arg.startsWith('--url=')) {
@@ -126,7 +134,25 @@ function sanitizeAppName(rawName) {
   return cleaned || 'Target Web Application';
 }
 
-const TARGET_ROOT = path.resolve(process.cwd(), targetArg);
+const rawTargetRoot = path.resolve(process.cwd(), targetArg);
+const legacyProjectCheck =
+  command === 'init' && !hereFlag && !['e2e-playwright', 'qe-playwright'].includes(path.basename(rawTargetRoot))
+    ? detectLegacyTestProject(rawTargetRoot)
+    : { detected: false, stacks: [], buildFiles: [] };
+
+const TARGET_ROOT = legacyProjectCheck.detected
+  ? path.join(rawTargetRoot, 'e2e-playwright')
+  : rawTargetRoot;
+
+if (legacyProjectCheck.detected) {
+  console.log(
+    `🧭 Detected ${legacyProjectCheck.stacks.join('/')} project (${legacyProjectCheck.buildFiles.join(', ')}) at ${rawTargetRoot}.`
+  );
+  console.log(
+    `   Installing Agentic-SOLID-QE side-by-side into ${TARGET_ROOT} (pass --here to override).`
+  );
+}
+
 const resolvedUrl = appUrl || process.env.BASE_URL || 'http://localhost:3000';
 const resolvedAppName = sanitizeAppName(appName);
 
@@ -992,6 +1018,7 @@ const coreEnginePaths = [
   'scripts/build-domain-graph.mjs',
   'scripts/compile-tape.mjs',
   'scripts/migrate-skill.mjs',
+  'scripts/legacy-test-migrator.mjs',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',
   'scripts/validate-tapes.mjs',
@@ -1121,6 +1148,14 @@ if (command === 'init') {
     path.join(TARGET_ROOT, '.github/workflows/playwright-ci.yml'),
     { overwrite: false }
   );
+  if (legacyProjectCheck.detected && !dryRun) {
+    const legacyScan = discoverLegacyTests(rawTargetRoot);
+    const relLegacyRoot = path.relative(TARGET_ROOT, rawTargetRoot).replace(/\\/g, '/') || '..';
+    syncDiscoveryToManifest(TARGET_ROOT, legacyScan, relLegacyRoot);
+    console.log(
+      `📋 Seeded .agents/domain/migration-manifest.json (${legacyScan.summary.totalTests} legacy test(s): Wave 1=${legacyScan.summary.wave1Count}, Wave 2=${legacyScan.summary.wave2Count}, Wave 3=${legacyScan.summary.wave3Count}).`
+    );
+  }
 } else {
   // sync mode: preserve consumer domain-memory.md and existing src/, while seeding new foundational contracts/shared helpers if missing
   if (!fs.existsSync(targetDomainMemory)) {

@@ -3,30 +3,30 @@ name: 05-skill-migrator
 description: Onboards legacy or unorganized team skills, prompts (.cursorrules, .claude/commands, CLAUDE.md), and helper scripts (.sh, .js, .mjs, .ts, .py) into the <500-token Agentic-SOLID-QE framework and 3-Tier Domain Brain. Invoke /05-skill-migrator [<path> | --discover] to migrate.
 file_names:
     - references/migration-starter-guide.md
+    - references/legacy-java-csharp-migration-guide.md
 ---
-# Skill 05: Legacy Skill & Script Onboarding Migrator
+# Skill 05: Legacy Skill & Test Onboarding Migrator
 
 ## 1. Zero-Prompt Auto-Start: Discovery & Dry-Run Scan
 When invoked as `/05-skill-migrator`:
-1. Read `.agents/domain/domain-memory.md` and `references/migration-starter-guide.md`.
-2. If no `<source-path>` is given, scan the workspace for legacy rules/skills and non-SOLID specs:
+1. Read `.agents/domain/domain-memory.md`, `references/migration-starter-guide.md`, and `references/legacy-java-csharp-migration-guide.md`.
+2. Scan the workspace for legacy skills/scripts AND Java/C# Selenium + API tests:
    ```bash
    npm run migrate:skill -- --discover
    ```
-3. Run the dry-run analyzer on each target skill or prompt:
+3. Run the dry-run analyzer on a legacy skill **or** a ranked Wave 1–3 Java/C# test:
    ```bash
    npm run migrate:skill -- <source-path> --name <skill-id> [--squad <squad>]
+   npm run migrate:skill -- --legacy <test-id> [--slice <n>] [--static-only]
    ```
 
-## 2. Checkpoint: Present 4-Part Migration Triage Matrix
+## 2. Checkpoint: Present Migration Triage Matrix
 Pause and present to the engineer:
-1. **Normalized Skill Bundle:** Target `.agents/skills/<skill-id>/SKILL.md` (`< 500` tokens) + secret-sanitized `references/legacy-reference.md`.
-2. **Script Relocation:** `utility-or-api-seeder` scripts moved to `.agents/skills/<skill-id>/scripts/` with `process.env.BASE_URL` and secret redaction.
-3. **UI Script ➔ Session Tape Bridge:** `legacy-ui-automation` scripts archived in `references/` and bridged into `.exploratory/tapes/<skill-id>.json` for `/02-solid-architect`.
-4. **Domain Shard & Routing:** Candidate `≤ 150`-line shard in `.agents/domain/` + `AGENTS.md` routing entry.
+1. **Skill/Script Bundle:** `< 500`-token `SKILL.md` + secret-sanitized `references/` & `scripts/` + `≤ 150`-line Domain Shard.
+2. **Java/C# Legacy Test Waves:** Wave 1 (small `@smoke`/`@p0` & API), Wave 2 (medium UI), Wave 3 (monoliths split into `api-seeder`, `auth-session`, and atomic UI slices).
+3. **Session Tape Bridge:** Draft `.exploratory/tapes/<id>.json` for live `@playwright/cli` verification and `/02-solid-architect` compilation.
 
-## 3. Apply, Wire Wrappers & Verify
+## 3. Apply, Verify & Track Parity
 Upon engineer confirmation:
-1. Run `npm run migrate:skill -- <source-path> --name <skill-id> [--squad <squad>] --apply`.
-2. Refine extracted domain rules in the target shard (`≤ 150` lines).
-3. Run `npm run verify`.
+1. Re-run with `--apply` (updates `.agents/domain/migration-manifest.json`).
+2. Verify live locators via `@playwright/cli` (if UI), compile via `npm run compile:tape`, and run `npm run verify`.
