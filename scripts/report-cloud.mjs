@@ -112,7 +112,17 @@ function readCliVersion() {
   return '0.0.0';
 }
 
-export function buildSanitizedReport() {
+function detectPrNumber(explicitPr) {
+  if (explicitPr && /^\d+$/.test(String(explicitPr))) return Number(explicitPr);
+  const ghRef = process.env.GITHUB_REF || '';
+  const ghMatch = ghRef.match(/^refs\/pull\/(\d+)\//);
+  if (ghMatch) return Number(ghMatch[1]);
+  const adoPr = process.env.SYSTEM_PULLREQUEST_PULLREQUESTNUMBER || process.env.CI_MERGE_REQUEST_IID || '';
+  if (/^\d+$/.test(adoPr)) return Number(adoPr);
+  return null;
+}
+
+export function buildSanitizedReport({ prNumber } = {}) {
   const coverageScript = path.join(__dirname, 'analyze-coverage.mjs');
   const auditScript = path.join(__dirname, 'audit-solid.mjs');
 
@@ -153,6 +163,7 @@ export function buildSanitizedReport() {
     repositoryName: detectRepoName(),
     branch: detectBranch(),
     commitSha: detectCommitSha(),
+    prNumber: detectPrNumber(prNumber),
     maturityStage: Number.isInteger(stageObj.stage) ? stageObj.stage : 0,
     maturityStageName: String(stageObj.name || 'Stage 0: Onboarding'),
     solidPassed,
@@ -190,13 +201,16 @@ Environment:
 
   let dryRun = false;
   let outFile = '';
+  let explicitPr = '';
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--dry-run') dryRun = true;
     else if (args[i] === '--out' && args[i + 1]) outFile = args[++i];
     else if (args[i].startsWith('--out=')) outFile = args[i].slice('--out='.length);
+    else if (args[i] === '--pr' && args[i + 1]) explicitPr = args[++i];
+    else if (args[i].startsWith('--pr=')) explicitPr = args[i].slice('--pr='.length);
   }
 
-  const payload = buildSanitizedReport();
+  const payload = buildSanitizedReport({ prNumber: explicitPr });
 
   if (outFile) {
     const resolvedOut = path.resolve(ROOT, outFile);

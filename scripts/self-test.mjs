@@ -1463,10 +1463,11 @@ test('15. incremental upgrade: manifest skips unchanged files, preserves local e
 });
 
 test('16. cortex report emits sanitized schemaVersion 1.0.0 telemetry and blocks path traversal / SSRF', () => {
-  const dryRes = runNode(SYNC_SCRIPT, ['report', '--dry-run'], REPO_ROOT);
+  const dryRes = runNode(SYNC_SCRIPT, ['report', '--dry-run', '--pr', '42'], REPO_ROOT);
   assert.equal(dryRes.status, 0, `cortex report --dry-run failed: ${dryRes.stderr}`);
   const payload = JSON.parse(dryRes.stdout);
   assert.equal(payload.schemaVersion, '1.0.0');
+  assert.equal(payload.prNumber, 42);
   assert.equal(typeof payload.maturityStage, 'number');
   assert.equal(typeof payload.solidPassed, 'boolean');
   assert.equal(payload.solidPassed, true);
