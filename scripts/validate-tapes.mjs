@@ -550,6 +550,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     .filter((e) => !e.isSymbolicLink() && e.isFile() && e.name.endsWith('.json'))
     .map((e) => e.name);
   let errors = [];
+  const seenScenarioIds = new Map();
 
   for (const file of tapeFiles) {
     const fullPath = path.join(TAPES_DIR, file);
@@ -564,6 +565,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     } catch (err) {
       errors.push(`[${file}] Invalid JSON: ${err.message}`);
       continue;
+    }
+
+    if (typeof tape.scenarioId === 'string' && tape.scenarioId) {
+      if (seenScenarioIds.has(tape.scenarioId)) {
+        errors.push(
+          `[${file}] Duplicate scenarioId '${tape.scenarioId}' (already defined in ${seenScenarioIds.get(tape.scenarioId)}).`
+        );
+      } else {
+        seenScenarioIds.set(tape.scenarioId, file);
+      }
     }
 
     errors.push(...validateTapeObject(tape, file));

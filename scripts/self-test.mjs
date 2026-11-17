@@ -1872,6 +1872,96 @@ namespace Legacy.Tests {
   }
 });
 
+test('20. 1000+ test scale guardrails: enforces CI shardability, tags, test.only/waitForTimeout bans, fixture/shard caps, and duplicate scenarioId', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-scale-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://app.example.com', '--name', 'ScaleApp']);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    // 1. Spec with >10 tests, missing tag, test.only, and waitForTimeout
+    const bloatedSpec = [
+      `import { test, expect } from '@fixtures/app.fixture';`,
+      `import { SampleBuilder } from '@data/sample.builder';`,
+      ...Array.from({ length: 11 }, (_, i) =>
+        `test('case ${i + 1}', async ({ page }) => {\n  await page.waitForTimeout(100);\n  await test.step('Check state', async () => { expect(SampleBuilder).toBeDefined(); });\n});`
+      ),
+      `test.only('focused', async () => { await test.step('Focus', async () => {}); });`,
+    ].join('\n');
+    fs.writeFileSync(path.join(tmpDir, 'tests/bloated.spec.ts'), bloatedSpec, 'utf8');
+
+    // 2. Fixture > 200 lines
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/fixtures/app.fixture.ts'),
+      Array.from({ length: 205 }, (_, i) => `// line ${i + 1}`).join('\n') + '\n',
+      'utf8'
+    );
+
+    // 3. > 10 global shards without Tier-1 squad hubs
+    let mem = fs.readFileSync(path.join(tmpDir, '.agents/domain/domain-memory.md'), 'utf8');
+    for (let i = 1; i <= 11; i++) {
+      const name = `shard-${i}.md`;
+      fs.writeFileSync(
+        path.join(tmpDir, `.agents/domain/shards/${name}`),
+        `# Shard ${i}\n\n> **Last Verified:** \`2026-11-17\`\n`,
+        'utf8'
+      );
+      mem += `- [${name}](.agents/domain/shards/${name})\n`;
+    }
+    fs.writeFileSync(path.join(tmpDir, '.agents/domain/domain-memory.md'), mem, 'utf8');
+
+    const auditRes = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.notEqual(auditRes.status, 0, 'Expected audit-solid to fail on scale violations');
+    assert.match(auditRes.stderr, /\[CI Shardability Cap\]/);
+    assert.match(auditRes.stderr, /\[CI Focus Ban\]/);
+    assert.match(auditRes.stderr, /\[Flaky Wait Ban\]/);
+    assert.match(auditRes.stderr, /\[CI Tagging Rule\]/);
+    assert.match(auditRes.stderr, /\[Fixture Scaling Cap\]/);
+    assert.match(auditRes.stderr, /\[Federated Scaling Cap\]/);
+
+    // 4. Duplicate scenarioId in validate-tapes
+    const sampleTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'dup-scenario',
+      title: 'Duplicate scenario test',
+      charter: 'happy-path-baseline',
+      recordedAt: '2026-11-17T12:00:00.000Z',
+      baseUrl: 'https://app.example.com',
+      persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standardUser' },
+      preconditions: ['App reachable'],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Open home',
+          businessStep: 'Open home page',
+          action: 'goto',
+          componentCandidate: 'HomePage',
+          locatorContract: { strategy: 'url', value: '/' },
+        },
+      ],
+      networkContracts: [],
+      expectedStates: [
+        {
+          description: 'Visible',
+          businessStep: 'Open home page',
+          assertionType: 'toBeVisible',
+          targetComponent: 'HomePage',
+          targetProperty: 'heading',
+          expectedValueRef: 'UserBuilder.heading',
+        },
+      ],
+    };
+    fs.writeFileSync(path.join(tmpDir, '.exploratory/tapes/a.json'), JSON.stringify(sampleTape), 'utf8');
+    fs.writeFileSync(path.join(tmpDir, '.exploratory/tapes/b.json'), JSON.stringify(sampleTape), 'utf8');
+
+    const valRes = runNode(path.join(tmpDir, 'scripts/validate-tapes.mjs'), [], tmpDir);
+    assert.notEqual(valRes.status, 0, 'Expected validate-tapes to reject duplicate scenarioId');
+    assert.match(valRes.stderr, /Duplicate scenarioId 'dup-scenario'/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+
 
 
 

@@ -11,9 +11,16 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 const MAX_COMPONENT_LINES = 150;
+const MAX_PAGE_LINES = 250;
+const MAX_FIXTURE_LINES = 200;
+const MAX_BUILDER_LINES = 200;
+const MAX_TESTS_PER_SPEC = 10;
 const MAX_DOMAIN_LINES = 150;
+const MAX_GLOBAL_SHARDS_BEFORE_SQUAD_HUB = 10;
+const SHARD_STALE_DAYS = 90;
 const MAX_SKILL_TOKENS = 500;
 const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
+const warnings = [];
 
 const args = process.argv.slice(2);
 let filterSquad = null;
@@ -163,6 +170,49 @@ if (fs.existsSync(domainIndexFile)) {
       );
     }
   }
+
+  if (globalShardFiles.length > MAX_GLOBAL_SHARDS_BEFORE_SQUAD_HUB && squadHubFiles.length === 0) {
+    violations.push(
+      `[Federated Scaling Cap] Found ${globalShardFiles.length} global shards in .agents/domain/shards/ (max ${MAX_GLOBAL_SHARDS_BEFORE_SQUAD_HUB} without Tier-1 squad hubs). Move shards into .agents/domain/domains/<squad>/shards/ with an index.md hub.`
+    );
+  }
+
+  // Domain Brain Hygiene: duplicate routes & stale Last Verified (> 90 days)
+  const routeToShards = new Map();
+  const nowMs = Date.now();
+  for (const shard of [...globalShardFiles, ...squadShardFiles]) {
+    const shardRel = rel(shard);
+    const shardText = fs.readFileSync(shard, 'utf8');
+    const verifiedMatch = shardText.match(/\*\*Last Verified:\*\*\s*`?(\d{4}-\d{2}-\d{2})`?/i);
+    if (verifiedMatch) {
+      const verifiedMs = Date.parse(verifiedMatch[1]);
+      if (!Number.isNaN(verifiedMs)) {
+        const ageDays = Math.floor((nowMs - verifiedMs) / (1000 * 60 * 60 * 24));
+        if (ageDays > SHARD_STALE_DAYS) {
+          warnings.push(
+            `[Stale Domain Shard] ${shardRel} was last verified ${ageDays} days ago (${verifiedMatch[1]} > ${SHARD_STALE_DAYS}d). Re-verify via /01-cli-explorer or /03-drift-healer.`
+          );
+        }
+      }
+    }
+    const routeLineMatch = shardText.match(/\*\*(?:Route|Routes|URL Paths?):\*\*([^\n]+)/i);
+    if (routeLineMatch) {
+      for (const rm of routeLineMatch[1].matchAll(/`(\/[a-zA-Z0-9/_:-]*)`/g)) {
+        const route = rm[1];
+        if (route === '/') continue;
+        const list = routeToShards.get(route) || [];
+        list.push(shardRel);
+        routeToShards.set(route, list);
+      }
+    }
+  }
+  for (const [route, shardList] of routeToShards.entries()) {
+    if (shardList.length > 1) {
+      warnings.push(
+        `[Duplicate Domain Route] Route '${route}' is declared in multiple shards: ${shardList.join(', ')}.`
+      );
+    }
+  }
 }
 
 function stripComments(code) {
@@ -223,9 +273,29 @@ const pageFiles = filterSquad
 for (const file of pageFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const codeOnly = stripComments(content);
+  const pageLines = content.split('\n').length;
+  if (pageLines > MAX_PAGE_LINES) {
+    violations.push(
+      `[SRP Page Line Cap] ${rel(file)} has ${pageLines} lines (max ${MAX_PAGE_LINES}). Extract sub-sections into src/components/.`
+    );
+  }
   if (/\bexpect\s*\(/.test(codeOnly)) {
     violations.push(
       `[SRP Assertion Ban] ${rel(file)} contains an expect() call. Expose readonly Locators and assert in tests/*.spec.ts.`
+    );
+  }
+}
+
+// 3a-fix. Audit Fixtures (src/fixtures/app.fixture.ts & src/domains/*/fixtures/*.fixture.ts <= 200 lines)
+const fixtureFiles = [
+  ...walkFiles(path.join(ROOT, 'src/fixtures'), '.ts'),
+  ...walkFiles(path.join(ROOT, 'src/domains'), '.fixture.ts'),
+];
+for (const file of fixtureFiles) {
+  const lines = fs.readFileSync(file, 'utf8').split('\n').length;
+  if (lines > MAX_FIXTURE_LINES) {
+    violations.push(
+      `[Fixture Scaling Cap] ${rel(file)} has ${lines} lines (max ${MAX_FIXTURE_LINES}). Split into squad-scoped src/domains/<squad>/fixtures/*.fixture.ts and compose via mergeTests.`
     );
   }
 }
@@ -302,17 +372,28 @@ function extractBuilderLiterals(files) {
 const globalBuilderFiles = walkFiles(path.join(ROOT, 'src/data'), '.builder.ts');
 const globalBuilderLiterals = extractBuilderLiterals(globalBuilderFiles);
 
+const allBuilderFiles = [...globalBuilderFiles];
 const squadBuilderLiterals = new Map(); // squad -> Map(literal -> sourceFile)
 const srcDomainsDir = path.join(ROOT, 'src/domains');
 if (fs.existsSync(srcDomainsDir)) {
   for (const entry of fs.readdirSync(srcDomainsDir, { withFileTypes: true })) {
     if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
     const sFiles = walkFiles(path.join(srcDomainsDir, entry.name, 'data'), '.builder.ts');
+    allBuilderFiles.push(...sFiles);
     squadBuilderLiterals.set(entry.name, extractBuilderLiterals(sFiles));
   }
 }
 
-// 5. Audit Specs (OCP/ISP Fixture injection + Scoped DIP Data Builder & URL rules)
+for (const bFile of allBuilderFiles) {
+  const bLines = fs.readFileSync(bFile, 'utf8').split('\n').length;
+  if (bLines > MAX_BUILDER_LINES) {
+    violations.push(
+      `[Builder Scaling Cap] ${rel(bFile)} has ${bLines} lines (max ${MAX_BUILDER_LINES}). Split into domain-specific *.builder.ts modules.`
+    );
+  }
+}
+
+// 5. Audit Specs (OCP/ISP Fixture injection + Scoped DIP Data Builder & URL rules + 1000+ Test CI Shardability)
 const specFiles = filterSquad
   ? walkFiles(path.join(ROOT, 'tests', filterSquad), '.spec.ts')
   : walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
@@ -321,6 +402,37 @@ for (const file of specFiles) {
   const specRel = rel(file);
   const content = fs.readFileSync(file, 'utf8');
   const codeWithoutComments = stripComments(content);
+
+  const testMatches = codeWithoutComments.match(/\btest\s*\(/g) || [];
+  if (testMatches.length > MAX_TESTS_PER_SPEC) {
+    violations.push(
+      `[CI Shardability Cap] ${specRel} contains ${testMatches.length} test() blocks (max ${MAX_TESTS_PER_SPEC}). Split into smaller feature-scoped .spec.ts files for balanced CI sharding.`
+    );
+  }
+
+  if (/\btest\.only\s*\(/.test(codeWithoutComments)) {
+    violations.push(
+      `[CI Focus Ban] ${specRel} contains test.only(), which silently skips the rest of the suite in CI.`
+    );
+  }
+
+  if (
+    /\.waitForTimeout\s*\(/.test(codeWithoutComments) ||
+    /\.waitForLoadState\s*\(\s*['"]networkidle['"]\s*\)/.test(codeWithoutComments)
+  ) {
+    violations.push(
+      `[Flaky Wait Ban] ${specRel} uses waitForTimeout() or waitForLoadState('networkidle'). Use deterministic web-first assertions or waitForResponse().`
+    );
+  }
+
+  if (
+    testMatches.length > 0 &&
+    !/@(?:p0|p1|p2|smoke|regression|api-contract)\b/i.test(codeWithoutComments)
+  ) {
+    violations.push(
+      `[CI Tagging Rule] ${specRel} is missing an execution tag (@p0, @smoke, @regression, or @api-contract) for sharded CI filtering.`
+    );
+  }
 
   if (/from\s+['"]@playwright\/test['"]/.test(codeWithoutComments)) {
     violations.push(
@@ -387,6 +499,25 @@ for (const file of specFiles) {
     if (jargonMatch) {
       violations.push(
         `[Business Language Rule] ${specRel} uses UI implementation jargon ('${jargonMatch[0]}') in test.step(${JSON.stringify(stepTitle)}). Describe high-level business behaviour instead of UI mechanics.`
+      );
+    }
+  }
+}
+
+// 5b. Dead Code Hygiene: warn on unused Components or Data Builders
+if (!filterSquad && (specFiles.length > 0 || pageFiles.length > 0)) {
+  const combinedUsageCorpus = [...allSrcTsFiles, ...specFiles]
+    .map((f) => fs.readFileSync(f, 'utf8'))
+    .join('\n');
+  for (const candidateFile of [...componentFiles, ...allBuilderFiles]) {
+    const code = stripComments(fs.readFileSync(candidateFile, 'utf8'));
+    const classMatch = code.match(/\bexport\s+class\s+([A-Za-z0-9_]+)/);
+    if (!classMatch) continue;
+    const sym = classMatch[1];
+    const occurrences = (combinedUsageCorpus.match(new RegExp(`\\b${sym}\\b`, 'g')) || []).length;
+    if (occurrences <= 1) {
+      warnings.push(
+        `[Unused Module Warning] ${rel(candidateFile)} exports '${sym}' which is not referenced outside its own file.`
       );
     }
   }
@@ -600,6 +731,13 @@ if (fs.existsSync(path.join(ROOT, '.git'))) {
         `[Git Secret File Gate] '${trackedPath}' is tracked or staged in Git. Run 'git rm --cached ${trackedPath}' so sensitive environment/session files are never committed.`
       );
     }
+  }
+}
+
+if (warnings.length > 0) {
+  console.warn('\n⚠️  SOLID & Scale Hygiene Warnings:\n');
+  for (const w of warnings) {
+    console.warn(`  - ${w}`);
   }
 }
 
