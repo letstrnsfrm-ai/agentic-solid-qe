@@ -200,11 +200,12 @@ export class CustomQuoteWidgetComponent implements IdentifiableComponent {
     assert.deepEqual(mergedTsConfig.compilerOptions.paths['@domains/*'], ['src/domains/*']);
     assert.deepEqual(mergedTsConfig.compilerOptions.paths['@shared/*'], ['src/shared/*']);
 
-    // Verify package.json preserved custom script and pinned upgrade:skills to #v0.9.1
+    // Verify package.json preserved custom script and upgraded upgrade:skills + test:explore
     const mergedPkg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'package.json'), 'utf8'));
     assert.equal(mergedPkg.scripts['custom:lint'], 'echo custom-lint');
     assert.equal(mergedPkg.scripts['orchestrate'], 'node scripts/analyze-coverage.mjs');
-    assert.equal(mergedPkg.scripts['upgrade:skills'], 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync');
+    assert.equal(mergedPkg.scripts['upgrade:skills'], 'node scripts/upgrade-framework.mjs');
+    assert.ok(mergedPkg.scripts['test:explore'].includes('PW_PAUSE_FOR_EXPLORE=1'));
     assert.equal(mergedPkg.scripts['audit:security'], 'npm audit --audit-level=high');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1361,3 +1362,88 @@ test('14. audit-solid detects orphaned skill references and sync preserves local
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('15. incremental upgrade: manifest skips unchanged files, preserves local edits, prunes stale files, and surfaces config drift patches', async () => {
+  const { compareSemver, resolveInstalledVersion } = await import('./upgrade-framework.mjs');
+  const crypto = await import('node:crypto');
+
+  assert.equal(compareSemver('0.10.0', '0.9.1'), 1);
+  assert.equal(compareSemver('v0.9.1', '0.9.1'), 0);
+  assert.equal(compareSemver('0.9.1-rc.1', '0.9.1'), -1);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-incremental-upgrade-'));
+  try {
+    // 1. Initialize consumer repo
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://app.example.com', '--name', 'UpgradeApp']);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    const installed = resolveInstalledVersion(tmpDir);
+    assert.equal(installed.source, '.agents/framework-manifest.json');
+
+    // 2. Simulate an older playwright.config.ts missing blob reporter, plus a stale unmodified file and a locally edited managed file
+    fs.writeFileSync(
+      path.join(tmpDir, 'playwright.config.ts'),
+      "import { defineConfig } from '@playwright/test';\nexport default defineConfig({ reporter: 'html' });\n",
+      'utf8'
+    );
+
+    const staleRel = '.agents/skills/01-cli-explorer/references/removed-old-guide.md';
+    const staleFull = path.join(tmpDir, staleRel);
+    fs.writeFileSync(staleFull, '# Old Removed Guide\n', 'utf8');
+    const staleHash = crypto.createHash('sha256').update(fs.readFileSync(staleFull)).digest('hex');
+
+    const manifestPath = path.join(tmpDir, '.agents/framework-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.version = '0.8.0';
+    manifest.files[staleRel] = staleHash;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+    // Locally edit a framework-managed skill file
+    const editedSkillRel = '.agents/skills/01-cli-explorer/SKILL.md';
+    const editedSkillFull = path.join(tmpDir, editedSkillRel);
+    const customSkillContent = fs.readFileSync(editedSkillFull, 'utf8') + '\n<!-- local team tweak -->\n';
+    fs.writeFileSync(editedSkillFull, customSkillContent, 'utf8');
+
+    // 3. Run incremental sync
+    const syncRes = runNode(SYNC_SCRIPT, ['sync', tmpDir]);
+    assert.equal(syncRes.status, 0, `sync failed: ${syncRes.stderr}\n${syncRes.stdout}`);
+    assert.match(syncRes.stdout, /Skipped \d+ unchanged framework file/);
+    assert.match(syncRes.stdout, /Pruned stale framework file: \.agents\/skills\/01-cli-explorer\/references\/removed-old-guide\.md/);
+    assert.match(syncRes.stdout, /Preserved locally edited file: \.agents\/skills\/01-cli-explorer\/SKILL\.md/);
+    assert.match(syncRes.stdout, /What's New \(0\.8\.0 ->/);
+    assert.match(syncRes.stdout, /Optional Config & CI Upgrades Available/);
+
+    // Verify stale file was pruned, local edit was preserved, and patch files were emitted
+    assert.equal(fs.existsSync(staleFull), false, 'Expected unmodified stale file to be pruned');
+    assert.equal(fs.readFileSync(editedSkillFull, 'utf8'), customSkillContent, 'Expected local edit to be preserved');
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, '.agents/upgrade-patches', editedSkillRel)),
+      true,
+      'Expected incoming template for locally edited file in .agents/upgrade-patches/'
+    );
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, '.agents/upgrade-patches/playwright.config.ts.new')),
+      true,
+      'Expected playwright.config.ts.new in .agents/upgrade-patches/'
+    );
+
+    // 4. Verify cortex orchestrate surfaces upgradeStatus.pendingUpgradePatches
+    const orchRes = runNode(SYNC_SCRIPT, ['orchestrate'], tmpDir);
+    assert.equal(orchRes.status, 0, orchRes.stderr);
+    assert.match(orchRes.stdout, /"pendingUpgradePatches": \[/);
+    assert.match(orchRes.stdout, /playwright\.config\.ts\.new/);
+
+    // 5. Verify --force overwrites locally edited managed file
+    const forceRes = runNode(SYNC_SCRIPT, ['sync', tmpDir, '--force']);
+    assert.equal(forceRes.status, 0, forceRes.stderr);
+    assert.notEqual(fs.readFileSync(editedSkillFull, 'utf8'), customSkillContent);
+
+    // 6. Verify cortex upgrade --to rejects invalid tags
+    const badTagRes = runNode(SYNC_SCRIPT, ['upgrade', '--to', 'not-a-tag;rm -rf /'], tmpDir);
+    assert.equal(badTagRes.status, 1);
+    assert.match(badTagRes.stderr, /Invalid release tag/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

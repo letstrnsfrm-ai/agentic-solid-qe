@@ -7,6 +7,7 @@
  *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync [target-dir]
  *   npm run init:app -- --url https://your-app.com --name "Your App"
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +17,13 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const SOURCE_ROOT = path.resolve(__dirname, '..');
+const SOURCE_VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(SOURCE_ROOT, 'package.json'), 'utf8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 
 const rawArgs = process.argv.slice(2);
 
@@ -25,9 +33,10 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help
 
 Usage:
   cortex orchestrate           Run Master Orchestrator Diagnostic & 5-Stage Coverage Maturity Snapshot (alias: cortex status)
+  cortex upgrade               Resolve latest release tag and incrementally sync skills, contracts, and upgrade patches
   cortex compile [<tape>]      Compile Session Tape into SOLID Components, Pages, Builders, Fixtures & Spec (--apply)
   cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo] [--dry-run]
-  cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>] [--dry-run]
+  cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>] [--dry-run] [--force]
   cortex migrate --discover
   cortex migrate <legacy-path> [--name <skill-id>] [--squad <squad>] [--apply]
   cortex graph                 Compile 3-Tier Federated Brain (.agents/domain/domain-graph.json)
@@ -40,6 +49,7 @@ Usage:
 const subcommandDelegateMap = {
   orchestrate: 'analyze-coverage.mjs',
   status: 'analyze-coverage.mjs',
+  upgrade: 'upgrade-framework.mjs',
   compile: 'compile-tape.mjs',
   migrate: 'migrate-skill.mjs',
   graph: 'build-domain-graph.mjs',
@@ -64,6 +74,7 @@ let orgBrainSource = '';
 let resetDemo = false;
 let includeDemo = false;
 let dryRun = false;
+let forceOverwrite = false;
 
 const positional = [];
 for (let i = 0; i < rawArgs.length; i++) {
@@ -74,6 +85,8 @@ for (let i = 0; i < rawArgs.length; i++) {
     includeDemo = true;
   } else if (arg === '--dry-run') {
     dryRun = true;
+  } else if (arg === '--force') {
+    forceOverwrite = true;
   } else if (arg === '--url' && rawArgs[i + 1]) {
     appUrl = rawArgs[++i];
   } else if (arg.startsWith('--url=')) {
@@ -254,7 +267,31 @@ function isUnsafeDest(dest) {
   return false;
 }
 
-function copyRecursive(src, dest, { overwrite = true } = {}) {
+function sha256File(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+const MANIFEST_REL_PATH = '.agents/framework-manifest.json';
+const UPGRADE_PATCHES_DIR = path.join(TARGET_ROOT, '.agents/upgrade-patches');
+const previousManifest = (() => {
+  const manifestPath = path.join(TARGET_ROOT, MANIFEST_REL_PATH);
+  if (!fs.existsSync(manifestPath)) return { version: null, files: {} };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    return {
+      version: typeof parsed.version === 'string' ? parsed.version : null,
+      files: parsed.files && typeof parsed.files === 'object' ? parsed.files : {},
+    };
+  } catch {
+    return { version: null, files: {} };
+  }
+})();
+
+const nextManagedFiles = {};
+const preservedLocalEdits = [];
+let unchangedSyncCount = 0;
+
+function copyRecursive(src, dest, { overwrite = true, trackManifest = false } = {}) {
   if (!fs.existsSync(src)) return;
   const stat = fs.lstatSync(src);
   if (stat.isSymbolicLink()) return;
@@ -264,18 +301,47 @@ function copyRecursive(src, dest, { overwrite = true } = {}) {
       fs.mkdirSync(dest, { recursive: true });
     }
     for (const entry of fs.readdirSync(src)) {
-      copyRecursive(path.join(src, entry), path.join(dest, entry), { overwrite });
+      copyRecursive(path.join(src, entry), path.join(dest, entry), { overwrite, trackManifest });
     }
   } else {
+    const relPath = rel(dest).replace(/\\/g, '/');
     const normalizedDest = dest.replace(/\\/g, '/');
     if (normalizedDest.endsWith('/references/local-overrides.md') && fs.existsSync(dest)) {
       console.log(`🛡️  Preserved local override: ${rel(dest)}`);
       return;
     }
+
+    const srcHash = sha256File(src);
+    if (trackManifest) {
+      nextManagedFiles[relPath] = srcHash;
+    }
+
     if (!overwrite && fs.existsSync(dest)) {
       console.log(`⏭️  Skipped existing: ${rel(dest)}`);
       return;
     }
+
+    if (overwrite && fs.existsSync(dest)) {
+      const destHash = sha256File(dest);
+      if (destHash === srcHash) {
+        unchangedSyncCount++;
+        return;
+      }
+      const prevHash = previousManifest.files[relPath];
+      if (trackManifest && prevHash && destHash !== prevHash && !forceOverwrite) {
+        const patchDest = path.join(UPGRADE_PATCHES_DIR, relPath);
+        if (!dryRun && !isUnsafeDest(patchDest)) {
+          fs.mkdirSync(path.dirname(patchDest), { recursive: true });
+          fs.copyFileSync(src, patchDest);
+        }
+        preservedLocalEdits.push({ relPath, patchRel: rel(patchDest).replace(/\\/g, '/') });
+        console.log(
+          `${dryRun ? '🔍 [DRY-RUN] Would preserve' : '🛡️  Preserved'} locally edited file: ${relPath} (incoming saved to ${rel(patchDest).replace(/\\/g, '/')})`
+        );
+        return;
+      }
+    }
+
     if (!dryRun) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       if (path.resolve(src) !== path.resolve(dest)) {
@@ -546,6 +612,7 @@ function mergeConsumerPackageJson() {
     'test:engine': 'node --test scripts/self-test.mjs',
     'test:headed': 'playwright test --headed',
     'test:ui': 'playwright test --ui',
+    'test:explore': 'PW_PAUSE_FOR_EXPLORE=1 EXPLORE_CDP_PORT=9222 playwright test --project=chromium --headed --timeout=0',
     report: 'playwright show-report',
     typecheck: 'tsc --noEmit',
     'domain:graph': 'node scripts/build-domain-graph.mjs',
@@ -559,7 +626,7 @@ function mergeConsumerPackageJson() {
     verify: 'npm run typecheck && npm run domain:graph && npm run audit:solid && npm run validate:tapes && npm test',
     'init:app': 'node scripts/sync-skills.mjs init --reset',
     'sync:skills': 'node scripts/sync-skills.mjs',
-    'upgrade:skills': 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync',
+    'upgrade:skills': 'node scripts/upgrade-framework.mjs',
   };
   const requiredDevDeps = {
     '@playwright/cli': '0.1.22',
@@ -606,10 +673,7 @@ function mergeConsumerPackageJson() {
         !pkg.scripts[k] ||
         (k === 'test' && pkg.scripts[k] === 'playwright test --project=chromium') ||
         (k === 'upgrade:skills' &&
-          (pkg.scripts[k] === 'npx --yes github:letstrnsfrm-ai/agentic-solid-qe sync' ||
-            pkg.scripts[k].includes('#v0.1.') ||
-            pkg.scripts[k].includes('#v0.2.') ||
-            pkg.scripts[k].includes('#v0.8.')))
+          pkg.scripts[k].startsWith('npx --yes github:letstrnsfrm-ai/agentic-solid-qe'))
       ) {
         pkg.scripts[k] = v;
         modified = true;
@@ -922,6 +986,7 @@ const coreEnginePaths = [
   '.github/copilot-instructions.md',
   '.github/prompts',
   '.claude/commands',
+  'CHANGELOG.json',
   'scripts/build-domain-graph.mjs',
   'scripts/compile-tape.mjs',
   'scripts/migrate-skill.mjs',
@@ -929,11 +994,12 @@ const coreEnginePaths = [
   'scripts/audit-solid.mjs',
   'scripts/validate-tapes.mjs',
   'scripts/sync-skills.mjs',
+  'scripts/upgrade-framework.mjs',
   'scripts/self-test.mjs',
 ];
 
 console.log(
-  `\n🚀 Running agentic-solid-qe (${command}${resetDemo ? ' --reset' : ''}${includeDemo ? ' --demo' : ''}${dryRun ? ' --dry-run' : ''}) -> ${TARGET_ROOT}\n`
+  `\n🚀 Running agentic-solid-qe (${command}${resetDemo ? ' --reset' : ''}${includeDemo ? ' --demo' : ''}${dryRun ? ' --dry-run' : ''}${forceOverwrite ? ' --force' : ''}) -> ${TARGET_ROOT}\n`
 );
 
 backupPreExistingInstructionFiles();
@@ -941,7 +1007,49 @@ backupPreExistingInstructionFiles();
 for (const relPath of coreEnginePaths) {
   copyRecursive(path.join(SOURCE_ROOT, relPath), path.join(TARGET_ROOT, relPath), {
     overwrite: true,
+    trackManifest: true,
   });
+}
+
+if (unchangedSyncCount > 0) {
+  console.log(`⚡ Skipped ${unchangedSyncCount} unchanged framework file(s).`);
+}
+
+// Prune stale framework-managed files that were removed or renamed in newer releases (only if unmodified)
+const prunedFiles = [];
+for (const [oldRel, oldHash] of Object.entries(previousManifest.files)) {
+  if (nextManagedFiles[oldRel]) continue;
+  const oldDest = path.join(TARGET_ROOT, oldRel);
+  if (!fs.existsSync(oldDest) || fs.lstatSync(oldDest).isSymbolicLink()) continue;
+  const currentHash = sha256File(oldDest);
+  if (currentHash === oldHash || forceOverwrite) {
+    if (!dryRun) {
+      fs.unlinkSync(oldDest);
+    }
+    prunedFiles.push(oldRel);
+    console.log(`${dryRun ? '🔍 [DRY-RUN] Would prune' : '🧹 Pruned'} stale framework file: ${oldRel}`);
+  } else {
+    console.log(`⚠️  Skipped pruning locally modified stale file: ${oldRel}`);
+  }
+}
+
+if (!dryRun && !isUnsafeDest(path.join(TARGET_ROOT, MANIFEST_REL_PATH))) {
+  const manifestDest = path.join(TARGET_ROOT, MANIFEST_REL_PATH);
+  fs.mkdirSync(path.dirname(manifestDest), { recursive: true });
+  fs.writeFileSync(
+    manifestDest,
+    JSON.stringify(
+      {
+        schemaVersion: '1.0.0',
+        version: SOURCE_VERSION,
+        syncedAt: new Date().toISOString(),
+        files: nextManagedFiles,
+      },
+      null,
+      2
+    ) + '\n',
+    'utf8'
+  );
 }
 
 const targetDomainMemory = path.join(TARGET_ROOT, '.agents/domain/domain-memory.md');
@@ -1038,9 +1146,11 @@ if (command === 'init') {
     'src/contracts/identifiable-component.contract.ts',
     'src/contracts/error-banner.contract.ts',
     'src/contracts/api-client.contract.ts',
+    'src/contracts/catalog-list.contract.ts',
     'src/contracts/wizard-step.contract.ts',
     'src/shared/api/auth-token.bridge.ts',
     'src/shared/data/relative-date.helper.ts',
+    'src/shared/ui/overlay-handler.ts',
   ]) {
     copyRecursive(path.join(SOURCE_ROOT, foundationalPath), path.join(TARGET_ROOT, foundationalPath), {
       overwrite: false,
@@ -1127,6 +1237,110 @@ if (squadName) {
     }
   }
 }
+
+function detectCustomizableConfigDrift() {
+  if (path.resolve(SOURCE_ROOT) === path.resolve(TARGET_ROOT)) return [];
+  const candidates = [
+    {
+      relPath: 'playwright.config.ts',
+      patchName: 'playwright.config.ts.new',
+      checks: [
+        { marker: "['blob']", label: 'Sharded CI blob reporter support' },
+      ],
+    },
+    {
+      relPath: '.github/workflows/playwright-ci.yml',
+      patchName: 'playwright-ci.yml.new',
+      checks: [
+        { marker: 'merge-reports', label: 'Sharded blob merge-reports job' },
+        { marker: '--only-changed', label: 'PR --only-changed fast smoke gate' },
+      ],
+    },
+  ];
+
+  const detected = [];
+  for (const item of candidates) {
+    const targetFile = path.join(TARGET_ROOT, item.relPath);
+    const sourceFile = path.join(SOURCE_ROOT, item.relPath);
+    const patchFile = path.join(UPGRADE_PATCHES_DIR, item.patchName);
+    if (!fs.existsSync(targetFile) || !fs.existsSync(sourceFile)) continue;
+    if (fs.lstatSync(targetFile).isSymbolicLink()) continue;
+
+    const targetContent = fs.readFileSync(targetFile, 'utf8');
+    const missingFeatures = item.checks
+      .filter((c) => !targetContent.includes(c.marker))
+      .map((c) => c.label);
+
+    if (missingFeatures.length > 0) {
+      if (!dryRun && !isUnsafeDest(patchFile)) {
+        fs.mkdirSync(path.dirname(patchFile), { recursive: true });
+        fs.copyFileSync(sourceFile, patchFile);
+      }
+      detected.push({
+        relPath: item.relPath,
+        patchRel: rel(patchFile).replace(/\\/g, '/'),
+        missingFeatures,
+      });
+    } else if (fs.existsSync(patchFile) && !dryRun) {
+      fs.unlinkSync(patchFile);
+    }
+  }
+  return detected;
+}
+
+function printUpgradeSummary(configDrift) {
+  const prevVer = previousManifest.version;
+  const changelogPath = path.join(SOURCE_ROOT, 'CHANGELOG.json');
+  if (fs.existsSync(changelogPath)) {
+    try {
+      const changelog = JSON.parse(fs.readFileSync(changelogPath, 'utf8'));
+      const releases = Array.isArray(changelog.releases) ? changelog.releases : [];
+      const relevant = prevVer
+        ? releases.filter((r) => r.version !== prevVer)
+        : releases.slice(0, 1);
+
+      if (relevant.length > 0 && prevVer !== SOURCE_VERSION) {
+        console.log(
+          `\n📣 What's New (${prevVer ? `${prevVer} -> ${SOURCE_VERSION}` : `v${SOURCE_VERSION}`}):`
+        );
+        for (const relInfo of relevant.slice(0, 2)) {
+          console.log(`   • v${relInfo.version} (${relInfo.date || ''})`);
+          for (const h of (relInfo.highlights || []).slice(0, 4)) {
+            console.log(`     - ${h}`);
+          }
+        }
+        const actions = relevant[0]?.nextActions || [];
+        if (actions.length > 0) {
+          console.log(`\n🧭 Recommended Next Actions:`);
+          for (const act of actions) {
+            console.log(`   → ${act}`);
+          }
+        }
+      }
+    } catch {
+      /* ignore malformed changelog */
+    }
+  }
+
+  if (preservedLocalEdits.length > 0) {
+    console.log(`\n🛡️  Locally Edited Framework Files Preserved (${preservedLocalEdits.length}):`);
+    for (const item of preservedLocalEdits) {
+      console.log(`   • ${item.relPath} (incoming template saved at ${item.patchRel})`);
+    }
+    console.log(`   Tip: Review diffs or re-run with '--force' to overwrite.`);
+  }
+
+  if (configDrift.length > 0) {
+    console.log(`\n🧩 Optional Config & CI Upgrades Available (.agents/upgrade-patches/):`);
+    for (const d of configDrift) {
+      console.log(`   • ${d.relPath} -> ${d.patchRel}`);
+      console.log(`     Missing capabilities: ${d.missingFeatures.join('; ')}`);
+    }
+  }
+}
+
+const configDrift = command === 'sync' ? detectCustomizableConfigDrift() : [];
+printUpgradeSummary(configDrift);
 
 console.log(
   `\n✅ Agentic-SOLID-QE (${command}${dryRun ? ' --dry-run' : ''}) complete! Next steps: run 'npm install && npx playwright install chromium', then invoke '/00-master-orchestrator' (or 'npx cortex orchestrate').\n`

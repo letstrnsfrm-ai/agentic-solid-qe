@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0.0",
+  "latestVersion": "0.9.1",
+  "releases": [
+    {
+      "version": "0.9.1",
+      "date": "2026-11-17",
+      "highlights": [
+        "Incremental Upgrade Engine: .agents/framework-manifest.json tracks managed file hashes, skips unchanged files, preserves local edits in .agents/upgrade-patches/, and safely prunes stale framework files.",
+        "Dynamic Release Resolution (`cortex upgrade` / `npm run upgrade:skills`): Resolves the latest GitHub release tag without hardcoding old version pins, with --check, --to <tag>, and --dry-run.",
+        "Customizable Config Drift Detection: Detects missing features in playwright.config.ts (blob reporter, PW_PAUSE_FOR_EXPLORE) and .github/workflows/playwright-ci.yml (merge-reports, --only-changed) into .agents/upgrade-patches/.",
+        "Lossless Skill Overrides: Preserves .agents/skills/*/references/local-overrides.md across sync and enforces reference indexing in audit:solid.",
+        "Complex UI & Pause-Anywhere Exploration: Adds src/shared/ui/overlay-handler.ts, test:explore (PW_PAUSE_FOR_EXPLORE=1), and human-driven codegen + playwright-cli attach workflows.",
+        "Enterprise Scale Pack: Adds --summary/--squad filtering in coverage:gaps and audit:solid, PR --only-changed CI mode, and blob merge-reports."
+      ],
+      "nextActions": [
+        "Run `npm run coverage:gaps` (or `/00-master-orchestrator`) to review any pending `.agents/upgrade-patches/` opt-in config updates.",
+        "Use `npm run test:explore` + `playwright-cli attach` to resume live exploration from any existing `.spec.ts`.",
+        "Place team-specific skill customizations in `.agents/skills/<skill>/references/local-overrides.md` so future syncs preserve them."
+      ]
+    },
+    {
+      "version": "0.8.0",
+      "date": "2026-10-30",
+      "highlights": [
+        "Deterministic Tape-to-SOLID Compiler (`npx cortex compile <tape> --apply`) with WizardStepContract, ApiClientContract, and AuthTokenBridge.",
+        "Master Orchestrator (`00-master-orchestrator`) & 5-Stage Incremental Coverage Ladder (`npx cortex orchestrate`).",
+        "Business-domain `test.step()` enforcement in specs and compiler."
+      ],
+      "nextActions": [
+        "Run `npx cortex orchestrate` to check your repo's Stage 0-4 maturity and uncompiled Session Tapes."
+      ]
+    },
+    {
+      "version": "0.7.0",
+      "date": "2026-10-20",
+      "highlights": [
+        "7-way Drift Healing (`03-drift-healer`), auto-indexed tape seeding, and `sync --dry-run`.",
+        "Multi-portal handoff & conditional wizard support in session-tape.schema.json."
+      ],
+      "nextActions": [
+        "Run `npm run validate:tapes` to verify existing Session Tapes against the latest schema."
+      ]
+    }
+  ]
+}

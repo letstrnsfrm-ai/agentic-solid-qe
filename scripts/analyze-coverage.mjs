@@ -311,6 +311,23 @@ const scopedSpecs = specsWithContent
   .filter((s) => !filterSquad || matchSquad(s.file))
   .map(({ rawContent, ...rest }) => rest);
 
+const pendingUpgradePatches = walkFiles(path.join(ROOT, '.agents/upgrade-patches')).map((f) =>
+  path.relative(ROOT, f).replace(/\\/g, '/')
+);
+let installedFrameworkVersion = null;
+const manifestFilePath = path.join(ROOT, '.agents/framework-manifest.json');
+if (fs.existsSync(manifestFilePath)) {
+  try {
+    installedFrameworkVersion = JSON.parse(fs.readFileSync(manifestFilePath, 'utf8')).version || null;
+  } catch {
+    /* ignore malformed manifest */
+  }
+}
+const upgradeStatus = {
+  installedVersion: installedFrameworkVersion,
+  pendingUpgradePatches,
+};
+
 const isCompact = !forceFull && (forceSummary || scopedSpecs.length + scopedTapes.length > 25);
 
 const report = isCompact
@@ -319,6 +336,7 @@ const report = isCompact
       mode: 'compact-summary',
       ...(filterSquad ? { squadFilter: filterSquad } : {}),
       coverageMaturityStage,
+      upgradeStatus,
       targetApp: {
         appName,
         baseUrl,
@@ -338,6 +356,7 @@ const report = isCompact
         wizardSteps: wizardSteps.length,
         apiClients: apiClients.length,
         openDefects: openDefects.length,
+        pendingUpgradePatches: pendingUpgradePatches.length,
       },
       topUncoveredShards: scopedUncovered.slice(0, 10),
       topUncompiledTapes: scopedUncompiled.slice(0, 10),
@@ -350,6 +369,7 @@ const report = isCompact
       masterOrchestratorSkill: '/00-master-orchestrator',
       ...(filterSquad ? { squadFilter: filterSquad } : {}),
       coverageMaturityStage,
+      upgradeStatus,
       targetApp: {
         appName,
         baseUrl,
