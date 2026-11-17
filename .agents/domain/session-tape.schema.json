@@ -420,6 +420,24 @@
           }
         }
       }
+    },
+    "datasets": {
+      "type": "array",
+      "description": "Optional parameterized test rows extracted from @DataProvider, @CsvSource, [TestCase], or [InlineData].",
+      "items": {
+        "type": "object",
+        "required": ["name", "values"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": ["string", "number", "boolean"]
+            }
+          }
+        }
+      }
     }
   }
 }

@@ -488,6 +488,12 @@ if (legacyTargetArg) {
         verificationMode: plan.verificationMode,
         cliVerificationCommands: plan.cliVerificationCommands,
         compileCommand: plan.compileCommand,
+        scaffoldedFiles: (plan.scaffoldedFiles || []).map((f) => ({
+          path: f.path,
+          kind: f.kind,
+          lines: f.lines,
+          splitFromGodPageObject: Boolean(f.splitFromGodPageObject),
+        })),
         applied,
         draftTape: plan.draftTape,
       },

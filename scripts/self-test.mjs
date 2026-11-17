@@ -1961,7 +1961,152 @@ test('20. 1000+ test scale guardrails: enforces CI shardability, tags, test.only
   }
 });
 
+test('21. Legacy Java/C# deep migration: God Page Object auto-split, locator translation, and DataProvider/TestCase builder extraction', async () => {
+  const { buildLegacyMigrationPlan, applyLegacyMigrationPlan } = await import(
+    new URL('./legacy-test-migrator.mjs', import.meta.url).href
+  );
 
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-deep-migrate-'));
+  const legacyDir = path.join(tmpRoot, 'legacy-repo');
+  const pwDir = path.join(legacyDir, 'e2e-playwright');
 
+  try {
+    // 1. Seed legacy Java God Page Object (> 12 locators) + DataProvider test
+    fs.mkdirSync(path.join(legacyDir, 'src/test/java/pages'), { recursive: true });
+    fs.mkdirSync(path.join(legacyDir, 'src/test/java/tests'), { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'pom.xml'), '<project></project>\n', 'utf8');
 
+    fs.writeFileSync(
+      path.join(legacyDir, 'src/test/java/pages/CheckoutGodPage.java'),
+      `package pages;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.support.FindBy;
 
+public class CheckoutGodPage {
+  @FindBy(id = "first-name") private WebElement firstNameInput;
+  @FindBy(id = "last-name") private WebElement lastNameInput;
+  @FindBy(name = "postalCode") private WebElement postalCodeInput;
+  @FindBy(css = "[data-testid='submit-order']") private WebElement submitButton;
+  @FindBy(css = "[aria-label='Cancel Order']") private WebElement cancelButton;
+  @FindBy(linkText = "Order History") private WebElement navHistoryLink;
+  @FindBy(id = "header-menu") private WebElement headerMenuNav;
+  @FindBy(id = "sidebar-nav") private WebElement sidebarNavLink;
+  @FindBy(id = "orders-table") private WebElement ordersTable;
+  @FindBy(css = ".order-row") private WebElement orderTableRow;
+  @FindBy(id = "sort-col") private WebElement tableSortColumn;
+  @FindBy(id = "confirm-modal") private WebElement confirmModalDialog;
+  @FindBy(id = "alert-banner") private WebElement alertBannerToast;
+  @FindBy(xpath = "//div[@class='legacy-wrapper']/span[2]") private WebElement legacySpan;
+
+  public void submitCheckout(String firstName, String lastName) {
+    firstNameInput.sendKeys(firstName);
+    lastNameInput.sendKeys(lastName);
+    submitButton.click();
+  }
+}
+`,
+      'utf8'
+    );
+
+    fs.writeFileSync(
+      path.join(legacyDir, 'src/test/java/tests/CheckoutFlowTests.java'),
+      `package tests;
+import org.testng.annotations.*;
+import pages.CheckoutGodPage;
+
+public class CheckoutFlowTests {
+  @DataProvider(name = "checkoutUsers")
+  public Object[][] checkoutUsers() {
+    return new Object[][] {
+      { "alice", "Sup3rS3cret!", 90210 },
+      { "bob", "An0th3rS3cret!", 10001 }
+    };
+  }
+
+  @Test(dataProvider = "checkoutUsers", groups = {"smoke"})
+  public void testParameterizedCheckout(String username, String password, int zipCode) {
+    CheckoutGodPage page = new CheckoutGodPage();
+    page.submitCheckout(username, "Doe");
+  }
+}
+`,
+      'utf8'
+    );
+
+    // 2. Seed C# [Theory] [InlineData] + record data model
+    fs.mkdirSync(path.join(legacyDir, 'Tests'), { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyDir, 'Tests/LoginTheoryTests.cs'),
+      `using Xunit;
+public record LoginPayload(string Username, string Password, bool RememberMe);
+
+public class LoginTheoryTests {
+  [Theory]
+  [InlineData("qa_user", "Secr3tPass!", true)]
+  [InlineData("admin_user", "Adm1nPass!", false)]
+  public void ShouldLoginWithValidData(string username, string password, bool rememberMe) {
+    Assert.True(rememberMe || !rememberMe);
+  }
+}
+`,
+      'utf8'
+    );
+
+    // 3. Init Playwright workspace inside e2e-playwright
+    const initRes = runNode(
+      SYNC_SCRIPT,
+      ['init', pwDir, '--url', 'https://app.example.com', '--name', 'LegacyDeepTest'],
+      tmpRoot
+    );
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    // 4. Build & apply Java migration plan
+    const javaPlan = buildLegacyMigrationPlan(legacyDir, 'java-checkout-flow-tests-test-parameterized-checkout', {
+      baseUrl: 'https://app.example.com',
+      staticOnly: true,
+    });
+    assert.equal(javaPlan.found, true, 'Expected Java parameterized test to be found');
+    assert.ok(javaPlan.draftTape.datasets && javaPlan.draftTape.datasets.length === 2, 'Expected 2 DataProvider datasets');
+    assert.equal(
+      javaPlan.draftTape.datasets[0].values.password,
+      '<ENV:LEGACY_PASSWORD>',
+      'Expected password in tape dataset to be redacted'
+    );
+
+    const godComponents = javaPlan.scaffoldedFiles.filter((f) => f.kind === 'component' && f.splitFromGodPageObject);
+    assert.ok(godComponents.length >= 2, `Expected God Page Object to split into >= 2 components, got ${godComponents.length}`);
+    for (const c of godComponents) {
+      assert.ok(c.lines <= 150, `Expected split component ${c.path} <= 150 lines, got ${c.lines}`);
+    }
+    const xpathComp = godComponents.find((c) => c.content.includes('TODO: replace weak XPath'));
+    assert.ok(xpathComp, 'Expected weak XPath to include TODO review comment');
+
+    const javaBuilder = javaPlan.scaffoldedFiles.find((f) => f.kind === 'data-builder');
+    assert.ok(javaBuilder, 'Expected Java DataProvider builder to be scaffolded');
+    assert.match(javaBuilder.content, /process\.env\.LEGACY_PASSWORD \?\? ''/);
+    assert.doesNotMatch(javaBuilder.content, /Sup3rS3cret!/);
+
+    const applied = applyLegacyMigrationPlan(pwDir, javaPlan, '..');
+    assert.ok(applied.writtenScaffoldFiles.length >= 4, 'Expected tape + split components + page + builder to be written');
+
+    // 5. Build & apply C# [Theory] [InlineData] migration plan
+    const csPlan = buildLegacyMigrationPlan(legacyDir, 'cs-login-theory-tests-should-login-with-valid-data', {
+      baseUrl: 'https://app.example.com',
+      staticOnly: true,
+    });
+    assert.equal(csPlan.found, true, 'Expected C# Theory test to be found');
+    assert.ok(csPlan.draftTape.datasets && csPlan.draftTape.datasets.length === 2, 'Expected 2 InlineData datasets');
+    assert.equal(csPlan.draftTape.datasets[0].values.password, '<ENV:LEGACY_PASSWORD>');
+    applyLegacyMigrationPlan(pwDir, csPlan, '..');
+
+    // 6. Verify validate-tapes and audit-solid pass on the migrated Playwright workspace
+    const valRes = runNode(path.join(pwDir, 'scripts/validate-tapes.mjs'), [], pwDir);
+    assert.equal(valRes.status, 0, `validate-tapes failed: ${valRes.stderr}\n${valRes.stdout}`);
+
+    const auditRes = runNode(path.join(pwDir, 'scripts/audit-solid.mjs'), [], pwDir);
+    assert.equal(auditRes.status, 0, `audit-solid failed: ${auditRes.stderr}\n${auditRes.stdout}`);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});

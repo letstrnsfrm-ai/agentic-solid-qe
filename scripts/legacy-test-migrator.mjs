@@ -208,32 +208,244 @@ function extractTagsFromAnnotations(attrBlock) {
   return [...tags];
 }
 
+const SENSITIVE_FIELD_REGEX = /password|passwd|secret|token|apikey|api_key|credential|auth/i;
+
+function isSensitiveFieldName(name) {
+  return SENSITIVE_FIELD_REGEX.test(String(name || ''));
+}
+
+function escapeSingleQuote(val) {
+  return String(val || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
 function parsePageObjectLocators(content, language) {
   const locators = [];
+  const seen = new Set();
+  const pushLoc = (fieldName, byType, selector) => {
+    if (!fieldName || seen.has(fieldName)) return;
+    seen.add(fieldName);
+    locators.push({ fieldName, byType: String(byType).toLowerCase(), selector });
+  };
+
   if (language === 'java') {
     for (const m of content.matchAll(
-      /@FindBy\s*\(\s*(id|name|css|xpath|linkText|className)\s*=\s*"([^"]+)"\s*\)\s*(?:private|public|protected)?\s*WebElement\s+(\w+)/g
+      /@FindBy\s*\(\s*(id|name|css|xpath|linkText|partialLinkText|className|tagName)\s*=\s*"([^"]+)"\s*\)\s*(?:private|public|protected)?\s*(?:List\s*<\s*WebElement\s*>|WebElement)\s+(\w+)/g
     )) {
-      locators.push({ fieldName: m[3], byType: m[1], selector: m[2] });
+      pushLoc(m[3], m[1], m[2]);
     }
     for (const m of content.matchAll(
-      /(?:By|private\s+final\s+By)\s+(\w+)\s*=\s*By\.(id|name|cssSelector|xpath|linkText|className)\s*\(\s*"([^"]+)"\s*\)/g
+      /@FindBy\s*\(\s*how\s*=\s*How\.(\w+)\s*,\s*using\s*=\s*"([^"]+)"\s*\)\s*(?:private|public|protected)?\s*(?:List\s*<\s*WebElement\s*>|WebElement)\s+(\w+)/g
     )) {
-      locators.push({ fieldName: m[1], byType: m[2], selector: m[3] });
+      pushLoc(m[3], m[1], m[2]);
+    }
+    for (const m of content.matchAll(
+      /(?:By|private\s+(?:static\s+)?(?:final\s+)?By)\s+(\w+)\s*=\s*By\.(id|name|cssSelector|xpath|linkText|partialLinkText|className|tagName)\s*\(\s*"([^"]+)"\s*\)/g
+    )) {
+      pushLoc(m[1], m[2], m[3]);
     }
   } else {
     for (const m of content.matchAll(
-      /\[FindsBy\s*\(\s*How\s*=\s*How\.(\w+)\s*,\s*Using\s*=\s*"([^"]+)"\s*\)\]\s*(?:private|public|protected)?\s*IWebElement\s+(\w+)/g
+      /\[FindsBy\s*\(\s*How\s*=\s*How\.(\w+)\s*,\s*Using\s*=\s*"([^"]+)"\s*\)\]\s*(?:private|public|protected)?\s*(?:IList\s*<\s*IWebElement\s*>|IWebElement)\s+(\w+)/g
     )) {
-      locators.push({ fieldName: m[3], byType: m[1].toLowerCase(), selector: m[2] });
+      pushLoc(m[3], m[1], m[2]);
     }
     for (const m of content.matchAll(
-      /\bBy\s+(\w+)\s*(?:=|=>)\s*By\.(Id|Name|CssSelector|XPath|LinkText|ClassName)\s*\(\s*"([^"]+)"\s*\)/g
+      /\bBy\s+(\w+)\s*(?:=|=>)\s*By\.(Id|Name|CssSelector|XPath|LinkText|PartialLinkText|ClassName|TagName)\s*\(\s*"([^"]+)"\s*\)/g
     )) {
-      locators.push({ fieldName: m[1], byType: m[2].toLowerCase(), selector: m[3] });
+      pushLoc(m[1], m[2], m[3]);
     }
   }
   return locators;
+}
+
+function parsePageObjectMethods(content, language) {
+  const methods = [];
+  const seen = new Set();
+  const pattern =
+    language === 'java'
+      ? /public\s+(?!class\b)[A-Za-z0-9_<>\[\]]+\s+([a-z][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:throws\s+[^{]+)?\{/g
+      : /public\s+(?:async\s+)?[A-Za-z0-9_<>\[\]]+\s+([A-Z][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*\{/g;
+
+  for (const m of content.matchAll(pattern)) {
+    const name = m[1];
+    if (seen.has(name) || /^(?:get|is|equals|hashCode|toString)$/i.test(name)) continue;
+    seen.add(name);
+    const rawParams = (m[2] || '').trim();
+    const params = rawParams
+      ? rawParams
+          .split(',')
+          .map((p) => p.trim().split(/\s+/).pop())
+          .filter(Boolean)
+      : [];
+    methods.push({ name: toCamelCase(name), params });
+  }
+  return methods;
+}
+
+function mapJavaCsharpTypeToTs(rawType) {
+  const t = String(rawType || '').trim().toLowerCase();
+  if (/^(int|integer|long|double|float|decimal|short|byte)$/.test(t)) return 'number';
+  if (/^(boolean|bool)$/.test(t)) return 'boolean';
+  return 'string';
+}
+
+function parseLegacyDataModels(sourceFiles, scanRoot) {
+  const models = {};
+  for (const file of sourceFiles) {
+    const content = readTextSafe(file);
+    if (!content) continue;
+    const language = file.endsWith('.java') ? 'java' : 'csharp';
+    const relPath = path.relative(scanRoot, file).replace(/\\/g, '/');
+
+    // Java/C# records: record CheckoutData(String firstName, String lastName, int zip)
+    for (const m of content.matchAll(
+      /\b(?:public\s+)?record\s+([A-Za-z0-9_]+)\s*\(([^)]+)\)/g
+    )) {
+      const name = m[1];
+      const fields = m[2]
+        .split(',')
+        .map((part) => part.trim().split(/\s+/))
+        .filter((parts) => parts.length >= 2)
+        .map((parts) => ({
+          name: toCamelCase(parts[parts.length - 1]),
+          tsType: mapJavaCsharpTypeToTs(parts[parts.length - 2]),
+          sensitive: isSensitiveFieldName(parts[parts.length - 1]),
+        }));
+      if (fields.length > 0) {
+        models[name] = { name, language, file: relPath, fields };
+      }
+    }
+
+    // POJO / POCO / DTO classes (*Data, *Dto, *Payload, *Request, *Model, *User)
+    const classMatch = content.match(/\bclass\s+([A-Za-z0-9_]+(?:Data|Dto|Payload|Request|Model|User|Input))\b/);
+    if (classMatch && !models[classMatch[1]]) {
+      const name = classMatch[1];
+      const fields = [];
+      const seen = new Set();
+      if (language === 'java') {
+        for (const fm of content.matchAll(/(?:private|public|protected)\s+(?:final\s+)?(String|int|Integer|long|Long|double|Double|boolean|Boolean)\s+([a-zA-Z0-9_]+)\s*(?:=|;)/g)) {
+          const fname = toCamelCase(fm[2]);
+          if (seen.has(fname)) continue;
+          seen.add(fname);
+          fields.push({ name: fname, tsType: mapJavaCsharpTypeToTs(fm[1]), sensitive: isSensitiveFieldName(fname) });
+        }
+      } else {
+        for (const fm of content.matchAll(/public\s+(string|int|long|double|decimal|bool)\s+([A-Za-z0-9_]+)\s*\{\s*get;/g)) {
+          const fname = toCamelCase(fm[2]);
+          if (seen.has(fname)) continue;
+          seen.add(fname);
+          fields.push({ name: fname, tsType: mapJavaCsharpTypeToTs(fm[1]), sensitive: isSensitiveFieldName(fname) });
+        }
+      }
+      if (fields.length > 0) {
+        models[name] = { name, language, file: relPath, fields };
+      }
+    }
+  }
+  return models;
+}
+
+function parseTypedLiteralToken(raw) {
+  const t = String(raw || '').trim();
+  if (/^["'].*["']$/.test(t)) return t.slice(1, -1);
+  if (t === 'true') return true;
+  if (t === 'false') return false;
+  if (/^-?\d+(?:\.\d+)?$/.test(t)) return Number(t);
+  return t.replace(/^["']|["']$/g, '');
+}
+
+function splitArgTokens(argStr) {
+  const out = [];
+  let cur = '';
+  let inQuote = null;
+  for (let i = 0; i < argStr.length; i++) {
+    const ch = argStr[i];
+    if (inQuote) {
+      cur += ch;
+      if (ch === inQuote && argStr[i - 1] !== '\\') inQuote = null;
+    } else if (ch === '"' || ch === "'") {
+      inQuote = ch;
+      cur += ch;
+    } else if (ch === ',') {
+      if (cur.trim()) out.push(parseTypedLiteralToken(cur));
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) out.push(parseTypedLiteralToken(cur));
+  return out;
+}
+
+function extractParameterizationDatasets(content, testMethod, language) {
+  const sigRegex =
+    language === 'java'
+      ? new RegExp(`((?:@\\w+(?:\\([^)]*\\))?\\s*)+)(?:public|protected|private)?\\s*(?:static\\s+)?void\\s+${testMethod}\\s*\\(([^)]*)\\)`)
+      : new RegExp(`((?:\\[[^\\]]+\\]\\s*)+)(?:public|private|internal|protected)?\\s*(?:async\\s+)?(?:Task|void)\\s+${testMethod}\\s*\\(([^)]*)\\)`);
+
+  const sigMatch = content.match(sigRegex);
+  if (!sigMatch) return { params: [], datasets: [] };
+
+  const attrBlock = sigMatch[1] || '';
+  const rawParams = (sigMatch[2] || '').trim();
+  const params = rawParams
+    ? rawParams.split(',').map((p, idx) => {
+        const parts = p.trim().split(/\s+/);
+        const name = toCamelCase(parts[parts.length - 1] || `param${idx + 1}`);
+        const tsType = parts.length >= 2 ? mapJavaCsharpTypeToTs(parts[parts.length - 2]) : 'string';
+        return { name, tsType, sensitive: isSensitiveFieldName(name) };
+      })
+    : [];
+
+  const rows = [];
+
+  if (language === 'java') {
+    // @CsvSource({ "a, 1", "b, 2" })
+    const csvMatch = attrBlock.match(/@CsvSource\s*\(\s*\{?([\s\S]*?)\}?\s*\)/);
+    if (csvMatch) {
+      for (const rm of csvMatch[1].matchAll(/"([^"]+)"/g)) {
+        rows.push(rm[1].split(',').map((v) => parseTypedLiteralToken(v.trim())));
+      }
+    }
+    // @ValueSource(strings = { "a", "b" }) or ints = { 1, 2 }
+    const valMatch = attrBlock.match(/@ValueSource\s*\(\s*\w+\s*=\s*\{([^}]+)\}\s*\)/);
+    if (valMatch) {
+      for (const tok of splitArgTokens(valMatch[1])) {
+        rows.push([tok]);
+      }
+    }
+    // @Test(dataProvider = "name") -> find @DataProvider(name = "name") in same file
+    const dpRef = attrBlock.match(/dataProvider\s*=\s*"([^"]+)"/);
+    if (dpRef) {
+      const dpRegex = new RegExp(`@DataProvider\\s*\\(\\s*name\\s*=\\s*"${dpRef[1]}"\\s*\\)[\\s\\S]*?return\\s+new\\s+Object\\s*\\[\\]\\[\\]\\s*\\{([\\s\\S]*?)\\};`);
+      const dpMatch = content.match(dpRegex);
+      if (dpMatch) {
+        for (const rm of dpMatch[1].matchAll(/\{([^{}]+)\}/g)) {
+          rows.push(splitArgTokens(rm[1]));
+        }
+      }
+    }
+  } else {
+    // C# [TestCase(...)], [InlineData(...)], [DataRow(...)]
+    for (const m of attrBlock.matchAll(/\[(?:TestCase|InlineData|DataRow)\s*\(([^)]*)\)\]/g)) {
+      const tokens = splitArgTokens(m[1]);
+      if (tokens.length > 0) rows.push(tokens);
+    }
+  }
+
+  const datasets = rows.map((rowVals, idx) => {
+    const values = {};
+    rowVals.forEach((val, colIdx) => {
+      const param = params[colIdx] || { name: `arg${colIdx + 1}`, sensitive: false };
+      values[param.name] = param.sensitive ? `<ENV:LEGACY_${param.name.toUpperCase()}>` : val;
+    });
+    return {
+      name: `case-${idx + 1}`,
+      values,
+    };
+  });
+
+  return { params, datasets };
 }
 
 function classifyTestKind(body, fullFileContent) {
@@ -444,9 +656,12 @@ export function discoverLegacyTests(scanRoot) {
         file: path.relative(scanRoot, file).replace(/\\/g, '/'),
         language,
         locators: parsePageObjectLocators(content, language),
+        methods: parsePageObjectMethods(content, language),
       };
     }
   }
+
+  const dataModels = parseLegacyDataModels(sourceFiles, scanRoot);
 
   const tests = [];
   for (const file of sourceFiles) {
@@ -479,6 +694,7 @@ export function discoverLegacyTests(scanRoot) {
       wave2Count,
       wave3Count,
       pageObjectsCount: Object.keys(pageObjects).length,
+      dataModelsCount: Object.keys(dataModels).length,
     },
     recommendedNext: tests[0]
       ? {
@@ -492,6 +708,7 @@ export function discoverLegacyTests(scanRoot) {
       : null,
     tests,
     pageObjects,
+    dataModels,
   };
 }
 
@@ -721,6 +938,315 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects) {
   return { semanticSteps, networkContracts, expectedStates };
 }
 
+function translateSeleniumLocatorToPlaywright(loc) {
+  const by = String(loc.byType || '').toLowerCase();
+  const sel = String(loc.selector || '').trim();
+  const esc = escapeSingleQuote(sel);
+
+  if (by === 'id') {
+    return { expr: `page.locator('#${esc}')`, needsReview: false };
+  }
+  if (by === 'name') {
+    return { expr: `page.locator('[name="${esc.replace(/"/g, '\\"')}"]')`, needsReview: false };
+  }
+  if (by === 'linktext') {
+    return { expr: `page.getByRole('link', { name: '${esc}', exact: true })`, needsReview: false };
+  }
+  if (by === 'partiallinktext') {
+    return { expr: `page.getByRole('link', { name: '${esc}' })`, needsReview: false };
+  }
+  if (by === 'classname') {
+    return { expr: `page.locator('.${esc}')`, needsReview: true, note: 'Verify semantic role/testid instead of className' };
+  }
+  if (by === 'tagname') {
+    return { expr: `page.locator('${esc}')`, needsReview: true, note: 'Verify semantic role instead of tagName' };
+  }
+  if (by === 'css' || by === 'cssselector') {
+    const testIdMatch = sel.match(/\[data-test(?:id)?=["']([^"']+)["']\]/);
+    if (testIdMatch) {
+      return { expr: `page.getByTestId('${escapeSingleQuote(testIdMatch[1])}')`, needsReview: false };
+    }
+    const ariaMatch = sel.match(/\[aria-label=["']([^"']+)["']\]/);
+    if (ariaMatch) {
+      return { expr: `page.getByLabel('${escapeSingleQuote(ariaMatch[1])}')`, needsReview: false };
+    }
+    return { expr: `page.locator('${esc}')`, needsReview: false };
+  }
+  if (by === 'xpath') {
+    const idXpath = sel.match(/^\/\/\*\[@id=['"]([^'"]+)['"]\]$/);
+    if (idXpath) {
+      return { expr: `page.locator('#${escapeSingleQuote(idXpath[1])}')`, needsReview: false };
+    }
+    const btnExact = sel.match(/^\/\/button\[(?:text\(\)|normalize-space\(\))=['"]([^'"]+)['"]\]$/);
+    if (btnExact) {
+      return { expr: `page.getByRole('button', { name: '${escapeSingleQuote(btnExact[1])}', exact: true })`, needsReview: false };
+    }
+    const btnContains = sel.match(/^\/\/button\[contains\(text\(\),\s*['"]([^'"]+)['"]\)\]$/);
+    if (btnContains) {
+      return { expr: `page.getByRole('button', { name: '${escapeSingleQuote(btnContains[1])}' })`, needsReview: false };
+    }
+    return {
+      expr: `page.locator('xpath=${esc}')`,
+      needsReview: true,
+      note: 'TODO: replace weak XPath with semantic locator via @playwright/cli',
+    };
+  }
+  return { expr: `page.locator('${esc}')`, needsReview: true, note: 'TODO: verify locator via @playwright/cli' };
+}
+
+function classifyLocatorGroup(loc) {
+  const hint = `${loc.fieldName} ${loc.selector}`;
+  if (/nav|menu|header|footer|sidebar|tab|link|breadcrumb|logout/i.test(hint)) return 'nav';
+  if (/table|row|cell|col|grid|list|sort|paginat|filter/i.test(hint)) return 'table';
+  if (/modal|dialog|popup|alert|toast|confirm|banner/i.test(hint)) return 'modal';
+  if (/input|field|txt|select|dropdown|check|radio|btn|button|submit|save|cancel|form/i.test(hint)) return 'form';
+  return 'general';
+}
+
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function buildComponentTs(compClassName, locators, methods = []) {
+  const lines = [
+    `import type { Locator, Page } from '@playwright/test';`,
+    `import type { IdentifiableComponent } from '@contracts/identifiable-component.contract';`,
+    ``,
+    `/**`,
+    ` * Migrated SOLID SRP Component (<= 150 lines, zero expect() calls).`,
+    ` */`,
+    `export class ${compClassName} implements IdentifiableComponent {`,
+    `  readonly root: Locator;`,
+  ];
+
+  for (const loc of locators) {
+    if (toCamelCase(loc.fieldName) === 'root') continue;
+    lines.push(`  readonly ${toCamelCase(loc.fieldName)}: Locator;`);
+  }
+
+  lines.push(``, `  constructor(page: Page) {`, `    this.root = page.locator('body');`);
+  for (const loc of locators) {
+    if (toCamelCase(loc.fieldName) === 'root') continue;
+    const tr = translateSeleniumLocatorToPlaywright(loc);
+    const comment = tr.needsReview && tr.note ? ` // ${tr.note}` : '';
+    lines.push(`    this.${toCamelCase(loc.fieldName)} = ${tr.expr};${comment}`);
+  }
+  lines.push(`  }`);
+
+  for (const m of methods.slice(0, 6)) {
+    const paramList = m.params.map((p) => `${toCamelCase(p)}: string`).join(', ');
+    lines.push(``, `  async ${m.name}(${paramList}): Promise<void> {`);
+    lines.push(`    // TODO: wire migrated interaction steps from legacy Page Object`);
+    lines.push(`  }`);
+  }
+
+  lines.push(`}`, ``);
+  return lines.join('\n');
+}
+
+function buildPageTs(pageClassName, componentSpecs) {
+  const lines = [`import type { Page } from '@playwright/test';`];
+  for (const c of componentSpecs) {
+    lines.push(`import { ${c.className} } from '@components/${c.slug}.component';`);
+  }
+  lines.push(
+    ``,
+    `/**`,
+    ` * Migrated Composed Page Object (zero expect() calls).`,
+    ` */`,
+    `export class ${pageClassName} {`
+  );
+  for (const c of componentSpecs) {
+    lines.push(`  readonly ${c.propName}: ${c.className};`);
+  }
+  lines.push(``, `  constructor(page: Page) {`);
+  for (const c of componentSpecs) {
+    lines.push(`    this.${c.propName} = new ${c.className}(page);`);
+  }
+  lines.push(`  }`, `}`, ``);
+  return lines.join('\n');
+}
+
+export function scaffoldPageObjectsToSolid(pageObjects, targetNames = []) {
+  const namesToProcess =
+    targetNames.length > 0
+      ? targetNames.filter((n) => pageObjects[n])
+      : Object.keys(pageObjects);
+
+  const files = [];
+  for (const poName of namesToProcess) {
+    const po = pageObjects[poName];
+    const baseName = poName.replace(/Page(?:Object)?$/i, '') || poName;
+    const basePascal = toPascalCase(baseName);
+    const baseKebab = slugifyKebab(baseName);
+    const locators = po.locators || [];
+    const methods = po.methods || [];
+
+    if (locators.length === 0 && methods.length === 0) continue;
+
+    const isGodPo = locators.length > 12;
+    const componentSpecs = [];
+
+    if (!isGodPo) {
+      const slug = baseKebab;
+      const compClassName = `${basePascal}Component`;
+      const content = buildComponentTs(compClassName, locators, methods);
+      files.push({
+        path: `src/components/${slug}.component.ts`,
+        kind: 'component',
+        lines: content.split('\n').length,
+        splitFromGodPageObject: false,
+        content,
+      });
+      componentSpecs.push({ className: compClassName, slug, propName: toCamelCase(baseName) });
+    } else {
+      const grouped = new Map();
+      for (const loc of locators) {
+        const g = classifyLocatorGroup(loc);
+        if (!grouped.has(g)) grouped.set(g, []);
+        grouped.get(g).push(loc);
+      }
+
+      let methodAssigned = false;
+      for (const [group, groupLocs] of grouped.entries()) {
+        const chunks = groupLocs.length > 10 ? chunkArray(groupLocs, 10) : [groupLocs];
+        chunks.forEach((chunk, idx) => {
+          const suffix = chunks.length > 1 ? `${group}-${idx + 1}` : group;
+          const slug = `${baseKebab}-${suffix}`;
+          const compClassName = `${basePascal}${toPascalCase(suffix)}Component`;
+          const compMethods = !methodAssigned ? methods : [];
+          methodAssigned = true;
+          const content = buildComponentTs(compClassName, chunk, compMethods);
+          files.push({
+            path: `src/components/${slug}.component.ts`,
+            kind: 'component',
+            lines: content.split('\n').length,
+            splitFromGodPageObject: true,
+            content,
+          });
+          componentSpecs.push({ className: compClassName, slug, propName: toCamelCase(suffix) });
+        });
+      }
+    }
+
+    const pageContent = buildPageTs(`${basePascal}Page`, componentSpecs);
+    files.push({
+      path: `src/pages/${baseKebab}.page.ts`,
+      kind: 'page',
+      lines: pageContent.split('\n').length,
+      splitFromGodPageObject: isGodPo,
+      content: pageContent,
+    });
+  }
+
+  return files;
+}
+
+function scaffoldDataBuilder(match, params, datasets, dataModels) {
+  const baseName = match.className.replace(/Tests?$/i, '') || match.testMethod;
+  const builderPascal = `${toPascalCase(baseName)}Builder`;
+  const builderKebab = slugifyKebab(baseName);
+
+  // Collect fields from matching dataModel or parameterization params
+  const matchingModel = Object.values(dataModels || {}).find(
+    (m) =>
+      m.name.toLowerCase().includes(baseName.toLowerCase()) ||
+      baseName.toLowerCase().includes(m.name.replace(/(?:Data|Dto|Payload|Request|Model)$/i, '').toLowerCase())
+  );
+
+  const fields = matchingModel?.fields?.length
+    ? matchingModel.fields
+    : params.length > 0
+      ? params
+      : [];
+
+  if (fields.length === 0 && datasets.length === 0) {
+    return null;
+  }
+
+  const ifaceName = `${toPascalCase(baseName)}Data`;
+  const lines = [
+    `export interface ${ifaceName} {`,
+  ];
+  for (const f of fields) {
+    lines.push(`  readonly ${f.name}: ${f.tsType};`);
+  }
+  lines.push(`}`, ``);
+
+  const sensitiveFields = fields.filter((f) => f.sensitive);
+  for (const sf of sensitiveFields) {
+    lines.push(`const LEGACY_${sf.name.toUpperCase()} = process.env.LEGACY_${sf.name.toUpperCase()} ?? '';`);
+  }
+  if (sensitiveFields.length > 0) lines.push(``);
+
+  lines.push(
+    `/**`,
+    ` * Typed Data Builder (DIP) extracted from legacy ${match.language.toUpperCase()} test data.`,
+    ` */`,
+    `export class ${builderPascal} {`,
+    `  static defaultData(): ${ifaceName} {`,
+    `    return {`
+  );
+
+  const firstRow = datasets[0]?.values || {};
+  for (const f of fields) {
+    if (f.sensitive) {
+      lines.push(`      ${f.name}: LEGACY_${f.name.toUpperCase()},`);
+    } else if (firstRow[f.name] !== undefined) {
+      const v = firstRow[f.name];
+      const lit = typeof v === 'string' ? `'${escapeSingleQuote(v)}'` : String(v);
+      lines.push(`      ${f.name}: ${lit},`);
+    } else if (f.tsType === 'number') {
+      lines.push(`      ${f.name}: 1,`);
+    } else if (f.tsType === 'boolean') {
+      lines.push(`      ${f.name}: true,`);
+    } else {
+      lines.push(`      ${f.name}: 'sample-${slugifyKebab(f.name)}',`);
+    }
+  }
+  lines.push(`    };`, `  }`);
+
+  if (datasets.length > 0) {
+    lines.push(``, `  static datasets(): Array<{ name: string; data: ${ifaceName} }> {`, `    return [`);
+    for (const ds of datasets) {
+      lines.push(`      {`, `        name: '${escapeSingleQuote(ds.name)}',`, `        data: {`);
+      for (const f of fields) {
+        if (f.sensitive) {
+          lines.push(`          ${f.name}: LEGACY_${f.name.toUpperCase()},`);
+        } else {
+          const v = ds.values[f.name];
+          const lit =
+            v !== undefined
+              ? typeof v === 'string'
+                ? `'${escapeSingleQuote(v)}'`
+                : String(v)
+              : f.tsType === 'number'
+                ? '0'
+                : f.tsType === 'boolean'
+                  ? 'false'
+                  : `''`;
+          lines.push(`          ${f.name}: ${lit},`);
+        }
+      }
+      lines.push(`        },`, `      },`);
+    }
+    lines.push(`    ];`, `  }`);
+  }
+
+  lines.push(`}`, ``);
+  const content = lines.join('\n');
+  return {
+    path: `src/data/${builderKebab}.builder.ts`,
+    kind: 'data-builder',
+    lines: content.split('\n').length,
+    content,
+  };
+}
+
 /**
  * Build a draft Session Tape & migration plan for a legacy Java/C# test (or specific slice).
  */
@@ -751,6 +1277,13 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
     discovery.pageObjects
   );
 
+  const { params, datasets } = extractParameterizationDatasets(content, match.testMethod, match.language);
+  const scaffoldedFiles = scaffoldPageObjectsToSolid(discovery.pageObjects, match.pageObjectRefs);
+  const dataBuilderFile = scaffoldDataBuilder(match, params, datasets, discovery.dataModels);
+  if (dataBuilderFile) {
+    scaffoldedFiles.push(dataBuilderFile);
+  }
+
   const selectedSlice =
     options.sliceIndex && match.suggestedSlices[options.sliceIndex - 1]
       ? match.suggestedSlices[options.sliceIndex - 1]
@@ -780,7 +1313,7 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
     baseUrl,
     persona: {
       role: 'standard_user',
-      dataBuilderRef: `${toPascalCase(match.className)}Builder.defaultUser`,
+      dataBuilderRef: `${toPascalCase(match.className.replace(/Tests?$/i, '') || match.className)}Builder.defaultData`,
     },
     preconditions: [
       `Migrated from legacy ${match.language.toUpperCase()} test: ${match.file}#${match.testMethod}`,
@@ -791,6 +1324,7 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
     semanticSteps,
     networkContracts,
     expectedStates,
+    ...(datasets.length > 0 ? { datasets } : {}),
   };
 
   return {
@@ -805,14 +1339,15 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
           `npx playwright-cli -s=migrate-${scenarioId} snapshot`,
         ],
     compileCommand: `npm run compile:tape -- .exploratory/tapes/${scenarioId}.json --apply`,
+    scaffoldedFiles,
     draftTape,
   };
 }
 
 /**
- * Write the draft Session Tape and update .agents/domain/migration-manifest.json.
+ * Write the draft Session Tape, scaffolded SOLID Components/Pages/Builders, and update .agents/domain/migration-manifest.json.
  */
-export function applyLegacyMigrationPlan(projectRoot, plan, legacySourceRoot = '..') {
+export function applyLegacyMigrationPlan(projectRoot, plan, legacySourceRoot = '..', options = {}) {
   const tapeDir = path.join(projectRoot, '.exploratory/tapes');
   fs.mkdirSync(tapeDir, { recursive: true });
   const tapeRelPath = `.exploratory/tapes/${plan.draftTape.scenarioId}.json`;
@@ -823,6 +1358,19 @@ export function applyLegacyMigrationPlan(projectRoot, plan, legacySourceRoot = '
   }
 
   fs.writeFileSync(tapeFullPath, JSON.stringify(plan.draftTape, null, 2) + '\n', 'utf8');
+
+  const writtenScaffoldFiles = [];
+  for (const sf of plan.scaffoldedFiles || []) {
+    const destPath = path.join(projectRoot, sf.path);
+    if (!isWithinDir(destPath, projectRoot)) {
+      throw new Error(`Refusing to write scaffold file outside project root: ${destPath}`);
+    }
+    if (!fs.existsSync(destPath) || options.force) {
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      fs.writeFileSync(destPath, sf.content, 'utf8');
+      writtenScaffoldFiles.push(sf.path);
+    }
+  }
 
   const manifest = loadMigrationManifest(projectRoot) || {
     schemaVersion: '1.0.0',
@@ -849,6 +1397,7 @@ export function applyLegacyMigrationPlan(projectRoot, plan, legacySourceRoot = '
   if (!prev.tapes.includes(tapeRelPath)) {
     prev.tapes.push(tapeRelPath);
   }
+  prev.scaffoldedFiles = [...new Set([...(prev.scaffoldedFiles || []), ...writtenScaffoldFiles])];
   prev.status =
     plan.legacyTest.complexity === 'monolith' && prev.tapes.length < Math.max(1, prev.slices.length)
       ? 'decomposed'
@@ -860,6 +1409,7 @@ export function applyLegacyMigrationPlan(projectRoot, plan, legacySourceRoot = '
 
   return {
     tapeRelPath,
+    writtenScaffoldFiles,
     manifestRelPath: path.relative(projectRoot, manifestPath).replace(/\\/g, '/'),
     status: prev.status,
   };
