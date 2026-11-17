@@ -45,6 +45,7 @@ const CORE_ENGINE_SCRIPTS = new Set([
   'scripts/validate-tapes.mjs',
   'scripts/sync-skills.mjs',
   'scripts/upgrade-framework.mjs',
+  'scripts/report-cloud.mjs',
   'scripts/generate-release-notes.mjs',
   'scripts/self-test.mjs',
 ]);

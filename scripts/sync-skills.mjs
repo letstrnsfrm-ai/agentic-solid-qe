@@ -34,6 +34,7 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help
 Usage:
   cortex orchestrate           Run Master Orchestrator Diagnostic & 5-Stage Coverage Maturity Snapshot (alias: cortex status)
   cortex upgrade               Resolve latest release tag and incrementally sync skills, contracts, and upgrade patches
+  cortex report                Emit opt-in sanitized governance telemetry (schemaVersion: 1.0.0) to Cortex Cloud
   cortex compile [<tape>]      Compile Session Tape into SOLID Components, Pages, Builders, Fixtures & Spec (--apply)
   cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo] [--dry-run]
   cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>] [--dry-run] [--force]
@@ -50,6 +51,7 @@ const subcommandDelegateMap = {
   orchestrate: 'analyze-coverage.mjs',
   status: 'analyze-coverage.mjs',
   upgrade: 'upgrade-framework.mjs',
+  report: 'report-cloud.mjs',
   compile: 'compile-tape.mjs',
   migrate: 'migrate-skill.mjs',
   graph: 'build-domain-graph.mjs',
@@ -995,6 +997,7 @@ const coreEnginePaths = [
   'scripts/validate-tapes.mjs',
   'scripts/sync-skills.mjs',
   'scripts/upgrade-framework.mjs',
+  'scripts/report-cloud.mjs',
   'scripts/self-test.mjs',
 ];
 

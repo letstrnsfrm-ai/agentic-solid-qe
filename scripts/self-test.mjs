@@ -1462,3 +1462,33 @@ test('15. incremental upgrade: manifest skips unchanged files, preserves local e
   }
 });
 
+test('16. cortex report emits sanitized schemaVersion 1.0.0 telemetry and blocks path traversal / SSRF', () => {
+  const dryRes = runNode(SYNC_SCRIPT, ['report', '--dry-run'], REPO_ROOT);
+  assert.equal(dryRes.status, 0, `cortex report --dry-run failed: ${dryRes.stderr}`);
+  const payload = JSON.parse(dryRes.stdout);
+  assert.equal(payload.schemaVersion, '1.0.0');
+  assert.equal(typeof payload.maturityStage, 'number');
+  assert.equal(typeof payload.solidPassed, 'boolean');
+  assert.equal(payload.solidPassed, true);
+  assert.equal('baseUrl' in payload, false, 'Sanitized telemetry must not leak baseUrl');
+
+  // Path traversal in --out must be rejected
+  const travRes = runNode(SYNC_SCRIPT, ['report', '--out', '../outside-report.json'], REPO_ROOT);
+  assert.equal(travRes.status, 1);
+  assert.match(travRes.stderr, /must stay inside repository root/);
+
+  // SSRF metadata endpoint in CORTEX_CLOUD_URL must be rejected
+  const ssrfRes = spawnSync(process.execPath, [SYNC_SCRIPT, 'report'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CORTEX_CLOUD_URL: 'http://169.254.169.254/latest/meta-data',
+      CORTEX_CLOUD_TOKEN: 'test-token',
+    },
+  });
+  assert.equal(ssrfRes.status, 1);
+  assert.match(ssrfRes.stderr, /SSRF protection/);
+});
+
+
