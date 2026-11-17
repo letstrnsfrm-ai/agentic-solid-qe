@@ -1433,12 +1433,27 @@ test('15. incremental upgrade: manifest skips unchanged files, preserves local e
     assert.match(orchRes.stdout, /"pendingUpgradePatches": \[/);
     assert.match(orchRes.stdout, /playwright\.config\.ts\.new/);
 
-    // 5. Verify --force overwrites locally edited managed file
+    // 5. Verify cortex upgrade --diff & --apply-patches safely injects blob reporter and cleans up .new
+    const diffRes = runNode(SYNC_SCRIPT, ['upgrade', tmpDir, '--diff']);
+    assert.equal(diffRes.status, 0, diffRes.stderr);
+    assert.match(diffRes.stdout, /playwright\.config\.ts/);
+
+    const applyPatchesRes = runNode(SYNC_SCRIPT, ['upgrade', tmpDir, '--apply-patches']);
+    assert.equal(applyPatchesRes.status, 0, applyPatchesRes.stderr);
+    assert.match(applyPatchesRes.stdout, /Applied CI blob reporter/);
+    assert.match(fs.readFileSync(path.join(tmpDir, 'playwright.config.ts'), 'utf8'), /\['blob'\]/);
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, '.agents/upgrade-patches/playwright.config.ts.new')),
+      false,
+      'Expected playwright.config.ts.new to be removed after applying patch'
+    );
+
+    // 6. Verify --force overwrites locally edited managed file
     const forceRes = runNode(SYNC_SCRIPT, ['sync', tmpDir, '--force']);
     assert.equal(forceRes.status, 0, forceRes.stderr);
     assert.notEqual(fs.readFileSync(editedSkillFull, 'utf8'), customSkillContent);
 
-    // 6. Verify cortex upgrade --to rejects invalid tags
+    // 7. Verify cortex upgrade --to rejects invalid tags
     const badTagRes = runNode(SYNC_SCRIPT, ['upgrade', '--to', 'not-a-tag;rm -rf /'], tmpDir);
     assert.equal(badTagRes.status, 1);
     assert.match(badTagRes.stderr, /Invalid release tag/);

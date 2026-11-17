@@ -9,7 +9,7 @@ description: Master Orchestrator and entry-point advisor for Agentic-SOLID-QE. D
 When invoked as `/00-master-orchestrator` or `/master-orchestrator`, immediately:
 1. Run `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`.
 2. Read `.agents/domain/domain-memory.md` and `.agents/skills/00-master-orchestrator/references/master-orchestration-playbook.md`.
-3. Present the **Project Maturity & Next-Action Blueprint** (`Onboarding Track 1–4`, `coverageMaturityStage 0–4`, and exact next `/skill` or `npx cortex` command).
+3. Present the **Project Maturity & Next-Action Blueprint** (`Onboarding Track 1–4`, `coverageMaturityStage 0–4`, `upgradeStatus`, and exact next `/skill` or `npx cortex` command).
 
 ## 2. 5-Stage Incremental Coverage Ladder (`references/master-orchestration-playbook.md`)
 Advance automation coverage **1 test at a time**:

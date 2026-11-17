@@ -116,6 +116,123 @@ export async function fetchLatestReleaseTag() {
   return null;
 }
 
+function walkPatches(dir) {
+  if (!fs.existsSync(dir)) return [];
+  const results = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) results.push(...walkPatches(full));
+    else if (entry.isFile()) results.push(full);
+  }
+  return results;
+}
+
+export function collectPendingPatches(targetRoot) {
+  const patchesDir = path.join(targetRoot, '.agents/upgrade-patches');
+  return walkPatches(patchesDir).map((patchPath) => {
+    const relFromPatches = path.relative(patchesDir, patchPath).replace(/\\/g, '/');
+    let targetRel = relFromPatches;
+    if (relFromPatches === 'playwright.config.ts.new') targetRel = 'playwright.config.ts';
+    else if (relFromPatches === 'playwright-ci.yml.new') targetRel = '.github/workflows/playwright-ci.yml';
+    return {
+      patchPath,
+      patchRel: `.agents/upgrade-patches/${relFromPatches}`,
+      targetPath: path.join(targetRoot, targetRel),
+      targetRel,
+    };
+  });
+}
+
+function runDiffPatches(targetRoot) {
+  const patches = collectPendingPatches(targetRoot);
+  if (patches.length === 0) {
+    console.log('✅ No pending patches in .agents/upgrade-patches/.');
+    return 0;
+  }
+  console.log(`\n🔍 Pending Upgrade Patches (${patches.length}):\n`);
+  for (const p of patches) {
+    console.log(`--- ${p.targetRel}  <=>  ${p.patchRel} ---`);
+    if (!fs.existsSync(p.targetPath)) {
+      console.log(`(Target file ${p.targetRel} does not exist yet; patch will create it.)\n`);
+      continue;
+    }
+    const diffRes = spawnSync('git', ['diff', '--no-index', '--', p.targetPath, p.patchPath], {
+      encoding: 'utf8',
+    });
+    if (diffRes.stdout) {
+      console.log(diffRes.stdout);
+    } else {
+      console.log('(No textual differences detected.)\n');
+    }
+  }
+  return 0;
+}
+
+function injectBlobReporterInPlaywrightConfig(content) {
+  if (content.includes("['blob']")) return { changed: false, content };
+  const reporterLineRe = /(\breporter:\s*)(['"][^'"]+['"]|\[[^\]]*\])(\s*,?)/;
+  const match = content.match(reporterLineRe);
+  if (!match) return { changed: false, content };
+  const existingVal = match[2].trim();
+  const trailingComma = match[3] || '';
+  const replacement = `${match[1]}process.env.CI && process.env.PLAYWRIGHT_SHARD_INDEX ? [['blob']] : ${existingVal}${trailingComma}`;
+  return {
+    changed: true,
+    content: content.replace(reporterLineRe, replacement),
+  };
+}
+
+function runApplyPatches(targetRoot, { dryRun = false, force = false } = {}) {
+  const patches = collectPendingPatches(targetRoot);
+  if (patches.length === 0) {
+    console.log('✅ No pending patches in .agents/upgrade-patches/.');
+    return 0;
+  }
+  let remaining = 0;
+  for (const p of patches) {
+    if (p.targetRel === 'playwright.config.ts' && fs.existsSync(p.targetPath) && !force) {
+      const current = fs.readFileSync(p.targetPath, 'utf8');
+      const { changed, content } = injectBlobReporterInPlaywrightConfig(current);
+      if (changed) {
+        if (!dryRun) {
+          fs.writeFileSync(p.targetPath, content, 'utf8');
+          fs.unlinkSync(p.patchPath);
+        }
+        console.log(
+          `${dryRun ? '🔍 [DRY-RUN] Would inject' : '✨ Applied'} CI blob reporter into ${p.targetRel} and resolved ${p.patchRel}`
+        );
+        continue;
+      }
+      if (current.includes("['blob']")) {
+        if (!dryRun) fs.unlinkSync(p.patchPath);
+        console.log(`🧹 Removed already-satisfied patch: ${p.patchRel}`);
+        continue;
+      }
+    }
+
+    if (force) {
+      if (!dryRun) {
+        if (fs.existsSync(p.targetPath)) {
+          const backupPath = path.join(targetRoot, '.agents/legacy-backups', `${path.basename(p.targetRel)}.pre-patch`);
+          fs.mkdirSync(path.dirname(backupPath), { recursive: true, mode: 0o700 });
+          fs.copyFileSync(p.targetPath, backupPath);
+        }
+        fs.mkdirSync(path.dirname(p.targetPath), { recursive: true });
+        fs.copyFileSync(p.patchPath, p.targetPath);
+        fs.unlinkSync(p.patchPath);
+      }
+      console.log(`${dryRun ? '🔍 [DRY-RUN] Would overwrite' : '🔄 Applied'} ${p.patchRel} -> ${p.targetRel}`);
+    } else {
+      remaining++;
+      console.log(
+        `⏭️  Skipped manual/AI-merge patch: ${p.targetRel} (run 'npx cortex upgrade --diff' to inspect, '--apply-patches --force' to replace, or ask /00-master-orchestrator to merge)`
+      );
+    }
+  }
+  return remaining > 0 ? 0 : 0;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
@@ -127,8 +244,10 @@ Usage:
 
 Options:
   --check           Check current vs. latest release version without modifying files
-  --to <tag>        Upgrade to a specific release tag (e.g. v0.9.1)
-  --dry-run         Preview all sync changes without writing to disk
+  --diff            Preview unified diffs for pending files in .agents/upgrade-patches/
+  --apply-patches   Safely apply pending .agents/upgrade-patches/ (use --force to replace full files with backup)
+  --to <tag>        Upgrade to a specific release tag (e.g. v0.23.0)
+  --dry-run         Preview all sync/patch changes without writing to disk
   --force           Overwrite locally edited framework-managed files (still preserves local-overrides.md)
   --squad <name>    Scaffold or sync a Tier 1 Squad Sub-Hub
 `);
@@ -136,6 +255,8 @@ Options:
   }
 
   let checkOnly = false;
+  let showDiff = false;
+  let applyPatches = false;
   let dryRun = false;
   let force = false;
   let explicitTag = '';
@@ -145,6 +266,8 @@ Options:
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--check') checkOnly = true;
+    else if (arg === '--diff') showDiff = true;
+    else if (arg === '--apply-patches') applyPatches = true;
     else if (arg === '--dry-run') dryRun = true;
     else if (arg === '--force') force = true;
     else if (arg === '--to' && args[i + 1]) explicitTag = args[++i];
@@ -155,6 +278,13 @@ Options:
   }
 
   const targetRoot = path.resolve(process.cwd(), targetDir);
+  if (showDiff) {
+    process.exit(runDiffPatches(targetRoot));
+  }
+  if (applyPatches) {
+    process.exit(runApplyPatches(targetRoot, { dryRun, force }));
+  }
+
   const current = resolveInstalledVersion(targetRoot);
 
   let targetTag = '';

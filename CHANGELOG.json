@@ -1,9 +1,21 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.9.1",
+  "latestVersion": "0.23.0",
   "releases": [
     {
-      "version": "0.9.1",
+      "version": "0.23.0",
+      "date": "2026-11-17",
+      "highlights": [
+        "Patch Diff & Apply (`cortex upgrade --diff` / `--apply-patches`): Preview unified diffs for `.agents/upgrade-patches/` and safely inject `['blob']` reporter updates into `playwright.config.ts`.",
+        "Version Alignment: Synced `package.json`, `CHANGELOG.json`, and GitHub Release tags (`v0.23.0`) so `cortex upgrade --check` reports accurate up-to-date status.",
+        "Orchestrator & Docs Integration: `00-master-orchestrator` and `AGENTS.md` now surface `cortex upgrade` and pending `.agents/upgrade-patches/` workflows."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade --diff` to preview any pending `.agents/upgrade-patches/`, then `npx cortex upgrade --apply-patches` to apply safe config updates."
+      ]
+    },
+    {
+      "version": "0.22.0",
       "date": "2026-11-17",
       "highlights": [
         "Incremental Upgrade Engine: .agents/framework-manifest.json tracks managed file hashes, skips unchanged files, preserves local edits in .agents/upgrade-patches/, and safely prunes stale framework files.",
