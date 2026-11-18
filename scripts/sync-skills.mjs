@@ -46,6 +46,7 @@ Usage:
   cortex migrate --discover
   cortex migrate <legacy-path> [--name <skill-id>] [--squad <squad>] [--apply]
   cortex graph                 Compile 3-Tier Federated Brain (.agents/domain/domain-graph.json)
+  cortex map [--out <path>]    Generate interactive HTML System & Business Flow Map (reports/system-map.html)
   cortex gaps                  Run Coverage, Staleness & Traceability Analyzer
   cortex audit                 Run SOLID, Token Budget & Domain Shard Gate
 `);
@@ -60,6 +61,7 @@ const subcommandDelegateMap = {
   compile: 'compile-tape.mjs',
   migrate: 'migrate-skill.mjs',
   graph: 'build-domain-graph.mjs',
+  map: 'build-system-map.mjs',
   gaps: 'analyze-coverage.mjs',
   audit: 'audit-solid.mjs',
 };
@@ -645,6 +647,7 @@ function mergeConsumerPackageJson() {
     report: 'playwright show-report',
     typecheck: 'tsc --noEmit',
     'domain:graph': 'node scripts/build-domain-graph.mjs',
+    map: 'node scripts/build-system-map.mjs',
     'compile:tape': 'node scripts/compile-tape.mjs',
     'migrate:skill': 'node scripts/migrate-skill.mjs',
     'coverage:gaps': 'node scripts/analyze-coverage.mjs',
@@ -1019,6 +1022,7 @@ const coreEnginePaths = [
   '.claude/commands',
   'CHANGELOG.json',
   'scripts/build-domain-graph.mjs',
+  'scripts/build-system-map.mjs',
   'scripts/compile-tape.mjs',
   'scripts/heal-drift.mjs',
   'scripts/migrate-skill.mjs',

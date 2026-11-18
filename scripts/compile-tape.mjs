@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildDomainGraph, seedShardsFromTapes } from './build-domain-graph.mjs';
+import { buildSystemMap } from './build-system-map.mjs';
 import {
   FORBIDDEN_IDENTIFIERS,
   isSafeClassName,
@@ -1559,6 +1560,11 @@ ${specBody}
       }
     }
     buildDomainGraph({ writeToDisk: true });
+    try {
+      buildSystemMap({ quiet: true });
+    } catch {
+      /* non-fatal */
+    }
   }
 
   return {

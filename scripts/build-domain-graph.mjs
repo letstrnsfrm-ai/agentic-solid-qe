@@ -10,6 +10,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { buildSystemMap } from './build-system-map.mjs';
 
 const ROOT = process.cwd();
 const DOMAIN_DIR = path.join(ROOT, '.agents/domain');
@@ -346,6 +347,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
   }
   const graph = buildDomainGraph({ writeToDisk: true });
+  try {
+    buildSystemMap({ quiet: true });
+  } catch {
+    /* non-fatal if reports/ cannot be written */
+  }
   console.log(
     `🧠 Compiled Federated Domain Graph -> .agents/domain/domain-graph.json (${graph.summary.totalDomainHubs} domain hub(s), ${graph.summary.totalShards} shard(s), ${Object.keys(graph.routeIndex).length} indexed route(s)).`
   );

@@ -24,6 +24,7 @@
     "report": "playwright show-report",
     "typecheck": "tsc --noEmit",
     "domain:graph": "node scripts/build-domain-graph.mjs",
+    "map": "node scripts/build-system-map.mjs",
     "compile:tape": "node scripts/compile-tape.mjs",
     "heal": "node scripts/heal-drift.mjs",
     "migrate:skill": "node scripts/migrate-skill.mjs",
