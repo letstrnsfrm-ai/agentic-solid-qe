@@ -179,7 +179,7 @@ export function classifyFailureRootCause({
   }
 
   const has5xx =
-    /\b50[0-4]\b/.test(err) ||
+    /(?:HTTP|status|statusCode|responded with)\s*:?\s*50[0-4]\b/i.test(err) ||
     httpStatuses.some((s) => s >= 500 && s < 600);
   const isAssertionMismatch =
     /\b(?:Expected|Received):/i.test(err) &&

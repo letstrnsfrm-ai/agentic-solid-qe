@@ -5,7 +5,7 @@ description: High-speed Rust-backed CLI reference for live browser automation, i
 
 # Skill: `agent-browser` Command Reference
 
-Use `npx agent-browser --session <name>` for fast daemon-backed browser automation and token-lean snapshots (`-i`). Detailed flags live in `references/commands-reference.md`.
+Use `npx --yes agent-browser --session <name>` for fast daemon-backed browser automation and token-lean snapshots (`-i`). Detailed flags live in `references/commands-reference.md`.
 
 ## 1. Session Lifecycle & CDP Attach
 - `open <url> [--headed]` — Launch browser & navigate.

@@ -41,6 +41,7 @@ Usage:
   cortex upgrade               Resolve latest release tag and incrementally sync skills, contracts, and upgrade patches
   cortex report                Emit opt-in sanitized governance telemetry (schemaVersion: 1.0.0) to Cortex Cloud
   cortex compile [<tape>]      Compile Session Tape into SOLID Components, Pages, Builders, Fixtures & Spec (--apply)
+  cortex heal [--spec <path>]  Diagnose failing specs & heal drifted locators (--apply)
   cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo] [--dry-run]
   cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>] [--dry-run] [--force]
   cortex migrate --discover
@@ -59,6 +60,7 @@ const subcommandDelegateMap = {
   upgrade: 'upgrade-framework.mjs',
   report: 'report-cloud.mjs',
   compile: 'compile-tape.mjs',
+  heal: 'heal-drift.mjs',
   migrate: 'migrate-skill.mjs',
   graph: 'build-domain-graph.mjs',
   map: 'build-system-map.mjs',
