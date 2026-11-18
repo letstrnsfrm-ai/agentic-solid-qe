@@ -1357,7 +1357,23 @@ export { expect };
           `Security Error: Unsafe expectedStates target reference '${state.targetComponent}.${state.targetProperty}'.`
         );
       }
-      const targetExpr = `${state.targetComponent}.${state.targetProperty}`;
+      let resolvedTargetComponent = state.targetComponent;
+      if (
+        primaryPageFixture &&
+        !resolvedTargetComponent.includes('.') &&
+        !injectedFixtures.includes(resolvedTargetComponent)
+      ) {
+        const matchedStep = (tape.semanticSteps || []).find(
+          (s) =>
+            s.__compiledComponentProp &&
+            (toCamelCase(s.componentCandidate || '') === resolvedTargetComponent ||
+              s.__compiledComponentProp === resolvedTargetComponent)
+        );
+        if (matchedStep) {
+          resolvedTargetComponent = `${primaryPageFixture}.${matchedStep.__compiledComponentProp}`;
+        }
+      }
+      const targetExpr = `${resolvedTargetComponent}.${state.targetProperty}`;
       const parsedExpected = parseBuilderRef(state.expectedValueRef);
       const valExpr = parsedExpected?.isCapturedVar
         ? parsedExpected.varName
