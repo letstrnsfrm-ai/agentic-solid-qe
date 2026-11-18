@@ -779,7 +779,9 @@ export class ${clientClass} implements ApiClientContract {
     if (!componentStepsMap.has(candidate)) {
       componentStepsMap.set(candidate, []);
     }
-    componentStepsMap.get(candidate).push(step);
+    if (step.action !== 'goto' && step.locatorContract?.strategy !== 'url') {
+      componentStepsMap.get(candidate).push(step);
+    }
   }
 
   // Also inspect expectedStates to ensure any referenced targetProperty exists on the target component
