@@ -13,6 +13,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const __migratorDir = path.dirname(fileURLToPath(import.meta.url));
 
 const MAX_SCAN_FILE_BYTES = 1024 * 1024;
 const SKIP_DIRS = new Set([
@@ -892,6 +896,7 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
   const componentName = selectedSlice?.pageObject
     ? selectedSlice.pageObject
     : `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}Page`;
+  const uiComponentCandidate = `${componentName.replace(/Page(?:Object)?$/i, '')}Component`;
 
   // Detect .NET SwitchTo().Frame("...") / DefaultContent()
   const frameMatch = body.match(/SwitchTo\(\)\.Frame\(\s*"([^"]+)"\s*\)/);
@@ -956,7 +961,7 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
       businessStep: `Open ${route} page`,
       pageRoute: route,
       action: 'goto',
-      componentCandidate: componentName,
+      componentCandidate: uiComponentCandidate,
       locatorContract: {
         strategy: 'url',
         value: route,
@@ -975,7 +980,7 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
       intent: `Select ${m[3]} in ${m[2]}`,
       businessStep: `Choose ${m[3]} for ${toCamelCase(m[2])}`,
       action: 'selectOption',
-      componentCandidate: componentName,
+      componentCandidate: uiComponentCandidate,
       locatorContract: locContract,
       inputDataRef: `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}Builder.defaultData.${toCamelCase(m[2])}`,
     });
@@ -995,7 +1000,7 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
       intent: `${action === 'fill' ? 'Enter value into' : 'Click'} ${selectorVal}`,
       businessStep: `${action === 'fill' ? 'Provide input for' : 'Trigger'} ${toCamelCase(selectorVal)}`,
       action,
-      componentCandidate: componentName,
+      componentCandidate: uiComponentCandidate,
       locatorContract: locContract,
       ...(action === 'click' && activeDialogAction ? { dialogAction: activeDialogAction } : {}),
     };
@@ -1022,7 +1027,7 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
         intent: `Execute ${po} interaction`,
         businessStep: `Complete ${po} workflow step`,
         action: 'click',
-        componentCandidate: po,
+        componentCandidate: `${po.replace(/Page(?:Object)?$/i, '')}Component`,
         locatorContract: locContract,
         ...(activeDialogAction ? { dialogAction: activeDialogAction } : {}),
       });
@@ -1037,7 +1042,7 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
       intent: `Execute ${testEntry.testMethod} flow`,
       businessStep: `Verify ${testEntry.testMethod} behaviour`,
       action: isApi ? 'apiCall' : 'goto',
-      componentCandidate: componentName,
+      componentCandidate: isApi ? componentName : uiComponentCandidate,
       locatorContract: isApi
         ? { strategy: 'apiEndpoint', value: '/api/health' }
         : { strategy: 'url', value: '/' },
@@ -1056,11 +1061,16 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
       expectedValueRef: `ApiStatus.OK_${nc.expectedStatus}`,
     });
   } else {
+    const firstStepComp = semanticSteps[0]?.componentCandidate || componentName;
+    const compStem = firstStepComp.replace(/(?:StepComponent|Component|Step|Page)$/, '') || firstStepComp;
+    const compProp = compStem.charAt(0).toLowerCase() + compStem.slice(1);
+    const pageStem = componentName.replace(/Page(?:Object)?$/i, '');
+    const pageFixture = `${pageStem.charAt(0).toLowerCase() + pageStem.slice(1)}Page`;
     expectedStates.push({
       description: `Verify ${selectedSlice?.title || testEntry.testMethod} target state is visible`,
       businessStep: semanticSteps[semanticSteps.length - 1].businessStep,
       assertionType: 'toBeVisible',
-      targetComponent: componentName,
+      targetComponent: `${pageFixture}.${compProp}`,
       targetProperty: 'primaryHeading',
       expectedValueRef: `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}Builder.expectedHeading`,
     });
@@ -1580,3 +1590,88 @@ export function applyLegacyMigrationPlan(projectRoot, plan, legacySourceRoot = '
     status: prev.status,
   };
 }
+
+/**
+ * Emit all chained slices of a monolithic (or single-slice) legacy test and optionally compile
+ * each Session Tape 1-by-1 via `compile-tape.mjs`.
+ */
+export function migrateMonolithAllSlices(scanRoot, projectRoot, testId, options = {}) {
+  const firstPlan = buildLegacyMigrationPlan(scanRoot, testId, {
+    ...options,
+    sliceIndex: 1,
+  });
+  if (!firstPlan.found) {
+    return {
+      found: false,
+      legacyTest: null,
+      slices: [],
+      compiledSlices: [],
+    };
+  }
+
+  const totalSlices = Math.max(1, (firstPlan.legacyTest.suggestedSlices || []).length);
+  const relLegacyRoot = path.relative(projectRoot, scanRoot).replace(/\\/g, '/') || '.';
+  const localCompile = path.join(projectRoot, 'scripts/compile-tape.mjs');
+  const compileScript = fs.existsSync(localCompile)
+    ? localCompile
+    : path.join(__migratorDir, 'compile-tape.mjs');
+
+  const slices = [];
+  const compiledSlices = [];
+
+  for (let idx = 1; idx <= totalSlices; idx++) {
+    const plan =
+      idx === 1
+        ? firstPlan
+        : buildLegacyMigrationPlan(scanRoot, testId, { ...options, sliceIndex: idx });
+    let applied = null;
+    if (options.apply) {
+      applied = applyLegacyMigrationPlan(projectRoot, plan, relLegacyRoot, options);
+    }
+
+    let compileResult = null;
+    if (options.apply && options.compile) {
+      const res = spawnSync(
+        process.execPath,
+        [compileScript, plan.draftTape.scenarioId, '--apply'],
+        { cwd: projectRoot, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
+      );
+      compileResult = {
+        scenarioId: plan.draftTape.scenarioId,
+        status: res.status ?? 1,
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+      };
+      compiledSlices.push(compileResult);
+      if (compileResult.status !== 0) {
+        slices.push({
+          sliceIndex: idx,
+          scenarioId: plan.draftTape.scenarioId,
+          type: plan.selectedSlice?.type || 'ui-phase',
+          resumesFrom: plan.draftTape.resumesFrom || null,
+          applied,
+          compileResult,
+        });
+        break;
+      }
+    }
+
+    slices.push({
+      sliceIndex: idx,
+      scenarioId: plan.draftTape.scenarioId,
+      type: plan.selectedSlice?.type || 'ui-phase',
+      resumesFrom: plan.draftTape.resumesFrom || null,
+      applied,
+      ...(compileResult ? { compileResult } : {}),
+    });
+  }
+
+  return {
+    found: true,
+    legacyTest: firstPlan.legacyTest,
+    totalSlices,
+    slices,
+    compiledSlices,
+  };
+}
+

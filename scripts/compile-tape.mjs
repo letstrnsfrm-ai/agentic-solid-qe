@@ -350,6 +350,7 @@ function toImportAlias(relPath) {
   if (withoutExt.startsWith('src/data/')) return `@data/${withoutExt.slice('src/data/'.length)}`;
   if (withoutExt.startsWith('src/domains/')) return `@domains/${withoutExt.slice('src/domains/'.length)}`;
   if (withoutExt.startsWith('src/shared/')) return `@shared/${withoutExt.slice('src/shared/'.length)}`;
+  if (withoutExt.startsWith('src/')) return `../${withoutExt.slice('src/'.length)}`;
   return `../${withoutExt}`;
 }
 
@@ -532,7 +533,9 @@ export function compileSessionTape({
     if (nc.requestBuilderRef) registerBuilderRef(nc.requestBuilderRef);
   }
   for (const state of tape.expectedStates || []) {
-    if (state.expectedValueRef) registerBuilderRef(state.expectedValueRef);
+    if (state.expectedValueRef && state.assertionType !== 'toHaveStatus') {
+      registerBuilderRef(state.expectedValueRef);
+    }
   }
 
   const builderImports = new Map(); // BuilderClass -> importAlias
@@ -543,7 +546,34 @@ export function compileSessionTape({
     if (existing) {
       builderImports.set(builderClass, existing.importAlias);
       const missingMethods = [...methodMap.keys()].filter((m) => !existing.members.has(m));
-      if (missingMethods.length > 0) {
+      let baseBuilderContent = existing.content;
+      const addedProps = [];
+
+      // Also inject any missing properties into already-existing static builder methods
+      for (const [mName, props] of methodMap.entries()) {
+        if (!existing.members.has(mName) || !props || props.size === 0) continue;
+        const methodRegex = new RegExp(
+          `(static\\s+${mName}\\s*\\([^)]*\\)[^{]*\\{\\s*return\\s*\\{)([\\s\\S]*?)(\\n\\s*\\};)`
+        );
+        const mm = baseBuilderContent.match(methodRegex);
+        if (mm) {
+          const missingPropLines = [...props.entries()]
+            .filter(([k]) => !new RegExp(`\\b${k}\\s*:`).test(mm[2]))
+            .map(([k, v]) => {
+              addedProps.push(`${mName}.${k}`);
+              return `      ${assertSafeJsIdentifier(k, 'Data Builder property')}: ${serializeBuilderPropertyValue(v)},`;
+            });
+          if (missingPropLines.length > 0) {
+            const sep = mm[2].trimEnd().endsWith(',') || mm[2].trim() === '' ? '' : ',';
+            baseBuilderContent = baseBuilderContent.replace(
+              methodRegex,
+              `$1$2${sep}\n${missingPropLines.join('\n')}$3`
+            );
+          }
+        }
+      }
+
+      if (missingMethods.length > 0 || addedProps.length > 0) {
         const injectedMethodsCode = missingMethods
           .map((mName) => {
             assertSafeJsIdentifier(mName, 'Data Builder method');
@@ -558,20 +588,21 @@ export function compileSessionTape({
           })
           .join('\n\n');
 
-        let baseBuilderContent = existing.content;
         if (
           injectedMethodsCode.includes('requireEnv(') &&
           !/\bfunction\s+requireEnv\b/.test(baseBuilderContent)
         ) {
           baseBuilderContent = `${REQUIRE_ENV_HELPER_CODE}${baseBuilderContent}`;
         }
-        const updatedContent = baseBuilderContent.replace(/\}\s*$/, `\n${injectedMethodsCode}\n}\n`);
+        const updatedContent = injectedMethodsCode
+          ? baseBuilderContent.replace(/\}\s*$/, `\n${injectedMethodsCode}\n}\n`)
+          : baseBuilderContent;
         plannedOperations.push({
           layer: 'data-builder',
           action: 'extend-existing',
           className: builderClass,
           file: existing.relPath,
-          addedMembers: missingMethods,
+          addedMembers: [...missingMethods, ...addedProps],
           codeContent: updatedContent,
         });
       } else {
@@ -1329,7 +1360,17 @@ export { expect };
         : parsedExpected?.callExpression || '';
 
       let assertStmt;
-      if (state.assertionType === 'toBeVisible' || state.assertionType === 'toBeHidden') {
+      if (state.assertionType === 'toHaveStatus') {
+        const apiDesc = apiClientImports.get(state.targetComponent);
+        const apiFix = apiDesc?.fixtureProp || 'apiClient';
+        const matchingNc = (tape.networkContracts || []).find(
+          (nc) => nc.clientCandidate === state.targetComponent
+        );
+        const endpointArg = JSON.stringify(matchingNc?.urlPattern || '/api/v1/resource');
+        const statusMatch = String(state.expectedValueRef || '').match(/(\d{3})/);
+        const expectedStatus = statusMatch ? Number(statusMatch[1]) : 200;
+        assertStmt = `expect((await ${apiFix}.executeRequest(${endpointArg})).status).toBe(${expectedStatus});`;
+      } else if (state.assertionType === 'toBeVisible' || state.assertionType === 'toBeHidden') {
         assertStmt = `await expect(${targetExpr}).${state.assertionType}();`;
       } else if (state.assertionType === 'toHaveScreenshot') {
         const ratio =

@@ -2541,5 +2541,123 @@ test('24. Master Orchestrator CLI (cortex orchestrate): safety-first precedence,
   }
 });
 
+test('25. Legacy-to-SOLID Slice Wave Runner (--all-slices --compile): compiles C#/.NET monolith slices into valid SOLID TypeScript', () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-cs-wave-compile-'));
+  const csRepo = path.join(tmpRoot, 'dotnet-wave');
+  const pwDir = path.join(csRepo, 'e2e-playwright');
+
+  try {
+    fs.mkdirSync(path.join(csRepo, 'Pages'), { recursive: true });
+    fs.mkdirSync(path.join(csRepo, 'Tests'), { recursive: true });
+    fs.writeFileSync(path.join(csRepo, 'WaveApp.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>\n', 'utf8');
+    fs.writeFileSync(
+      path.join(csRepo, 'appsettings.json'),
+      JSON.stringify({ BaseUrl: 'https://wave.example.com' }, null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(csRepo, 'Pages/CatalogPage.cs'),
+      `using OpenQA.Selenium;\npublic class CatalogPage { private By addBtn = By.Id("add-cart"); }\n`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(csRepo, 'Pages/CheckoutPage.cs'),
+      `using OpenQA.Selenium;\npublic class CheckoutPage { private By confirmBtn = By.Id("confirm-order"); }\n`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(csRepo, 'Tests/PurchaseFlowTests.cs'),
+      `using NUnit.Framework;
+using OpenQA.Selenium;
+using OpenQA.Selenium.Support.UI;
+using System.Net.Http;
+using System.Threading.Tasks;
+
+public class PurchaseFlowTests {
+  private IWebDriver driver;
+  private HttpClient http;
+
+  [OneTimeSetUp]
+  public async Task SeedCatalog() {
+    await http.PostAsync("/api/catalog/seed", null);
+  }
+
+  [Test]
+  public void EndToEndOrderFlow() {
+    #region Catalog
+    var catalog = new CatalogPage();
+    driver.FindElement(By.Id("add-cart")).Click();
+    Assert.True(true);
+    Assert.True(true);
+    #endregion
+
+    #region Checkout
+    var checkout = new CheckoutPage();
+    driver.SwitchTo().Frame("payment-frame");
+    new SelectElement(driver.FindElement(By.Id("country"))).SelectByText("UK");
+    driver.FindElement(By.Id("confirm-order")).Click();
+    driver.SwitchTo().Alert().Accept();
+    Assert.True(true);
+    Assert.True(true);
+    Assert.True(true);
+    #endregion
+  }
+}
+`,
+      'utf8'
+    );
+
+    const initRes = runNode(
+      SYNC_SCRIPT,
+      ['init', pwDir, '--url', 'https://wave.example.com', '--name', 'WaveApp'],
+      tmpRoot
+    );
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    const testId = 'cs-purchase-flow-tests-end-to-end-order-flow';
+    const waveRes = runNode(
+      path.join(pwDir, 'scripts/migrate-skill.mjs'),
+      ['--legacy', testId, '--legacy-root', '..', '--all-slices', '--static-only', '--apply', '--compile'],
+      pwDir
+    );
+    assert.equal(waveRes.status, 0, `migrate-skill --all-slices --compile failed:\n${waveRes.stderr}\n${waveRes.stdout}`);
+
+    const jsonStart = waveRes.stdout.indexOf('{');
+    const parsed = JSON.parse(waveRes.stdout.slice(jsonStart));
+    assert.equal(parsed.totalSlices, 3);
+    assert.equal(parsed.compiledSlices.length, 3);
+    assert.ok(parsed.compiledSlices.every((c) => c.status === 0));
+
+    // Verify all 3 compiled specs exist
+    for (const slice of parsed.slices) {
+      assert.ok(
+        fs.existsSync(path.join(pwDir, `tests/${slice.scenarioId}.spec.ts`)),
+        `Missing compiled spec for slice ${slice.scenarioId}`
+      );
+    }
+
+    const valRes = runNode(path.join(pwDir, 'scripts/validate-tapes.mjs'), [], pwDir);
+    assert.equal(valRes.status, 0, `validate-tapes failed: ${valRes.stderr}\n${valRes.stdout}`);
+
+    const auditRes = runNode(path.join(pwDir, 'scripts/audit-solid.mjs'), [], pwDir);
+    assert.equal(auditRes.status, 0, `audit-solid failed: ${auditRes.stderr}\n${auditRes.stdout}`);
+
+    // Link root node_modules so tsc --noEmit can typecheck the generated Playwright TypeScript
+    const pwNodeModules = path.join(pwDir, 'node_modules');
+    if (!fs.existsSync(pwNodeModules)) {
+      fs.symlinkSync(path.join(REPO_ROOT, 'node_modules'), pwNodeModules, 'dir');
+    }
+    const tscRes = spawnSync(
+      path.join(REPO_ROOT, 'node_modules/.bin/tsc'),
+      ['--noEmit'],
+      { cwd: pwDir, encoding: 'utf8' }
+    );
+    assert.equal(tscRes.status, 0, `tsc --noEmit failed on compiled slices:\n${tscRes.stdout}\n${tscRes.stderr}`);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
 
 

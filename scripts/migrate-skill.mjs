@@ -37,6 +37,7 @@ const legacyMigrator = fs.existsSync(legacyMigratorUrl)
         pageObjects: {},
       }),
       loadMigrationManifest: () => null,
+      migrateMonolithAllSlices: () => ({ found: false, slices: [], compiledSlices: [] }),
       syncDiscoveryToManifest: () => null,
     };
 const {
@@ -44,6 +45,7 @@ const {
   buildLegacyMigrationPlan,
   discoverLegacyTests,
   loadMigrationManifest,
+  migrateMonolithAllSlices,
   syncDiscoveryToManifest,
 } = legacyMigrator;
 
@@ -89,6 +91,8 @@ let legacyTargetArg = '';
 let legacyRootArg = '';
 let sliceIndexArg = 0;
 let staticOnlyFlag = false;
+let allSlicesFlag = false;
+let compileFlag = false;
 
 for (let i = 0; i < rawArgs.length; i++) {
   const arg = rawArgs[i];
@@ -98,6 +102,10 @@ for (let i = 0; i < rawArgs.length; i++) {
     discoverMode = true;
   } else if (arg === '--static-only') {
     staticOnlyFlag = true;
+  } else if (arg === '--all-slices') {
+    allSlicesFlag = true;
+  } else if (arg === '--compile') {
+    compileFlag = true;
   } else if (arg === '--name' && rawArgs[i + 1]) {
     skillNameArg = rawArgs[++i];
   } else if (arg.startsWith('--name=')) {
@@ -461,6 +469,23 @@ if (legacyTargetArg) {
       : ['e2e-playwright', 'qe-playwright'].includes(path.basename(ROOT))
         ? path.dirname(ROOT)
         : ROOT;
+
+  if (allSlicesFlag) {
+    const waveResult = migrateMonolithAllSlices(resolvedLegacyRoot, ROOT, legacyTargetArg, {
+      staticOnly: staticOnlyFlag,
+      baseUrl: process.env.BASE_URL || 'http://localhost:3000',
+      apply: applyChanges,
+      compile: compileFlag,
+    });
+    if (!waveResult.found) {
+      console.error(`❌ Legacy test '${legacyTargetArg}' not found under ${resolvedLegacyRoot}.`);
+      process.exit(1);
+    }
+    const failedCompile = waveResult.compiledSlices.find((c) => c.status !== 0);
+    console.log('🧪 Agentic-SOLID-QE Legacy Monolith Slice-Wave Migration:\n');
+    console.log(JSON.stringify({ mode: applyChanges ? 'applied' : 'dry-run-preview', ...waveResult }, null, 2));
+    process.exit(failedCompile ? 1 : 0);
+  }
 
   const plan = buildLegacyMigrationPlan(resolvedLegacyRoot, legacyTargetArg, {
     sliceIndex: sliceIndexArg,
