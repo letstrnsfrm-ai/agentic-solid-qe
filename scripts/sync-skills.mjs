@@ -581,10 +581,21 @@ export class UserBuilder {
  * Segregated Fixture Contract (OCP & ISP).
  * Register Page and Component objects here as 02-solid-architect compiles Session Tapes.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AppFixtures {}
+export interface AppFixtures {
+  explorePause: void;
+}
 
-export const test = base.extend<AppFixtures>({});
+export const test = base.extend<AppFixtures>({
+  explorePause: [
+    async ({ page }, use) => {
+      await use();
+      if (process.env.PW_PAUSE_FOR_EXPLORE === '1' && !process.env.CI) {
+        await page.pause();
+      }
+    },
+    { auto: true },
+  ],
+});
 
 export { expect };
 `,

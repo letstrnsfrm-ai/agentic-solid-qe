@@ -5,15 +5,15 @@ description: Autonomous single entry point for Agentic-SOLID-QE. Human gives dir
 
 # Skill 00-Master: Autonomous QE Orchestrator
 
-> **Operating Contract:** Human = **direction & review only** (never ask the human to edit generated files or run routine CLI/test commands). Agent = **autonomous executor** via sub-skills, pausing only at human review gates (`references/master-orchestration-playbook.md`).
+> **Operating Contract:** Human = **direction & review only**. Agent = **autonomous executor** via sub-skills, pausing only at human gates (`references/master-orchestration-playbook.md`).
 
 ## 1. Auto-Start & Intent-to-Skill Execution
 On `/00-master-orchestrator` or any plain-language QE request:
 1. Run `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`.
 2. Read `.agents/domain/domain-memory.md` and `references/master-orchestration-playbook.md`.
-3. Present a concise **Maturity & Execution Plan**, then **execute** the matching chain:
+3. Present a concise **Maturity & Execution Plan**, then **execute**:
    - **Setup/Auth:** `00-env-bootstrap` ➔ `domain:graph` *(pause only for MFA/CAPTCHA)*.
-   - **Grow Coverage:** `01-cli-explorer` ➔ *(human picks 1 scenario)* ➔ `02-solid-architect` ➔ `npm run verify`.
+   - **Grow Coverage:** `01-cli-explorer` *(resume existing specs via `npm run test:explore` + `agent-browser --cdp 9222` to skip repeated setup)* ➔ *(human picks 1)* ➔ `02-solid-architect` ➔ `npm run verify`.
    - **Run & Fix Tests:** `playwright test` ➔ `03-drift-healer` ➔ `npm run verify` *(pause only on ambiguous bug vs. drift)*.
    - **Migrate Legacy:** `05-skill-migrator` ➔ *(human approves triage)* ➔ `02-solid-architect` ➔ `npm run verify`.
    - **CI/Release:** `04-ci-pipeline` ➔ `npm run verify`.

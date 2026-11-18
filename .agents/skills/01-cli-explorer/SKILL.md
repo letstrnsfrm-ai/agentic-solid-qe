@@ -8,7 +8,7 @@ description: Autonomous feature discovery, multi-page/multi-portal exploration, 
 ## 1. Zero-Prompt Auto-Start: Recon & Gap Analysis (FR-1.1)
 When invoked as `/01-cli-explorer` (use `/agent-browser` for CLI syntax):
 1. Run `npm run coverage:gaps` and read `.agents/domain/domain-memory.md` (+ `shards/*.md`).
-2. Start **Fresh Recon** (`npx --yes agent-browser --session explore --headed open <baseUrl>`), **Resume-from-Spec (`A ➔ B ➔ C`)** (`npm run test:explore` + `--cdp 9222`), or **Codegen** (`references/charters.md` §0b–0c).
+2. **Prefer Resume-from-Spec (`A ➔ B ➔ C`)** when an existing `.spec.ts` reaches a prerequisite state (`npm run test:explore -- <spec>` + `npx --yes agent-browser --session explore --cdp 9222 snapshot -i`); use **Fresh Recon** (`--headed open <baseUrl>`) only for new entry routes, or **Codegen** (`references/charters.md` §0b–0c).
 3. **Checkpoint 1:** Present **Top 3 Uncovered Scenarios** (`references/charters.md`) and pick **1** to explore.
 
 ## 2. Multi-Page, Multi-Portal & API Recon (FR-1.2, FR-1.3)
