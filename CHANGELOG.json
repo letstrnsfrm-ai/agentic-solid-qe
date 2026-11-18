@@ -1,7 +1,20 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.24.0",
+  "latestVersion": "0.25.0",
   "releases": [
+    {
+      "version": "0.25.0",
+      "date": "2026-11-18",
+      "highlights": [
+        "Deterministic Drift-Healer CLI (`npx cortex heal` / `scripts/heal-drift.mjs`): Parses Playwright failure artifacts (`error-context.md`) and `.playwright-cli/page-*.yml` snapshots, classifies Auth Drift vs. Genuine App Regression (drafting `defects/DEFECT-*.md` without weakening `expect()`) vs. UI/Locator Drift, and safely patches high-confidence Component locators and Session Tapes with `--apply`.",
+        "Java & C# Deep Migration (`legacy-test-migrator.mjs` + `session-tape.schema.json`): Auto-splits God Page Objects (`> 12` locators) into `<= 150`-line SOLID `IdentifiableComponent`s + composed Pages, translates Selenium `@FindBy`/`[FindsBy]`/`By.*` locators to Playwright, and extracts `@DataProvider`/`@CsvSource`/`@ValueSource`/`[TestCase]`/`[InlineData]`/`[DataRow]` + POJO/Record models into secret-redacted `src/data/*.builder.ts` and Session Tape `datasets`.",
+        "Autonomous `00-master-orchestrator` Operating Model (`AGENTS.md`, `00-master-orchestrator`, `README.md`): Enforces **Human = Direction & Review; Agent = Autonomous Execution** across all 7 skills so humans never manually edit generated SOLID files or run routine CLI/test/healing commands."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.25.0 skills, `npx cortex heal`, and the Java/C# deep migrator.",
+        "Use `npx cortex heal` when Playwright specs fail to triage regressions vs. safely heal drifted locators."
+      ]
+    },
     {
       "version": "0.24.0",
       "date": "2026-11-17",
