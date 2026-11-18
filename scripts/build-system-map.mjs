@@ -217,7 +217,7 @@ function readDefects() {
 function readSrcInventory() {
   const srcDir = path.join(ROOT, 'src');
   const tsFiles = walkFiles(srcDir, '.ts');
-  const layers = { pages: [], steps: [], components: [], apiClients: [], builders: [] };
+  const layers = { pages: [], steps: [], components: [], apiClients: [], seeders: [], builders: [] };
   for (const f of tsFiles) {
     const r = rel(f);
     const content = fs.readFileSync(f, 'utf8');
@@ -228,6 +228,7 @@ function readSrcInventory() {
     else if (r.includes('/steps/')) layers.steps.push(item);
     else if (r.includes('/components/')) layers.components.push(item);
     else if (r.includes('/api/') && r.endsWith('.client.ts')) layers.apiClients.push(item);
+    else if (r.includes('/seeders/') && r.endsWith('.seeder.ts')) layers.seeders.push(item);
     else if (r.includes('/data/') && r.endsWith('.builder.ts')) layers.builders.push(item);
   }
   return layers;
@@ -393,6 +394,7 @@ const kpis = [
   { val: MODEL.tapes.length, lbl: 'Business Flows (Tapes)' },
   { val: MODEL.apis.length, lbl: 'Backend API Contracts' },
   { val: MODEL.src.components.length + MODEL.src.steps.length, lbl: 'SOLID Components & Steps' },
+  { val: (MODEL.src.seeders || []).length, lbl: 'State Seeders' },
   { val: MODEL.specs.length, lbl: 'Automated Spec Files' },
   { val: MODEL.defects.length, lbl: 'Open Defects' },
 ];
@@ -451,6 +453,7 @@ function renderTopology() {
     { title: 'Domain Shards', items: MODEL.shards.map(s => ({ label: s.title.replace('Domain Shard: ', ''), sub: s.ownerSquad, color: s.isCovered ? '#34d399' : '#fbbf24' })) },
     { title: 'Pages & Steps', items: [...MODEL.src.pages, ...MODEL.src.steps].map(p => ({ label: p.name, sub: p.file, color: '#38bdf8' })) },
     { title: 'Components', items: MODEL.src.components.map(c => ({ label: c.name, sub: c.file, color: '#a78bfa' })) },
+    { title: 'State Seeders', items: (MODEL.src.seeders || []).map(sd => ({ label: sd.name, sub: sd.file, color: '#34d399' })) },
     { title: 'Backend APIs', items: MODEL.apis.map(a => ({ label: a.method + ' ' + a.urlPattern.replace('**', ''), sub: 'HTTP ' + a.expectedStatus + (a.clientCandidate ? ' (' + a.clientCandidate + ')' : ''), color: '#38bdf8' })) },
   ];
   const colW = 280, gap = 45, boxH = 46, padY = 14;
