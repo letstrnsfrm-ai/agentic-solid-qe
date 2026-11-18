@@ -189,8 +189,8 @@ export class CustomQuoteWidgetComponent implements IdentifiableComponent {
     }
     assert.match(fs.readFileSync(path.join(tmpDir, '.npmrc'), 'utf8'), /ignore-scripts=true/);
 
-    // Verify 'cortex orchestrate' CLI subcommand returns masterOrchestratorSkill & coverageMaturityStage
-    const orchRes = runNode(SYNC_SCRIPT, ['orchestrate'], tmpDir);
+    // Verify 'cortex orchestrate --json' CLI subcommand returns masterOrchestratorSkill & coverageMaturityStage
+    const orchRes = runNode(SYNC_SCRIPT, ['orchestrate', '--json'], tmpDir);
     assert.equal(orchRes.status, 0, `cortex orchestrate failed: ${orchRes.stderr}`);
     assert.match(orchRes.stdout, /"masterOrchestratorSkill": "\/00-master-orchestrator"/);
     assert.match(orchRes.stdout, /"coverageMaturityStage":/);
@@ -203,7 +203,7 @@ export class CustomQuoteWidgetComponent implements IdentifiableComponent {
     // Verify package.json preserved custom script and upgraded upgrade:skills + test:explore
     const mergedPkg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'package.json'), 'utf8'));
     assert.equal(mergedPkg.scripts['custom:lint'], 'echo custom-lint');
-    assert.equal(mergedPkg.scripts['orchestrate'], 'node scripts/analyze-coverage.mjs');
+    assert.equal(mergedPkg.scripts['orchestrate'], 'node scripts/orchestrate.mjs');
     assert.equal(mergedPkg.scripts['upgrade:skills'], 'node scripts/upgrade-framework.mjs');
     assert.ok(mergedPkg.scripts['test:explore'].includes('PW_PAUSE_FOR_EXPLORE=1'));
     assert.equal(mergedPkg.scripts['audit:security'], 'npm audit --audit-level=high');
@@ -1427,8 +1427,8 @@ test('15. incremental upgrade: manifest skips unchanged files, preserves local e
       'Expected playwright.config.ts.new in .agents/upgrade-patches/'
     );
 
-    // 4. Verify cortex orchestrate surfaces upgradeStatus.pendingUpgradePatches
-    const orchRes = runNode(SYNC_SCRIPT, ['orchestrate'], tmpDir);
+    // 4. Verify cortex orchestrate --json surfaces upgradeStatus.pendingUpgradePatches
+    const orchRes = runNode(SYNC_SCRIPT, ['orchestrate', '--json'], tmpDir);
     assert.equal(orchRes.status, 0, orchRes.stderr);
     assert.match(orchRes.stdout, /"pendingUpgradePatches": \[/);
     assert.match(orchRes.stdout, /playwright\.config\.ts\.new/);
@@ -2411,5 +2411,135 @@ public class EndToEndPurchaseTests {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test('24. Master Orchestrator CLI (cortex orchestrate): safety-first precedence, Track/Stage classification, --json, and --run', async () => {
+  const { buildOrchestrationBlueprint } = await import(
+    new URL('./orchestrate.mjs', import.meta.url).href
+  );
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-orchestrate-'));
+  try {
+    // 1. Placeholder URL -> Priority 1 (00-env-bootstrap)
+    const initPlaceholder = runNode(
+      SYNC_SCRIPT,
+      ['init', tmpRoot, '--url', 'http://localhost:3000', '--name', 'OrchApp'],
+      tmpRoot
+    );
+    assert.equal(initPlaceholder.status, 0, `init failed: ${initPlaceholder.stderr}`);
+
+    const bp1 = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(bp1.nextAction.priority, 1);
+    assert.equal(bp1.nextAction.skill, '00-env-bootstrap');
+    assert.equal(bp1.nextAction.autoRunnable, false);
+
+    // Configure real URL
+    const domainMemoryPath = path.join(tmpRoot, '.agents/domain/domain-memory.md');
+    fs.writeFileSync(
+      domainMemoryPath,
+      fs.readFileSync(domainMemoryPath, 'utf8').replace('http://localhost:3000', 'https://app.example.com'),
+      'utf8'
+    );
+
+    // 2. Failing test artifact -> Priority 2 (03-drift-healer), even if uncompiled tape or legacy rules exist
+    const errCtxDir = path.join(tmpRoot, 'test-results/checkout-run');
+    fs.mkdirSync(errCtxDir, { recursive: true });
+    fs.writeFileSync(path.join(errCtxDir, 'error-context.md'), '# Failure\nTimeout waiting for button\n', 'utf8');
+    fs.writeFileSync(path.join(tmpRoot, '.cursorrules'), 'Always use data-testid\n', 'utf8');
+
+    const bp2 = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(bp2.nextAction.priority, 2);
+    assert.equal(bp2.nextAction.skill, '03-drift-healer');
+    assert.equal(bp2.nextAction.autoRunnable, true);
+    assert.equal(bp2.healthSnapshot.failingTestArtifacts, 1);
+
+    // Clear failing artifact
+    fs.rmSync(path.join(tmpRoot, 'test-results'), { recursive: true, force: true });
+
+    // 3. Uncompiled Session Tape -> Priority 3 (02-solid-architect), takes precedence over legacy .cursorrules
+    const tapePath = path.join(tmpRoot, '.exploratory/tapes/checkout-smoke.json');
+    fs.mkdirSync(path.dirname(tapePath), { recursive: true });
+    fs.writeFileSync(
+      tapePath,
+      JSON.stringify(
+        {
+          schemaVersion: '1.0.0',
+          scenarioId: 'checkout-smoke',
+          title: 'Customer completes checkout',
+          charter: 'happy-path-baseline',
+          recordedAt: '2026-11-18T00:00:00Z',
+          baseUrl: 'https://app.example.com',
+          persona: { role: 'buyer', dataBuilderRef: 'CheckoutBuilder.defaultBuyer()' },
+          preconditions: ['User has an item in cart'],
+          networkContracts: [],
+          expectedStates: [
+            {
+              description: 'Checkout summary is visible',
+              businessStep: 'Confirm order',
+              assertionType: 'toBeVisible',
+              targetComponent: 'checkoutPage.checkoutSummary',
+              targetProperty: 'proceedToCheckout',
+              expectedValueRef: 'CheckoutBuilder.defaultBuyer().email',
+            },
+          ],
+          tags: ['@p0', '@smoke'],
+          semanticSteps: [
+            {
+              stepIndex: 1,
+              action: 'click',
+              intent: 'Proceed to checkout',
+              businessStep: 'Proceed to checkout',
+              componentCandidate: 'CheckoutSummary',
+              locatorContract: {
+                strategy: 'getByRole',
+                role: 'button',
+                value: 'Proceed to Checkout',
+              },
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+
+    const bp3 = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(bp3.nextAction.priority, 3);
+    assert.equal(bp3.nextAction.skill, '02-solid-architect');
+    assert.equal(bp3.nextAction.autoRunnable, true);
+
+    // Test `--run` compiles the uncompiled tape automatically
+    const runRes = runNode(SYNC_SCRIPT, ['orchestrate', '--run'], tmpRoot);
+    assert.equal(runRes.status, 0, `cortex orchestrate --run failed: ${runRes.stderr}\n${runRes.stdout}`);
+    assert.ok(
+      fs.existsSync(path.join(tmpRoot, 'tests/checkout-smoke.spec.ts')),
+      'Expected --run to compile checkout-smoke.spec.ts'
+    );
+
+    // 4. Now that tape is compiled, legacy .cursorrules triggers Priority 4 (05-skill-migrator) & Track 3
+    const jsonRes = runNode(SYNC_SCRIPT, ['orchestrate', '--json'], tmpRoot);
+    assert.equal(jsonRes.status, 0, `cortex orchestrate --json failed: ${jsonRes.stderr}`);
+    const bp4 = JSON.parse(jsonRes.stdout);
+    assert.equal(bp4.nextAction.priority, 4);
+    assert.equal(bp4.nextAction.skill, '05-skill-migrator');
+    assert.ok(bp4.recommendedTrack.includes('Track 3'));
+
+    // 5. Remove .cursorrules and add an uncovered shard -> Priority 5 (01-cli-explorer)
+    fs.rmSync(path.join(tmpRoot, '.cursorrules'));
+    const shardPath = path.join(tmpRoot, '.agents/domain/shards/billing.md');
+    fs.mkdirSync(path.dirname(shardPath), { recursive: true });
+    fs.writeFileSync(
+      shardPath,
+      `# Feature Shard: Billing\n\n- **Route:** \`/billing\`\n- **Last Verified:** 2026-11-18\n`,
+      'utf8'
+    );
+    const bp5 = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(bp5.nextAction.priority, 5);
+    assert.equal(bp5.nextAction.skill, '01-cli-explorer');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 
 

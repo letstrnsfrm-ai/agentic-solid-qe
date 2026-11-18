@@ -53,8 +53,8 @@ Usage:
 }
 
 const subcommandDelegateMap = {
-  orchestrate: 'analyze-coverage.mjs',
-  status: 'analyze-coverage.mjs',
+  orchestrate: 'orchestrate.mjs',
+  status: 'orchestrate.mjs',
   upgrade: 'upgrade-framework.mjs',
   report: 'report-cloud.mjs',
   compile: 'compile-tape.mjs',
@@ -648,7 +648,7 @@ function mergeConsumerPackageJson() {
     'compile:tape': 'node scripts/compile-tape.mjs',
     'migrate:skill': 'node scripts/migrate-skill.mjs',
     'coverage:gaps': 'node scripts/analyze-coverage.mjs',
-    orchestrate: 'node scripts/analyze-coverage.mjs',
+    orchestrate: 'node scripts/orchestrate.mjs',
     'audit:solid': 'node scripts/audit-solid.mjs',
     'validate:tapes': 'node scripts/validate-tapes.mjs',
     'audit:security': 'npm audit --audit-level=high',
@@ -1021,6 +1021,7 @@ const coreEnginePaths = [
   'scripts/heal-drift.mjs',
   'scripts/migrate-skill.mjs',
   'scripts/legacy-test-migrator.mjs',
+  'scripts/orchestrate.mjs',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',
   'scripts/validate-tapes.mjs',

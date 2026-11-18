@@ -15,6 +15,7 @@ const args = process.argv.slice(2);
 let filterSquad = null;
 let forceSummary = false;
 let forceFull = false;
+let jsonOnly = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--squad' && args[i + 1]) {
     filterSquad = args[++i].trim().toLowerCase();
@@ -24,6 +25,8 @@ for (let i = 0; i < args.length; i++) {
     forceSummary = true;
   } else if (args[i] === '--full') {
     forceFull = true;
+  } else if (args[i] === '--json') {
+    jsonOnly = true;
   }
 }
 if (filterSquad && !/^[a-z0-9-]+$/.test(filterSquad)) {
@@ -507,6 +510,8 @@ const report = isCompact
       recommendedNextAction,
     };
 
-console.log('📊 Agentic-SOLID-QE Coverage & Federated Brain Snapshot:\n');
+if (!jsonOnly) {
+  console.log('📊 Agentic-SOLID-QE Coverage & Federated Brain Snapshot:\n');
+}
 console.log(JSON.stringify(report, null, 2));
 
