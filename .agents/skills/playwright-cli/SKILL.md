@@ -13,7 +13,7 @@ Use `npx playwright-cli -s=<session>` to drive live browsers via compact YAML sn
 - `detach` / `close` / `close-all` — Detach or close sessions.
 
 ## 2. Snapshot & Interaction (`e<N>` refs from `.playwright-cli/page-*.yml`)
-- `snapshot [--filename=...]` / `find "<text>"` — ARIA tree & search.
+- `snapshot [--filename=...]` / `find "<text>"` — ARIA tree & search (re-snapshot after Shadow DOM/dynamic re-renders; `e<N>` refs invalidate).
 - `click` / `dblclick` / `hover` / `press <key>` — Pointer & keyboard.
 - `fill <ref> <text>` / `type <text>` / `select` / `check` / `uncheck` / `upload` — Forms.
 - `goto <url>` / `go-back` / `go-forward` / `reload` — Navigation.

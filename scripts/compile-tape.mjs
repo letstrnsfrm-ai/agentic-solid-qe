@@ -704,7 +704,9 @@ ${methodsCode}
       const targetRel = `${baseSrcDir}/api/${kebabStem}.client.ts`;
       const importAlias = toImportAlias(targetRel);
       apiClientImports.set(clientClass, { importAlias, fixtureProp });
-      const primaryEndpoint = endpoints[0]?.endpoint?.replace(/\*+$/, '') || '/api/v1/resource';
+      const primaryEndpoint =
+        endpoints[0]?.endpoint?.replace(/^\*\*\/?/, '/').replace(/^\/\//, '/').replace(/\*+$/, '') ||
+        '/api/v1/resource';
       const rawMethod = String(endpoints[0]?.method || 'POST').toLowerCase();
       if (!ALLOWED_HTTP_METHODS.has(rawMethod)) {
         throw new Error(`Security Error: Unsupported HTTP method '${endpoints[0]?.method}'.`);
