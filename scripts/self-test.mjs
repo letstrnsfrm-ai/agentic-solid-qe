@@ -2110,3 +2110,149 @@ public class LoginTheoryTests {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test('22. Deterministic Drift-Healer CLI (cortex heal): triages auth/regression vs locator drift and safely patches Component + Tape', async () => {
+  const { analyzeAndHealDrift } = await import(new URL('./heal-drift.mjs', import.meta.url).href);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-heal-test-'));
+  try {
+    const initRes = runNode(
+      SYNC_SCRIPT,
+      ['init', tmpDir, '--url', 'https://app.example.com', '--name', 'HealTestApp'],
+      tmpDir
+    );
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    // Seed Component, Spec, Tape, and Snapshot
+    fs.mkdirSync(path.join(tmpDir, 'src/components'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.playwright-cli'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.exploratory/tapes'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'tests'), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/components/checkout-form.component.ts'),
+      `import type { Locator, Page } from '@playwright/test';
+import type { IdentifiableComponent } from '@contracts/identifiable-component.contract';
+
+export class CheckoutFormComponent implements IdentifiableComponent {
+  readonly root: Locator;
+  readonly submitOrderButton: Locator;
+
+  constructor(page: Page) {
+    this.root = page.locator('body');
+    this.submitOrderButton = page.getByRole('button', { name: 'Submit Order', exact: true });
+  }
+}
+`,
+      'utf8'
+    );
+
+    const specContent = `import { test, expect } from '@playwright/test';
+test('checkout @p0', async ({ page }) => {
+  await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
+});
+`;
+    fs.writeFileSync(path.join(tmpDir, 'tests/checkout-flow.spec.ts'), specContent, 'utf8');
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/checkout-flow.json'),
+      JSON.stringify(
+        {
+          schemaVersion: '1.0.0',
+          scenarioId: 'checkout-flow',
+          title: 'Checkout flow baseline',
+          charter: 'happy-path-baseline',
+          recordedAt: '2026-11-17T12:00:00.000Z',
+          baseUrl: 'https://app.example.com',
+          persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standardUser' },
+          preconditions: ['User logged in'],
+          semanticSteps: [
+            {
+              stepIndex: 1,
+              intent: 'Submit order',
+              businessStep: 'Complete checkout order',
+              action: 'click',
+              componentCandidate: 'CheckoutFormComponent',
+              locatorContract: {
+                strategy: 'getByRole',
+                role: 'button',
+                value: 'Submit Order',
+                nameExact: true,
+              },
+            },
+          ],
+          networkContracts: [],
+          expectedStates: [
+            {
+              description: 'Confirmed heading visible',
+              businessStep: 'Complete checkout order',
+              assertionType: 'toBeVisible',
+              targetComponent: 'CheckoutFormComponent',
+              targetProperty: 'submitOrderButton',
+              expectedValueRef: 'CheckoutBuilder.confirmedHeading',
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.playwright-cli/page-heal.yml'),
+      `- main [ref=e1]:
+  - heading "Checkout" [level=1] [ref=e2]
+  - button "Cancel" [ref=e10]
+  - button "Complete Order" [ref=e14]
+`,
+      'utf8'
+    );
+
+    // 1. Locator Drift -> high-confidence match patches Component & Tape
+    const healRes = analyzeAndHealDrift(tmpDir, {
+      spec: 'tests/checkout-flow.spec.ts',
+      error: "TimeoutError: waiting for getByRole('button', { name: 'Submit Order', exact: true })",
+      apply: true,
+    });
+    assert.equal(healRes.status, 'healed', `Expected healed status, got ${healRes.status}`);
+    assert.ok(healRes.appliedChanges.includes('src/components/checkout-form.component.ts'));
+    assert.ok(healRes.appliedChanges.includes('.exploratory/tapes/checkout-flow.json'));
+
+    const updatedComp = fs.readFileSync(path.join(tmpDir, 'src/components/checkout-form.component.ts'), 'utf8');
+    assert.match(updatedComp, /getByRole\('button', \{ name: 'Complete Order', exact: true \}\)/);
+
+    const updatedTape = JSON.parse(fs.readFileSync(path.join(tmpDir, '.exploratory/tapes/checkout-flow.json'), 'utf8'));
+    assert.equal(updatedTape.semanticSteps[0].locatorContract.value, 'Complete Order');
+
+    const valRes = runNode(path.join(tmpDir, 'scripts/validate-tapes.mjs'), [], tmpDir);
+    assert.equal(valRes.status, 0, `validate-tapes failed after heal: ${valRes.stderr}`);
+
+    // 2. Auth Drift -> returns auth-refresh-required
+    const authRes = analyzeAndHealDrift(tmpDir, {
+      spec: 'tests/checkout-flow.spec.ts',
+      error: 'API returned 401 Unauthorized',
+      httpStatuses: [401],
+      apply: true,
+    });
+    assert.equal(authRes.status, 'auth-refresh-required');
+
+    // 3. Genuine App Regression -> logs defect and NEVER weakens expect() in spec
+    const bugRes = analyzeAndHealDrift(tmpDir, {
+      spec: 'tests/checkout-flow.spec.ts',
+      error: 'Expected: "Confirmed"\nReceived: "Error 500"',
+      httpStatuses: [500],
+      apply: true,
+    });
+    assert.equal(bugRes.status, 'defect-logged');
+    assert.ok(bugRes.defectFile && fs.existsSync(path.join(tmpDir, bugRes.defectFile)));
+    assert.equal(
+      fs.readFileSync(path.join(tmpDir, 'tests/checkout-flow.spec.ts'), 'utf8'),
+      specContent,
+      'Spec assertions must never be weakened on app regression'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

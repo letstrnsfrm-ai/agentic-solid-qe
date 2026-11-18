@@ -65,6 +65,7 @@ const CORE_SKILL_IDS = new Set([
 const CORE_ENGINE_SCRIPTS = new Set([
   'scripts/build-domain-graph.mjs',
   'scripts/compile-tape.mjs',
+  'scripts/heal-drift.mjs',
   'scripts/migrate-skill.mjs',
   'scripts/legacy-test-migrator.mjs',
   'scripts/analyze-coverage.mjs',

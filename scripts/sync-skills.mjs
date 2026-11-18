@@ -1018,6 +1018,7 @@ const coreEnginePaths = [
   'CHANGELOG.json',
   'scripts/build-domain-graph.mjs',
   'scripts/compile-tape.mjs',
+  'scripts/heal-drift.mjs',
   'scripts/migrate-skill.mjs',
   'scripts/legacy-test-migrator.mjs',
   'scripts/analyze-coverage.mjs',

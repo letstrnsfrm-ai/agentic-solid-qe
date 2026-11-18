@@ -16,7 +16,7 @@ When invoked as `/03-drift-healer`:
 3. Compare live UI, wizard steps, `.auth/<persona>.json` validity, and API responses against the Session Tape.
 
 ## 3. 7-Way Root-Cause Classification & Action (`references/healing-playbook.md`)
-Present diagnosis for human review (auto-heal clear drift):
+Run `npx cortex heal` (dry-run) / `npx cortex heal --apply` or triage manually:
 - **Case A — App Regression:** Never weaken assertions. Capture `playwright-cli screenshot`, log `defects/DEFECT-<timestamp>.md`, mark `test.fixme()`/`test.fail()`.
 - **Case B — Expired `.auth/<persona>.json` (`401/403`):** Re-capture auth via `00-env-bootstrap` (pause only for MFA/CAPTCHA).
 - **Case C — UI/Wizard/API/Sandbox Drift:** Heal tape, `src/`, and Shards autonomously, then run `npm run verify`.
