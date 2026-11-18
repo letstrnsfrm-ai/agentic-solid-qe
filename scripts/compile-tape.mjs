@@ -732,12 +732,14 @@ export class ${clientClass} implements ApiClientContract {
 
   async executeRequest<TPayload = unknown, TResponse = Record<string, unknown>>(
     endpoint = ${JSON.stringify(primaryEndpoint)},
-    payload?: TPayload
+    payload?: TPayload,
+    extraHeaders?: Record<string, string>
   ): Promise<ApiResponseEnvelope<TResponse>> {
     const url = endpoint.startsWith('http') ? endpoint : \`\${this.baseUrl}\${endpoint}\`;
-    const headers = this.storageStatePath
+    const baseHeaders = this.storageStatePath
       ? AuthTokenBridge.extractAuthHeaders(this.storageStatePath, { targetOrigin: url })
       : {};
+    const headers = { ...baseHeaders, ...extraHeaders };
     const res = await this.request.${httpMethod}(url, {
       ...(payload !== undefined ? { data: payload } : {}),
       headers,
