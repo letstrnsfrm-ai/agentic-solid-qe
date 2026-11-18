@@ -1373,6 +1373,15 @@ export { expect };
           groupMatchKeys.add(primaryPageFixture);
           stmt = `await ${primaryPageFixture}.open(${JSON.stringify(targetRoute)});`;
         }
+      } else if (step.action === 'route') {
+        if (!injectedFixtures.includes('page')) injectedFixtures.push('page');
+        const rawPattern = step.locatorContract?.value || '/api/**';
+        const routeGlob = rawPattern.startsWith('http') || rawPattern.startsWith('**')
+          ? rawPattern
+          : `**${rawPattern.startsWith('/') ? '' : '/'}${rawPattern}`;
+        const chaosNc = (tape.networkContracts || []).find((nc) => nc.chaosFaultInjected) || (tape.networkContracts || [])[0];
+        const statusCode = Number(chaosNc?.expectedStatus) || 500;
+        stmt = `await page.route(${JSON.stringify(routeGlob)}, (route) => route.fulfill({ status: ${statusCode}, contentType: 'application/json', body: JSON.stringify({ error: 'Injected chaos fault' }) }));`;
       } else if (primaryPageFixture && step.__compiledComponentProp && step.__compiledLocatorProp) {
         groupMatchKeys.add(primaryPageFixture);
         groupMatchKeys.add(`${primaryPageFixture}.${step.__compiledComponentProp}`);
