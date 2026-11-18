@@ -275,3 +275,13 @@ When `npm run coverage:gaps` flags a tape in `handoffRecommendations[]`, split i
 - `checkpoint-state`: restores cookies & variables from `.exploratory/checkpoints/<scenarioId>.json` (gitignored).
 - `ui-prereq`: records Point-A ➔ Point-B lineage and `resumeStep` for `npm run test:explore` / `playwright-cli attach`.
 
+
+---
+
+## Pattern D: Composable State Seeders (`StateSeederContract`) for Parallel Lifecycle Tests
+
+When complex lifecycles require prerequisite domain states (e.g., `Customer` ➔ `Quote` ➔ `Active Policy` ➔ `MTA` / `Renewal` / `FNOL Claim`), **never chain dependent `.spec.ts` files** or share mutable records across Playwright workers. Instead:
+
+1. **Implement `StateSeederContract<TInput, THandle>` (`src/contracts/state-seeder.contract.ts`)** inside `src/seeders/<entity>.seeder.ts` (or `src/domains/<squad>/seeders/<entity>.seeder.ts`), capped at `≤ 150` lines with **zero `expect()`** calls.
+2. **Compose API-First (with UI fallback only when no API exists):** Chain existing `ApiClientContract` clients and `DataBuilder`s (`AuthSeeder` ➔ `QuoteSeeder` ➔ `PolicySeeder`) using unique per-test IDs (`crypto.randomUUID()`).
+3. **Wire Per-Test Fixture Auto-Teardown in `app.fixture.ts`:** Declare `resumesFrom: { handoffStrategy: "api-seed", seedClientRef: "PolicySeeder.seedActivePolicy" }` in the Session Tape so `npx cortex compile <scenario> --apply` scaffolds `src/seeders/policy.seeder.ts` and registers a Playwright fixture with `try { await use(handle); } finally { await seeder.teardown?.(handle); }`.

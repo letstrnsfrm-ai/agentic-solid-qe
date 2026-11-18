@@ -322,6 +322,34 @@ for (const file of apiClientFiles) {
   }
 }
 
+// 3a-bis. Audit Composable State Seeders across src/seeders and src/domains/*/seeders (<= 150 lines, zero expect(), StateSeederContract)
+const seederFiles = filterSquad
+  ? walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.seeder.ts')
+  : [
+      ...walkFiles(path.join(ROOT, 'src/seeders'), '.seeder.ts'),
+      ...walkFiles(path.join(ROOT, 'src/domains'), '.seeder.ts'),
+    ];
+for (const file of seederFiles) {
+  const content = fs.readFileSync(file, 'utf8');
+  const lines = content.split('\n').length;
+  if (lines > MAX_COMPONENT_LINES) {
+    violations.push(
+      `[SRP Line Cap] ${rel(file)} has ${lines} lines (max ${MAX_COMPONENT_LINES}). Compose smaller domain seeders.`
+    );
+  }
+  const codeOnly = stripComments(content);
+  if (/\bexpect\s*\(/.test(codeOnly)) {
+    violations.push(
+      `[SRP Assertion Ban] ${rel(file)} contains an expect() call. Seeders create isolated state; assertions belong in tests/*.spec.ts.`
+    );
+  }
+  if (!/\bimplements\s+StateSeederContract\b/.test(codeOnly)) {
+    violations.push(
+      `[LSP Contract] ${rel(file)} must implement StateSeederContract from src/contracts/state-seeder.contract.ts.`
+    );
+  }
+}
+
 // 3b. Verify Published Capabilities in Domain Shards match exported classes/interfaces in src/
 const allSrcTsFiles = walkFiles(path.join(ROOT, 'src'), '.ts');
 const exportedSymbols = new Set();

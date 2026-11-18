@@ -530,6 +530,7 @@ export interface ErrorBannerContract extends IdentifiableComponent {
 
   for (const sharedPath of [
     'src/contracts/api-client.contract.ts',
+    'src/contracts/state-seeder.contract.ts',
     'src/contracts/wizard-step.contract.ts',
     'src/shared/api/auth-token.bridge.ts',
     'src/shared/data/relative-date.helper.ts',
@@ -1209,6 +1210,7 @@ if (command === 'init') {
     'src/contracts/identifiable-component.contract.ts',
     'src/contracts/error-banner.contract.ts',
     'src/contracts/api-client.contract.ts',
+    'src/contracts/state-seeder.contract.ts',
     'src/contracts/catalog-list.contract.ts',
     'src/contracts/wizard-step.contract.ts',
     'src/shared/api/auth-token.bridge.ts',

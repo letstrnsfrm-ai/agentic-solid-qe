@@ -2758,6 +2758,92 @@ test('27. build-system-map generates interactive HTML, auto-refreshes on domain:
   }
 });
 
+test('28. StateSeederContract: init seeds contract, compile-tape scaffolds seeder + fixture teardown, and audit-solid enforces guardrails', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-seeder-test-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://seed.example.com', '--name', 'SeedApp'], REPO_ROOT);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, 'src/contracts/state-seeder.contract.ts')),
+      'init must seed src/contracts/state-seeder.contract.ts'
+    );
+
+    const tapePath = path.join(tmpDir, '.exploratory/tapes/policy-mta.json');
+    fs.writeFileSync(
+      tapePath,
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        scenarioId: 'policy-mta',
+        title: 'Mid-Term Adjustment on Seeded Active Policy',
+        charter: 'happy-path-baseline',
+        tags: ['@p0', '@smoke'],
+        recordedAt: '2026-11-18T00:00:00Z',
+        baseUrl: 'https://seed.example.com',
+        persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standardUser' },
+        resumesFrom: {
+          scenarioId: 'policy-bind',
+          handoffStrategy: 'api-seed',
+          seedClientRef: 'PolicySeeder.seedActivePolicy',
+        },
+        preconditions: ['Active policy seeded via PolicySeeder'],
+        semanticSteps: [
+          {
+            stepIndex: 1,
+            intent: 'Open policy MTA page',
+            businessStep: 'Open policy mid-term adjustment screen',
+            pageRoute: '/mta',
+            action: 'goto',
+            componentCandidate: 'PolicyMtaPage',
+            locatorContract: { strategy: 'url', value: '/mta' },
+          },
+        ],
+        networkContracts: [],
+        expectedStates: [
+          {
+            description: 'MTA heading visible',
+            businessStep: 'Verify MTA screen',
+            assertionType: 'toBeVisible',
+            targetComponent: 'policyMtaPage',
+            targetProperty: 'root',
+            expectedValueRef: 'UserBuilder.standardUser',
+          },
+        ],
+      }),
+      'utf8'
+    );
+
+    const compileRes = runNode(
+      path.join(tmpDir, 'scripts/compile-tape.mjs'),
+      ['policy-mta', '--apply'],
+      tmpDir
+    );
+    assert.equal(compileRes.status, 0, `compile-tape failed: ${compileRes.stderr}\n${compileRes.stdout}`);
+
+    const seederFile = path.join(tmpDir, 'src/seeders/policy.seeder.ts');
+    assert.ok(fs.existsSync(seederFile), 'compile-tape must scaffold src/seeders/policy.seeder.ts');
+    const seederCode = fs.readFileSync(seederFile, 'utf8');
+    assert.ok(seederCode.includes('implements StateSeederContract'), 'Seeder must implement StateSeederContract');
+
+    const fixtureCode = fs.readFileSync(path.join(tmpDir, 'src/fixtures/app.fixture.ts'), 'utf8');
+    assert.ok(fixtureCode.includes('seededPolicy:'), 'Fixture must register seededPolicy');
+    assert.ok(fixtureCode.includes('seeder.teardown?.(handle)'), 'Fixture must auto-teardown in finally block');
+
+    const specCode = fs.readFileSync(path.join(tmpDir, 'tests/policy-mta.spec.ts'), 'utf8');
+    assert.ok(specCode.includes('seededPolicy'), 'Spec must inject seededPolicy fixture');
+
+    const auditPass = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(auditPass.status, 0, `audit-solid should pass on valid seeder:\n${auditPass.stdout}\n${auditPass.stderr}`);
+
+    // Verify audit-solid rejects expect() inside a seeder
+    fs.writeFileSync(seederFile, seederCode.replace('void handle;', 'expect(handle).toBeTruthy();'), 'utf8');
+    const auditFail = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.notEqual(auditFail.status, 0, 'audit-solid must reject expect() inside *.seeder.ts');
+    assert.ok(auditFail.stdout.includes('[SRP Assertion Ban]') || auditFail.stderr.includes('[SRP Assertion Ban]'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 
 
 

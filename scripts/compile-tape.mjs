@@ -1104,6 +1104,77 @@ ${compInits ? compInits + '\n' : ''}  }
     });
   }
 
+  // 5b. State Seeder Layer (StateSeederContract<TInput, THandle> + fixture auto-teardown)
+  const seederImports = new Map(); // SeederClass -> { importAlias, fixtureProp }
+  if (tape.resumesFrom?.seedClientRef) {
+    const parsedSeed = parseBuilderRef(tape.resumesFrom.seedClientRef);
+    const seedCls = parsedSeed?.builderClass;
+    if (seedCls && seedCls.endsWith('Seeder') && isSafeClassName(seedCls)) {
+      const seederClass = seedCls;
+      const stem = stripClassSuffix(seederClass, ['Seeder']) || 'State';
+      const fixtureProp = `seeded${stem}`;
+      publishedCapabilities.add(seederClass);
+      const existingSeeder = existingClasses.get(seederClass);
+      if (existingSeeder) {
+        seederImports.set(seederClass, { importAlias: existingSeeder.importAlias, fixtureProp });
+        plannedOperations.push({
+          layer: 'seeder',
+          action: 'reuse-existing',
+          className: seederClass,
+          file: existingSeeder.relPath,
+          addedMembers: [],
+        });
+      } else {
+        const kebabStem = toKebabCase(stem);
+        const targetRel = `${baseSrcDir}/seeders/${kebabStem}.seeder.ts`;
+        const importAlias = toImportAlias(targetRel);
+        seederImports.set(seederClass, { importAlias, fixtureProp });
+        const codeContent = `import crypto from 'node:crypto';
+import type { APIRequestContext } from '@playwright/test';
+import type { StateSeederContract } from '@contracts/state-seeder.contract';
+
+/**
+ * Composable Domain State Seeder (SRP <= 150 lines, zero expect(), LSP: StateSeederContract).
+ * Compiled from Session Tape '${sanitizeCodeComment(scenarioId)}'.
+ */
+export class ${seederClass} implements StateSeederContract<void, Record<string, unknown>> {
+  constructor(
+    private readonly request: APIRequestContext,
+    private readonly baseUrl: string
+  ) {}
+
+  async seed(): Promise<Record<string, unknown>> {
+    void this.request;
+    void this.baseUrl;
+    return { id: crypto.randomUUID() };
+  }
+
+  async teardown(handle: Record<string, unknown>): Promise<void> {
+    void handle;
+  }
+}
+`;
+        plannedOperations.push({
+          layer: 'seeder',
+          action: 'create',
+          className: seederClass,
+          file: targetRel,
+          contract: 'StateSeederContract',
+          addedMembers: ['seed', 'teardown'],
+          codeContent,
+        });
+      }
+      allFixtureEntries.push({
+        propName: fixtureProp,
+        typeName: seederClass,
+        fixtureType: 'Record<string, unknown>',
+        importAlias: seederImports.get(seederClass).importAlias,
+        kind: 'seeder',
+        apiBaseUrl: tape.apiBaseUrl || tape.baseUrl,
+      });
+    }
+  }
+
   if (fs.existsSync(fixtureFullPath)) {
     let fixtureContent = fs.readFileSync(fixtureFullPath, 'utf8');
     const missingEntries = allFixtureEntries.filter(
@@ -1118,7 +1189,7 @@ ${compInits ? compInits + '\n' : ''}  }
         fixtureContent = `${importLines}\n${fixtureContent}`;
       }
       const interfaceLines = missingEntries
-        .map((e) => `  ${e.propName}: ${e.typeName};`)
+        .map((e) => `  ${e.propName}: ${e.fixtureType || e.typeName};`)
         .join('\n');
       fixtureContent = fixtureContent.replace(
         /(export\s+interface\s+[A-Za-z0-9_]+\s*\{)/,
@@ -1127,6 +1198,9 @@ ${compInits ? compInits + '\n' : ''}  }
 
       const implLines = missingEntries
         .map((e) => {
+          if (e.kind === 'seeder') {
+            return `  ${e.propName}: async ({ request }, use) => {\n    const seeder = new ${e.typeName}(request, process.env.API_BASE_URL || process.env.BASE_URL || ${JSON.stringify(e.apiBaseUrl)});\n    const handle = await seeder.seed();\n    try {\n      await use(handle);\n    } finally {\n      await seeder.teardown?.(handle);\n    }\n  },`;
+          }
           if (e.kind === 'api') {
             const storageArg = e.storageStatePath ? `, ${JSON.stringify(e.storageStatePath)}` : '';
             return `  ${e.propName}: async ({ request }, use) => {\n    await use(new ${e.typeName}(request, process.env.API_BASE_URL || process.env.BASE_URL || ${JSON.stringify(e.apiBaseUrl)}${storageArg}));\n  },`;
@@ -1166,10 +1240,13 @@ ${compInits ? compInits + '\n' : ''}  }
       ? `${toPascalCase(resolvedSquad)}Fixtures`
       : 'AppFixtures';
     const interfaceLines = allFixtureEntries
-      .map((e) => `  ${e.propName}: ${e.typeName};`)
+      .map((e) => `  ${e.propName}: ${e.fixtureType || e.typeName};`)
       .join('\n');
     const implLines = allFixtureEntries
       .map((e) => {
+        if (e.kind === 'seeder') {
+          return `  ${e.propName}: async ({ request }, use) => {\n    const seeder = new ${e.typeName}(request, process.env.API_BASE_URL || process.env.BASE_URL || ${JSON.stringify(e.apiBaseUrl)});\n    const handle = await seeder.seed();\n    try {\n      await use(handle);\n    } finally {\n      await seeder.teardown?.(handle);\n    }\n  },`;
+        }
         if (e.kind === 'api') {
           const storageArg = e.storageStatePath ? `, ${JSON.stringify(e.storageStatePath)}` : '';
           return `  ${e.propName}: async ({ request }, use) => {\n    await use(new ${e.typeName}(request, process.env.API_BASE_URL || process.env.BASE_URL || ${JSON.stringify(e.apiBaseUrl)}${storageArg}));\n  },`;
@@ -1480,13 +1557,19 @@ export { expect };
       } else if (strategy === 'api-seed') {
         const parsedSeed = rf.seedClientRef ? parseBuilderRef(rf.seedClientRef) : null;
         let seedCallStmt = `// Seed prerequisite state for ${parentLabel} via ApiClientContract`;
-        if (parsedSeed) {
-          const apiDesc = apiClientImports.get(parsedSeed.className);
-          if (apiDesc) {
+        if (parsedSeed && parsedSeed.builderClass) {
+          const seederDesc = seederImports.get(parsedSeed.builderClass);
+          const apiDesc = apiClientImports.get(parsedSeed.builderClass);
+          if (seederDesc) {
+            if (!injectedFixtures.includes(seederDesc.fixtureProp)) {
+              injectedFixtures.push(seederDesc.fixtureProp);
+            }
+            seedCallStmt = `void ${seederDesc.fixtureProp}; // Isolated state seeded via ${parsedSeed.builderClass} fixture with auto-teardown`;
+          } else if (apiDesc) {
             if (!injectedFixtures.includes(apiDesc.fixtureProp)) {
               injectedFixtures.push(apiDesc.fixtureProp);
             }
-            const methodPart = parsedSeed.callExpression.slice(parsedSeed.className.length + 1);
+            const methodPart = parsedSeed.callExpression.slice(parsedSeed.builderClass.length + 1);
             seedCallStmt = `await ${apiDesc.fixtureProp}.${methodPart};`;
           } else {
             seedCallStmt = `await ${parsedSeed.callExpression};`;
