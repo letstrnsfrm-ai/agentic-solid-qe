@@ -18,7 +18,8 @@ This repository uses a seven-skill, token-efficient Quality Engineering workflow
 | *(Internal / Shortcut)* Diagnose failing `.spec.ts` tests against live deployed environments to separate real regressions from UI/locator drift | `03-drift-healer` | `.agents/skills/03-drift-healer/SKILL.md` |
 | *(Internal / Shortcut)* Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and configure sharded CI/CD pipelines | `04-ci-pipeline` | `.agents/skills/04-ci-pipeline/SKILL.md` |
 | *(Internal / Shortcut)* Onboard legacy/unorganized team skills, prompts, Java/C# tests, and helper scripts into `<500`-token bundles & Session Tapes | `05-skill-migrator` | `.agents/skills/05-skill-migrator/SKILL.md` |
-| Live browser CLI syntax (`open`, `attach`, `snapshot`, `click`, `fill`, `route`, `state-save`) without `--help` round trips | `playwright-cli` | `.agents/skills/playwright-cli/SKILL.md` |
+| Live browser CLI syntax (`open`, `--cdp 9222`, `snapshot -i`, `click`, `fill`, `network`, `a11y`) without `--help` round trips | `agent-browser` | `.agents/skills/agent-browser/SKILL.md` |
+| *(Legacy / Fallback)* `@playwright/cli` syntax (`attach`, `pause-at`, `state-save`) | `playwright-cli` | `.agents/skills/playwright-cli/SKILL.md` |
 
 ## AI-Guided Project Installation, Consumer Upgrade & Legacy Skill Migration Protocol
 
@@ -43,7 +44,7 @@ When a user asks how to install, upgrade, or adopt `agentic-solid-qe` in an exis
 ## Non-Negotiable Repository Guardrails
 
 1. **Always read `.agents/domain/domain-memory.md` first** before opening a browser or generating test code.
-2. **Use `@playwright/cli` (`npx playwright-cli -s=<session>`) for exploration and healing** and inspect `.playwright-cli/page-*.yml` disk snapshots instead of streaming raw HTML.
+2. **Use `agent-browser` (`npx agent-browser --session <name>`) for exploration and healing** (with `@playwright/cli` as fallback) and inspect compact `-i` / `.agent-browser/page-*.yml` snapshots instead of streaming raw HTML.
 3. **Never place `expect()` inside `src/components/`, `src/pages/`, or `src/domains/**/api/*.client.ts`**. Components, Pages, and API Clients expose action methods, `readonly` semantic `Locator` properties, or typed `ApiResponseEnvelope<T>` responses; web-first assertions (`await expect(...).toBeVisible()`) belong strictly in `tests/*.spec.ts`.
 4. **Cap every file in `src/components/` (and `src/domains/**/components/`) at 150 lines** (Single Responsibility Principle).
 5. **Never hardcode credentials or magic strings in `tests/*.spec.ts`**; always consume builders from `src/data/` (or `src/domains/<squad>/data/`) and fixtures from `src/fixtures/app.fixture.ts`.

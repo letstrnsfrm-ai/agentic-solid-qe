@@ -1511,8 +1511,8 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
     cliVerificationCommands: options.staticOnly
       ? []
       : [
-          `npx playwright-cli -s=migrate-${scenarioId} open ${baseUrl} --headed`,
-          `npx playwright-cli -s=migrate-${scenarioId} snapshot`,
+          `npx agent-browser --session migrate-${scenarioId} --headed open ${baseUrl}`,
+          `npx agent-browser --session migrate-${scenarioId} snapshot -i`,
         ],
     compileCommand: `npm run compile:tape -- .exploratory/tapes/${scenarioId}.json --apply`,
     scaffoldedFiles,

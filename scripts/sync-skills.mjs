@@ -661,6 +661,7 @@ function mergeConsumerPackageJson() {
     '@playwright/cli': '0.1.22',
     '@playwright/test': '1.64.1',
     '@types/node': '22.20.5',
+    'agent-browser': '^0.43.0',
     typescript: '5.9.3',
   };
 
@@ -887,6 +888,7 @@ const REQUIRED_GITIGNORE_ENTRIES = [
   'playwright-report/',
   'blob-report/',
   '.playwright-cli/',
+  '.agent-browser/',
   '.playwright/',
   '.auth/',
   '.agents/legacy-backups/',

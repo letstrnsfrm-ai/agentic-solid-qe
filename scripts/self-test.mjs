@@ -2658,6 +2658,31 @@ public class PurchaseFlowTests {
   }
 });
 
+test('heal-drift parses agent-browser snapshot refs and export-auth-state builds storageState', async () => {
+  const { parsePlaywrightSnapshotYaml } = await import('./heal-drift.mjs');
+  const { buildStorageState } = await import('./export-auth-state.mjs');
+
+  const abSnap = `- combobox "Coverage Tier" [expanded=false, ref=e10]: Basic Liability
+- checkbox "I accept terms" [checked=false, ref=e11]
+- button "Continue to Review" [ref=e12]`;
+  const nodes = parsePlaywrightSnapshotYaml(abSnap);
+  assert.equal(nodes.length, 3);
+  assert.equal(nodes[0].role, 'combobox');
+  assert.equal(nodes[0].name, 'Coverage Tier');
+  assert.equal(nodes[0].ref, 'e10');
+  assert.equal(nodes[1].ref, 'e11');
+  assert.equal(nodes[2].ref, 'e12');
+
+  const state = buildStorageState({
+    cookies: [{ name: 'sid', value: 'abc', domain: 'example.com', path: '/' }],
+    origin: 'https://example.com',
+    localStorageEntries: [{ name: 'theme', value: 'dark' }],
+  });
+  assert.equal(state.cookies.length, 1);
+  assert.equal(state.origins[0].origin, 'https://example.com');
+  assert.equal(state.origins[0].localStorage[0].name, 'theme');
+});
+
 
 
 
