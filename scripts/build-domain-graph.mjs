@@ -10,6 +10,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildSystemMap } from './build-system-map.mjs';
 
 const ROOT = process.cwd();
@@ -336,7 +337,10 @@ ${actorLines}${networkLines}`;
   return createdShards;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMain =
+  Boolean(process.argv[1]) &&
+  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+if (isMain) {
   const seedFromTapes = process.argv.includes('--seed-from-tapes');
   if (seedFromTapes) {
     const seeded = seedShardsFromTapes();

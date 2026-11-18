@@ -8,6 +8,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const ROOT = process.cwd();
 const DEFAULT_OUT = path.join(ROOT, 'reports', 'system-map.html');
@@ -520,7 +521,10 @@ export function buildSystemMap({ outPath = DEFAULT_OUT, quiet = false, jsonOnly 
   return { model, outPath: resolvedOut };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMain =
+  Boolean(process.argv[1]) &&
+  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+if (isMain) {
   const args = process.argv.slice(2);
   const outIdx = args.indexOf('--out');
   const outPath = outIdx !== -1 && args[outIdx + 1] ? args[outIdx + 1] : DEFAULT_OUT;

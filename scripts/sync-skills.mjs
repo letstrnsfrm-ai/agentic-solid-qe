@@ -161,9 +161,12 @@ const resolvedAppName = sanitizeAppName(appName);
 function assertSafeTargetDirectory(resolvedTarget, label = 'target directory') {
   const normalized = path.resolve(resolvedTarget);
   const homeDir = path.resolve(os.homedir());
+  const tmpBase = path.resolve(os.tmpdir());
+  const isInsideTmp = normalized !== tmpBase && normalized.startsWith(tmpBase + path.sep);
   const forbiddenExact = new Set([
     '/',
     homeDir,
+    tmpBase,
     '/root',
     '/etc',
     '/usr',
@@ -196,8 +199,8 @@ function assertSafeTargetDirectory(resolvedTarget, label = 'target directory') {
   ];
   if (
     forbiddenExact.has(normalized) ||
-    forbiddenPrefixes.some((prefix) => normalized.startsWith(prefix)) ||
-    /^[A-Za-z]:\\(?:Windows|Program Files|Users)$/i.test(normalized)
+    (!isInsideTmp && forbiddenPrefixes.some((prefix) => normalized.startsWith(prefix))) ||
+    (!isInsideTmp && /^[A-Za-z]:\\(?:Windows|Program Files|Users)$/i.test(normalized))
   ) {
     console.error(`❌ Refusing to run against protected system or home ${label}: '${normalized}'.`);
     process.exit(1);

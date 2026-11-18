@@ -539,7 +539,10 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
   return errors;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMain =
+  Boolean(process.argv[1]) &&
+  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+if (isMain) {
   if (!fs.existsSync(TAPES_DIR)) {
     console.log('ℹ️ No .exploratory/tapes directory found. Skipping tape validation.');
     process.exit(0);
