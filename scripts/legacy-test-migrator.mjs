@@ -498,12 +498,107 @@ function computeWaveAndValue({ kind, tags, lineCount, assertionCount, pageObject
   return { wave, valueScore, complexity };
 }
 
-function buildSuggestedSlices(testEntry, body) {
+function extractDotNetSetupHooks(content) {
+  const hookBodies = [];
+  for (const m of content.matchAll(
+    /\[(?:OneTimeSetUp|SetUp)\][\s\S]*?(?:public|private|protected)\s+(?:async\s+)?(?:Task|void)\s+\w+\s*\([^)]*\)\s*\{/g
+  )) {
+    const openIdx = m.index + m[0].length - 1;
+    hookBodies.push(extractBraceBlock(content, openIdx));
+  }
+  for (const m of content.matchAll(
+    /(?:public\s+)?async\s+Task\s+InitializeAsync\s*\([^)]*\)\s*\{/g
+  )) {
+    const openIdx = m.index + m[0].length - 1;
+    hookBodies.push(extractBraceBlock(content, openIdx));
+  }
+  return hookBodies.join('\n');
+}
+
+function extractDotNetAppSettingsBaseUrl(scanRoot) {
+  for (const name of ['appsettings.json', 'appsettings.Test.json', 'appsettings.Development.json']) {
+    const full = path.join(scanRoot, name);
+    const raw = readTextSafe(full);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      const candidate =
+        parsed.BaseUrl ||
+        parsed.baseUrl ||
+        parsed.AppUrl ||
+        parsed.TestSettings?.BaseUrl ||
+        parsed.Selenium?.BaseUrl;
+      if (typeof candidate === 'string' && /^https?:\/\//.test(candidate)) {
+        return { baseUrl: candidate, sourceFile: name };
+      }
+    } catch {
+      /* ignore non-JSON appsettings */
+    }
+  }
+  return null;
+}
+
+function extractSliceBody(fullFileContent, fullTestBody, selectedSlice, pageObjectNames = []) {
+  if (!selectedSlice) return fullTestBody;
+  const setupBody = extractDotNetSetupHooks(fullFileContent);
+
+  if (selectedSlice.type === 'api-seeder') {
+    const regionMatch = fullTestBody.match(/#region\s+[^\n]*(?:seed|setup|api)[^\n]*\n([\s\S]*?)#endregion/i);
+    const apiLines = [...setupBody.split('\n'), ...fullTestBody.split('\n')]
+      .filter((l) => /\b(?:GetAsync|PostAsync|PutAsync|DeleteAsync|ExecuteAsync|RestRequest|given\s*\(|\.(?:get|post|put|delete)\s*\(|seed|createUser|createOrder)\b/i.test(l))
+      .join('\n');
+    return [setupBody, regionMatch ? regionMatch[1] : '', apiLines].filter(Boolean).join('\n') || fullTestBody;
+  }
+
+  if (selectedSlice.type === 'auth-session') {
+    const regionMatch = fullTestBody.match(/#region\s+[^\n]*(?:login|auth|signin)[^\n]*\n([\s\S]*?)#endregion/i);
+    if (regionMatch) return regionMatch[1];
+    const authLines = [...setupBody.split('\n'), ...fullTestBody.split('\n')]
+      .filter((l) => /\b(?:login|signIn|authenticate|LoginPage|username|password|GoToUrl)\b/i.test(l))
+      .join('\n');
+    return authLines || fullTestBody;
+  }
+
+  // ui-phase: match #region by Page Object or phase name, else slice by Page Object lines
+  const po = selectedSlice.pageObject || '';
+  const poBase = po.replace(/Page(?:Object)?$/i, '');
+  if (poBase) {
+    const regionRegex = new RegExp(`#region\\s+[^\\n]*${poBase}[^\\n]*\\n([\\s\\S]*?)#endregion`, 'i');
+    const rm = fullTestBody.match(regionRegex);
+    if (rm) return rm[1];
+
+    // Step-comment section matching: // Step X: <poBase> ... until next // Step or end
+    const stepRegex = new RegExp(`//\\s*Step\\s*\\d*[^\\n]*${poBase}[^\\n]*\\n([\\s\\S]*?)(?=//\\s*Step\\s*\\d+|#region|$)`, 'i');
+    const sm = fullTestBody.match(stepRegex);
+    if (sm) return sm[1];
+
+    // Line-range segmentation between Page Object references
+    const lines = fullTestBody.split('\n');
+    const otherPos = [...pageObjectNames].filter((n) => n !== po);
+    const startIdx = lines.findIndex((l) => new RegExp(`\\b${po}\\b`).test(l));
+    if (startIdx >= 0) {
+      let endIdx = lines.length;
+      for (let i = startIdx + 1; i < lines.length; i++) {
+        if (otherPos.some((op) => new RegExp(`\\bnew\\s+${op}\\b|\\b${op}\\b`).test(lines[i]))) {
+          endIdx = i;
+          break;
+        }
+      }
+      const sliced = lines.slice(startIdx, endIdx).join('\n').trim();
+      if (sliced) return sliced;
+    }
+  }
+
+  return fullTestBody;
+}
+
+function buildSuggestedSlices(testEntry, body, setupBody = '') {
   if (testEntry.complexity !== 'monolith' && testEntry.kind !== 'hybrid') {
     return [];
   }
+  const combined = `${setupBody}\n${body}`;
   const slices = [];
-  if (testEntry.apiCallCount > 0 || /\b(?:setup|seed|createUser|createOrder)\b/i.test(body)) {
+  if (testEntry.apiCallCount > 0 || /\b(?:setup|seed|createUser|createOrder|PostAsync|RestRequest)\b/i.test(combined)) {
     slices.push({
       sliceIndex: slices.length + 1,
       sliceId: `${testEntry.id}-api-seed`,
@@ -512,7 +607,7 @@ function buildSuggestedSlices(testEntry, body) {
       targetPattern: 'ApiClientContract + @api-contract',
     });
   }
-  if (/\b(?:login|signIn|authenticate|LoginPage)\b/i.test(body)) {
+  if (/\b(?:login|signIn|authenticate|LoginPage)\b/i.test(combined)) {
     slices.push({
       sliceIndex: slices.length + 1,
       sliceId: `${testEntry.id}-auth`,
@@ -528,6 +623,7 @@ function buildSuggestedSlices(testEntry, body) {
         sliceIndex: slices.length + 1,
         sliceId: `${testEntry.id}-${slugifyKebab(po)}`,
         type: 'ui-phase',
+        pageObject: po,
         title: `${po} Business Flow`,
         targetPattern: 'Session Tape -> SOLID Component + Spec',
       });
@@ -537,6 +633,7 @@ function buildSuggestedSlices(testEntry, body) {
       sliceIndex: slices.length + 1,
       sliceId: `${testEntry.id}-core-flow`,
       type: 'ui-phase',
+      pageObject: phaseRefs[0] || undefined,
       title: `Core UI Verification (${testEntry.testMethod})`,
       targetPattern: 'Session Tape -> SOLID Component + Spec',
     });
@@ -624,7 +721,8 @@ function extractTestMethodsFromFile(filePath, scanRoot, pageObjectNames) {
       valueScore,
       suggestedSlices: [],
     };
-    entry.suggestedSlices = buildSuggestedSlices(entry, body);
+    const setupBody = language === 'csharp' ? extractDotNetSetupHooks(content) : '';
+    entry.suggestedSlices = buildSuggestedSlices(entry, body, setupBody);
     tests.push(entry);
   }
 
@@ -787,11 +885,19 @@ function mapSeleniumLocatorToContract(byType, selectorValue) {
   return { strategy: 'getByText', value: val, nameExact: false };
 }
 
-function extractStepsAndContractsFromBody(body, testEntry, pageObjects) {
+function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selectedSlice = null) {
   const semanticSteps = [];
   const networkContracts = [];
   const expectedStates = [];
-  const componentName = `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}Page`;
+  const componentName = selectedSlice?.pageObject
+    ? selectedSlice.pageObject
+    : `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}Page`;
+
+  // Detect .NET SwitchTo().Frame("...") / DefaultContent()
+  const frameMatch = body.match(/SwitchTo\(\)\.Frame\(\s*"([^"]+)"\s*\)/);
+  const activeIframe = frameMatch ? frameMatch[1] : null;
+  const alertMatch = body.match(/SwitchTo\(\)\.Alert\(\)\.(Accept|Dismiss)\s*\(/i);
+  const activeDialogAction = alertMatch ? alertMatch[1].toLowerCase() : null;
 
   // 1. Extract API calls (RestAssured / RestSharp / HttpClient)
   const apiMatches = [
@@ -858,7 +964,23 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects) {
     });
   }
 
-  // 3. Extract inline Selenium By.* interactions
+  // 3. Extract inline Selenium By.* interactions + .NET SelectElement
+  for (const m of body.matchAll(
+    /new\s+SelectElement\s*\(\s*[A-Za-z0-9_.]*FindElement\s*\(\s*By\.(Id|Name|CssSelector|XPath)\s*\(\s*"([^"]+)"\s*\)\s*\)\s*\)\.(?:SelectByText|SelectByValue)\s*\(\s*"([^"]+)"\s*\)/g
+  )) {
+    const locContract = mapSeleniumLocatorToContract(m[1], m[2]);
+    if (activeIframe) locContract.iframeSelector = activeIframe;
+    semanticSteps.push({
+      stepIndex: semanticSteps.length + 1,
+      intent: `Select ${m[3]} in ${m[2]}`,
+      businessStep: `Choose ${m[3]} for ${toCamelCase(m[2])}`,
+      action: 'selectOption',
+      componentCandidate: componentName,
+      locatorContract: locContract,
+      inputDataRef: `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}Builder.defaultData.${toCamelCase(m[2])}`,
+    });
+  }
+
   for (const m of body.matchAll(
     /[Ff]indElement\s*\(\s*By\.(id|Id|name|Name|cssSelector|CssSelector|xpath|XPath|linkText|LinkText)\s*\(\s*"([^"]+)"\s*\)\s*\)\.(sendKeys|SendKeys|click|Click)\s*\(/g
   )) {
@@ -866,55 +988,64 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects) {
     const selectorVal = m[2];
     const op = m[3].toLowerCase();
     const action = op === 'sendkeys' ? 'fill' : 'click';
+    const locContract = mapSeleniumLocatorToContract(byType, selectorVal);
+    if (activeIframe) locContract.iframeSelector = activeIframe;
     const step = {
       stepIndex: semanticSteps.length + 1,
       intent: `${action === 'fill' ? 'Enter value into' : 'Click'} ${selectorVal}`,
       businessStep: `${action === 'fill' ? 'Provide input for' : 'Trigger'} ${toCamelCase(selectorVal)}`,
       action,
       componentCandidate: componentName,
-      locatorContract: mapSeleniumLocatorToContract(byType, selectorVal),
+      locatorContract: locContract,
+      ...(action === 'click' && activeDialogAction ? { dialogAction: activeDialogAction } : {}),
     };
     if (action === 'fill') {
-      step.inputDataRef = `${toPascalCase(testEntry.className)}Builder.defaultData.${toCamelCase(selectorVal)}`;
+      step.inputDataRef = `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}Builder.defaultData.${toCamelCase(selectorVal)}`;
     }
     semanticSteps.push(step);
   }
 
   // 4. Extract Page Object method calls if no inline Selenium steps found
-  if (semanticSteps.length === 0 && testEntry.pageObjectRefs.length > 0) {
-    for (const po of testEntry.pageObjectRefs) {
+  const slicePoRefs = selectedSlice?.pageObject
+    ? [selectedSlice.pageObject]
+    : testEntry.pageObjectRefs;
+  if (semanticSteps.length === 0 && slicePoRefs.length > 0) {
+    for (const po of slicePoRefs) {
       const poInfo = pageObjects[po];
       const firstLoc = poInfo?.locators?.[0];
+      const locContract = firstLoc
+        ? mapSeleniumLocatorToContract(firstLoc.byType, firstLoc.selector)
+        : { strategy: 'getByRole', role: 'button', value: 'Continue', nameExact: false };
+      if (activeIframe) locContract.iframeSelector = activeIframe;
       semanticSteps.push({
         stepIndex: semanticSteps.length + 1,
         intent: `Execute ${po} interaction`,
         businessStep: `Complete ${po} workflow step`,
         action: 'click',
         componentCandidate: po,
-        locatorContract: firstLoc
-          ? mapSeleniumLocatorToContract(firstLoc.byType, firstLoc.selector)
-          : { strategy: 'getByRole', role: 'button', value: 'Continue', nameExact: false },
+        locatorContract: locContract,
+        ...(activeDialogAction ? { dialogAction: activeDialogAction } : {}),
       });
     }
   }
 
   // Fallback step to guarantee minItems: 1
   if (semanticSteps.length === 0) {
+    const isApi = testEntry.kind === 'api' || selectedSlice?.type === 'api-seeder';
     semanticSteps.push({
       stepIndex: 1,
       intent: `Execute ${testEntry.testMethod} flow`,
       businessStep: `Verify ${testEntry.testMethod} behaviour`,
-      action: testEntry.kind === 'api' ? 'apiCall' : 'goto',
+      action: isApi ? 'apiCall' : 'goto',
       componentCandidate: componentName,
-      locatorContract:
-        testEntry.kind === 'api'
-          ? { strategy: 'apiEndpoint', value: '/api/health' }
-          : { strategy: 'url', value: '/' },
+      locatorContract: isApi
+        ? { strategy: 'apiEndpoint', value: '/api/health' }
+        : { strategy: 'url', value: '/' },
     });
   }
 
   // 5. Extract expected states
-  if (testEntry.kind === 'api' || networkContracts.length > 0) {
+  if (selectedSlice?.type === 'api-seeder' || (selectedSlice?.type !== 'ui-phase' && (testEntry.kind === 'api' || networkContracts.length > 0))) {
     const nc = networkContracts[0] || { clientCandidate: `${componentName}ApiClient`, expectedStatus: 200 };
     expectedStates.push({
       description: `Verify API returns expected HTTP ${nc.expectedStatus} status`,
@@ -926,12 +1057,12 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects) {
     });
   } else {
     expectedStates.push({
-      description: `Verify ${testEntry.testMethod} target state is visible`,
+      description: `Verify ${selectedSlice?.title || testEntry.testMethod} target state is visible`,
       businessStep: semanticSteps[semanticSteps.length - 1].businessStep,
       assertionType: 'toBeVisible',
       targetComponent: componentName,
       targetProperty: 'primaryHeading',
-      expectedValueRef: `${toPascalCase(testEntry.className)}Builder.expectedHeading`,
+      expectedValueRef: `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}Builder.expectedHeading`,
     });
   }
 
@@ -1271,35 +1402,67 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
     ? extractBraceBlock(content, methodMatch.index + methodMatch[0].length - 1)
     : content;
 
-  const { semanticSteps, networkContracts, expectedStates } = extractStepsAndContractsFromBody(
-    body,
-    match,
-    discovery.pageObjects
-  );
-
-  const { params, datasets } = extractParameterizationDatasets(content, match.testMethod, match.language);
-  const scaffoldedFiles = scaffoldPageObjectsToSolid(discovery.pageObjects, match.pageObjectRefs);
-  const dataBuilderFile = scaffoldDataBuilder(match, params, datasets, discovery.dataModels);
-  if (dataBuilderFile) {
-    scaffoldedFiles.push(dataBuilderFile);
-  }
-
   const selectedSlice =
     options.sliceIndex && match.suggestedSlices[options.sliceIndex - 1]
       ? match.suggestedSlices[options.sliceIndex - 1]
       : null;
+
+  const effectiveBody = extractSliceBody(content, body, selectedSlice, Object.keys(discovery.pageObjects));
+
+  const { semanticSteps, networkContracts, expectedStates } = extractStepsAndContractsFromBody(
+    effectiveBody,
+    match,
+    discovery.pageObjects,
+    selectedSlice
+  );
+
+  const { params, datasets } = extractParameterizationDatasets(content, match.testMethod, match.language);
+  const scaffoldedPageRefs = selectedSlice?.pageObject
+    ? [selectedSlice.pageObject]
+    : match.pageObjectRefs;
+  const scaffoldedFiles = scaffoldPageObjectsToSolid(discovery.pageObjects, scaffoldedPageRefs);
+  const dataBuilderFile = scaffoldDataBuilder(match, params, datasets, discovery.dataModels);
+  if (dataBuilderFile) {
+    scaffoldedFiles.push(dataBuilderFile);
+  }
 
   const scenarioId = selectedSlice ? selectedSlice.sliceId : match.id;
   const charter =
     match.kind === 'api' || selectedSlice?.type === 'api-seeder'
       ? 'api-contract'
       : 'happy-path-baseline';
-  const tags = match.tags.length > 0 ? match.tags : match.wave === 1 ? ['@p0', '@smoke'] : ['@regression'];
+  const tags =
+    selectedSlice?.type === 'api-seeder'
+      ? [...new Set([...match.tags, '@api-contract'])]
+      : match.tags.length > 0
+        ? match.tags
+        : match.wave === 1
+          ? ['@p0', '@smoke']
+          : ['@regression'];
 
+  const appSettings = match.language === 'csharp' ? extractDotNetAppSettingsBaseUrl(scanRoot) : null;
   const baseUrl =
-    options.baseUrl && /^https?:\/\//.test(options.baseUrl)
+    options.baseUrl && /^https?:\/\//.test(options.baseUrl) && options.baseUrl !== 'http://localhost:3000'
       ? options.baseUrl
-      : 'http://localhost:3000';
+      : appSettings?.baseUrl || (options.baseUrl && /^https?:\/\//.test(options.baseUrl) ? options.baseUrl : 'http://localhost:3000');
+
+  const hasAuthSlice = match.suggestedSlices.some((s) => s.type === 'auth-session');
+  const useStorageState =
+    selectedSlice?.type === 'auth-session' ||
+    (selectedSlice?.type === 'ui-phase' && hasAuthSlice);
+
+  const prevSlice =
+    selectedSlice && selectedSlice.sliceIndex > 1
+      ? match.suggestedSlices[selectedSlice.sliceIndex - 2]
+      : null;
+
+  const resumesFrom =
+    selectedSlice?.type === 'ui-phase' && prevSlice
+      ? {
+          scenarioId: prevSlice.sliceId,
+          handoffStrategy: prevSlice.type === 'api-seeder' ? 'api-seed' : 'ui-prereq',
+        }
+      : undefined;
 
   const draftTape = {
     schemaVersion: '1.0.0',
@@ -1313,10 +1476,13 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
     baseUrl,
     persona: {
       role: 'standard_user',
+      ...(useStorageState ? { storageStatePath: '.auth/standard.json' } : {}),
       dataBuilderRef: `${toPascalCase(match.className.replace(/Tests?$/i, '') || match.className)}Builder.defaultData`,
     },
+    ...(resumesFrom ? { resumesFrom } : {}),
     preconditions: [
       `Migrated from legacy ${match.language.toUpperCase()} test: ${match.file}#${match.testMethod}`,
+      ...(appSettings ? [`Base URL detected from ${appSettings.sourceFile}; override via BASE_URL in .env.`] : []),
       options.staticOnly
         ? 'Static-only fallback mode: verify locators before CI promotion.'
         : 'Verify draft locators against live BASE_URL via @playwright/cli before compile:tape.',

@@ -2256,3 +2256,160 @@ test('checkout @p0', async ({ page }) => {
   }
 });
 
+test('23. C#/.NET monolithic test migration: [OneTimeSetUp], #region per-slice body extraction, SelectElement/Frame/Alert, appsettings.json, and resumesFrom chaining', async () => {
+  const { buildLegacyMigrationPlan, applyLegacyMigrationPlan } = await import(
+    new URL('./legacy-test-migrator.mjs', import.meta.url).href
+  );
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-cs-monolith-'));
+  const csRepo = path.join(tmpRoot, 'dotnet-e2e');
+  const pwDir = path.join(csRepo, 'e2e-playwright');
+
+  try {
+    fs.mkdirSync(path.join(csRepo, 'Pages'), { recursive: true });
+    fs.mkdirSync(path.join(csRepo, 'Tests'), { recursive: true });
+    fs.writeFileSync(path.join(csRepo, 'DotNetE2E.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>\n', 'utf8');
+    fs.writeFileSync(
+      path.join(csRepo, 'appsettings.json'),
+      JSON.stringify({ BaseUrl: 'https://shop.example.com' }, null, 2),
+      'utf8'
+    );
+
+    fs.writeFileSync(
+      path.join(csRepo, 'Pages/LoginPage.cs'),
+      `using OpenQA.Selenium;
+public class LoginPage {
+  private By usernameInput = By.Id("user");
+}
+`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(csRepo, 'Pages/CatalogPage.cs'),
+      `using OpenQA.Selenium;
+public class CatalogPage {
+  private By addToCartBtn = By.Id("add-cart");
+}
+`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(csRepo, 'Pages/CheckoutPage.cs'),
+      `using OpenQA.Selenium;
+public class CheckoutPage {
+  private By confirmBtn = By.Id("confirm-order");
+}
+`,
+      'utf8'
+    );
+
+    fs.writeFileSync(
+      path.join(csRepo, 'Tests/EndToEndPurchaseTests.cs'),
+      `using NUnit.Framework;
+using OpenQA.Selenium;
+using OpenQA.Selenium.Support.UI;
+using System.Net.Http;
+using System.Threading.Tasks;
+
+public class EndToEndPurchaseTests {
+  private IWebDriver driver;
+  private HttpClient http;
+
+  [OneTimeSetUp]
+  public async Task SeedOrderData() {
+    await http.PostAsync("/api/orders/seed", null);
+  }
+
+  [Test]
+  public void FullPurchaseMonolith() {
+    #region Login
+    driver.Navigate().GoToUrl("https://shop.example.com/login");
+    var login = new LoginPage();
+    driver.FindElement(By.Id("user")).SendKeys("buyer@example.com");
+    driver.FindElement(By.Id("login-btn")).Click();
+    #endregion
+
+    #region Catalog
+    var catalog = new CatalogPage();
+    driver.FindElement(By.Id("add-cart")).Click();
+    Assert.True(true);
+    Assert.True(true);
+    #endregion
+
+    #region Checkout
+    var checkout = new CheckoutPage();
+    driver.SwitchTo().Frame("payment-frame");
+    new SelectElement(driver.FindElement(By.Id("country"))).SelectByText("UK");
+    driver.FindElement(By.Id("confirm-order")).Click();
+    driver.SwitchTo().Alert().Accept();
+    Assert.True(true);
+    Assert.True(true);
+    Assert.True(true);
+    #endregion
+  }
+}
+`,
+      'utf8'
+    );
+
+    const initRes = runNode(
+      SYNC_SCRIPT,
+      ['init', pwDir, '--url', 'https://shop.example.com', '--name', 'DotNetShop'],
+      tmpRoot
+    );
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    const testId = 'cs-end-to-end-purchase-tests-full-purchase-monolith';
+
+    // Slice 1: api-seeder from [OneTimeSetUp]
+    const slice1 = buildLegacyMigrationPlan(csRepo, testId, { sliceIndex: 1, staticOnly: true });
+    assert.equal(slice1.found, true);
+    assert.equal(slice1.selectedSlice.type, 'api-seeder');
+    assert.equal(slice1.draftTape.baseUrl, 'https://shop.example.com');
+    assert.ok(slice1.draftTape.tags.includes('@api-contract'));
+    assert.ok(
+      slice1.draftTape.semanticSteps.some((s) => s.action === 'apiCall' && s.locatorContract.value === '/api/orders/seed'),
+      'Expected Slice 1 to extract /api/orders/seed from [OneTimeSetUp]'
+    );
+    assert.ok(
+      !slice1.draftTape.semanticSteps.some((s) => s.action === 'selectOption'),
+      'Slice 1 must not include Checkout UI steps'
+    );
+    applyLegacyMigrationPlan(pwDir, slice1, '..');
+
+    // Slice 2: auth-session
+    const slice2 = buildLegacyMigrationPlan(csRepo, testId, { sliceIndex: 2, staticOnly: true });
+    assert.equal(slice2.selectedSlice.type, 'auth-session');
+    assert.equal(slice2.draftTape.persona.storageStatePath, '.auth/standard.json');
+    applyLegacyMigrationPlan(pwDir, slice2, '..');
+
+    // Slice 3: CatalogPage ui-phase -> resumesFrom Slice 2
+    const slice3 = buildLegacyMigrationPlan(csRepo, testId, { sliceIndex: 3, staticOnly: true });
+    assert.equal(slice3.selectedSlice.type, 'ui-phase');
+    assert.equal(slice3.draftTape.persona.storageStatePath, '.auth/standard.json');
+    assert.equal(slice3.draftTape.resumesFrom.scenarioId, slice2.draftTape.scenarioId);
+    assert.equal(slice3.draftTape.resumesFrom.handoffStrategy, 'ui-prereq');
+    applyLegacyMigrationPlan(pwDir, slice3, '..');
+
+    // Slice 4: CheckoutPage ui-phase -> SelectElement, iframeSelector, dialogAction, resumesFrom Slice 3
+    const slice4 = buildLegacyMigrationPlan(csRepo, testId, { sliceIndex: 4, staticOnly: true });
+    assert.equal(slice4.selectedSlice.type, 'ui-phase');
+    assert.equal(slice4.draftTape.resumesFrom.scenarioId, slice3.draftTape.scenarioId);
+    const selectStep = slice4.draftTape.semanticSteps.find((s) => s.action === 'selectOption');
+    assert.ok(selectStep, 'Expected Slice 4 to extract SelectElement as selectOption');
+    assert.equal(selectStep.locatorContract.iframeSelector, 'payment-frame');
+    const clickStep = slice4.draftTape.semanticSteps.find((s) => s.action === 'click');
+    assert.equal(clickStep.dialogAction, 'accept');
+    applyLegacyMigrationPlan(pwDir, slice4, '..');
+
+    const valRes = runNode(path.join(pwDir, 'scripts/validate-tapes.mjs'), [], pwDir);
+    assert.equal(valRes.status, 0, `validate-tapes failed: ${valRes.stderr}\n${valRes.stdout}`);
+
+    const auditRes = runNode(path.join(pwDir, 'scripts/audit-solid.mjs'), [], pwDir);
+    assert.equal(auditRes.status, 0, `audit-solid failed: ${auditRes.stderr}\n${auditRes.stdout}`);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
