@@ -1497,12 +1497,16 @@ export { expect };
       return `    await test.step(${JSON.stringify(group.title)}, async () => {\n${body}\n    });`;
     });
 
+    const specBody = `${personaPreamble}${capturedVarsPreamble}${resumesFromPreamble}${stepBlocks.join('\n\n')}`;
+    const usedFixtures = injectedFixtures.filter((f) => new RegExp(`\\b${f}\\b`).test(specBody));
+    const finalFixtures = usedFixtures.length > 0 ? usedFixtures : injectedFixtures.slice(0, 1);
+
     const nodeImportsBlock = extraNodeImports.length > 0 ? extraNodeImports.join('\n') + '\n' : '';
     const specCode = `${nodeImportsBlock}import { test, expect } from '${fixtureAlias}';
 ${builderImportLines ? builderImportLines + '\n' : ''}
 test.describe(${JSON.stringify(`${tape.title} [${tagsSuffix}] (Compiled from Session Tape: ${scenarioId})`)}, () => {
-  test(${JSON.stringify(`${tape.title} ${tagsSuffix}`)}, async ({ ${injectedFixtures.join(', ')} }) => {
-${personaPreamble}${capturedVarsPreamble}${resumesFromPreamble}${stepBlocks.join('\n\n')}
+  test(${JSON.stringify(`${tape.title} ${tagsSuffix}`)}, async ({ ${finalFixtures.join(', ')} }) => {
+${specBody}
   });
 });
 `;

@@ -19,7 +19,7 @@ Use `npx playwright-cli -s=<session>` to drive live browsers via compact YAML sn
 - `goto <url>` / `go-back` / `go-forward` / `reload` — Navigation.
 
 ## 3. Inspection, Recording & State
-- `eval "<js-fn>"` / `console [error]` / `network` — Telemetry.
+- `eval "<js-fn>"` / `console [error]` / `requests` / `request <idx>` — Telemetry & network inspection.
 - `route <url> [--status=500]` / `unroute` — Network mocking.
 - `state-save <file>` / `state-load <file>` — Auth persistence.
 - `screenshot` / `tracing-start` / `tracing-stop` — Evidence.

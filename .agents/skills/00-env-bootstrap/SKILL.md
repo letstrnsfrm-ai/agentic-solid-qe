@@ -20,6 +20,6 @@ For SSO, MFA, or multi-step login (invoke `/playwright-cli` for full CLI command
 3. Persist reusable session state into `.auth/<persona>.json` (git-ignored) and record cookie/`localStorage` **key names only (never raw token/cookie values)** in `domain-memory.md`. Reopen idle sessions via `.playwright/cli.config.json` (`browser.contextOptions.storageState`).
 
 ## 3. Unfamiliar App Navigation & Mandatory Shard Seeding
-1. After SPA load, run `npx playwright-cli -s=auth snapshot --filename=.playwright-cli/page-landing.yml` and inspect landmarks (`navigation`, `banner`, `main`, links).
-2. Scaffold initial feature shards in `.agents/domain/shards/<feature>.md` (≤ 150 lines) and register them in `domain-memory.md`, then run `npm run domain:graph`.
-3. Close the session (`npx playwright-cli -s=auth close`) and ask the human which discovered feature to prioritize so the agent can execute `01-cli-explorer` (or return to `00-master-orchestrator`).
+1. After SPA load, run `npx playwright-cli -s=auth snapshot --filename=.playwright-cli/page-landing.yml` and inspect landmarks/links.
+2. Scaffold initial shards in `.agents/domain/shards/<feature>.md` (≤ 150 lines; `**Published Capabilities:** *(none yet)*` until compiled), register in `domain-memory.md`, and run `npm run domain:graph`.
+3. Close session (`npx playwright-cli -s=auth close`) and ask which feature to explore next via `01-cli-explorer` (or `00-master-orchestrator`).
