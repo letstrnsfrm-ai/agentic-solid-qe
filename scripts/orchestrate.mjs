@@ -82,7 +82,7 @@ function detectLegacySkillArtifacts(rootDir) {
   const promptDir = path.join(rootDir, '.github/prompts');
   for (const f of walkFiles(promptDir, (name) => name.endsWith('.prompt.md'))) {
     const base = path.basename(f);
-    if (!/^(?:0[0-5]|playwright-cli|master-orchestrator)/.test(base)) {
+    if (!/^(?:0[0-5]|agent-browser|playwright-cli|master-orchestrator)/.test(base)) {
       artifacts.push(path.relative(rootDir, f).replace(/\\/g, '/'));
     }
   }
@@ -282,7 +282,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       priority: 5,
       skill: '01-cli-explorer',
       why: `${uncoveredShards.length} uncovered domain shard(s) remain (next: ${shardName}).`,
-      command: `npx playwright-cli -s=${shardName} --headed open ${coverage.targetApp?.baseUrl || ''}`.trim(),
+      command: `npx agent-browser --session ${shardName} --headed open ${coverage.targetApp?.baseUrl || ''}`.trim(),
       autoRunnable: false,
       humanGate: 'Approve 1 scenario from the Session Debrief Matrix.',
     };

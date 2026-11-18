@@ -96,7 +96,7 @@ export function parsePlaywrightSnapshotYaml(yamlText) {
     const role = match[1].toLowerCase();
     const name = (match[2] || '').trim();
     const attrs = match[3] || '';
-    const refMatch = attrs.match(/\[ref=([^\]]+)\]/);
+    const refMatch = attrs.match(/\bref=([^,\]]+)/);
     const testIdMatch = attrs.match(/\[data-test(?:id)?=["']?([^\]"']+)["']?\]/);
 
     if (!name && !testIdMatch) continue;
@@ -362,11 +362,14 @@ function findLatestSnapshot(projectRoot, explicitSnapshot) {
     const resolved = path.resolve(projectRoot, explicitSnapshot);
     return isWithinDir(resolved, projectRoot) && fs.existsSync(resolved) ? resolved : null;
   }
-  const cliDir = path.join(projectRoot, '.playwright-cli');
-  const ymls = walkFiles(cliDir, (n) => n.endsWith('.yml') || n.endsWith('.yaml'));
-  if (ymls.length === 0) return null;
-  ymls.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-  return ymls[0];
+  const candidates = [];
+  for (const dirName of ['.agent-browser', '.playwright-cli']) {
+    const dirPath = path.join(projectRoot, dirName);
+    candidates.push(...walkFiles(dirPath, (n) => n.endsWith('.yml') || n.endsWith('.yaml') || n.endsWith('.txt')));
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  return candidates[0];
 }
 
 /**
