@@ -8,19 +8,19 @@ description: Autonomous feature discovery, multi-page/multi-portal exploration, 
 ## 1. Zero-Prompt Auto-Start: Recon & Gap Analysis (FR-1.1)
 When invoked as `/01-cli-explorer` (use `/agent-browser` for CLI syntax):
 1. Run `npm run coverage:gaps` and read `.agents/domain/domain-memory.md` (+ `shards/*.md`).
-2. **Prefer Resume-from-Spec (`A ➔ B ➔ C`)** when an existing `.spec.ts` reaches a prerequisite state (`npm run test:explore -- <spec>` + `npx agent-browser --session explore --cdp 9222 snapshot -i`); use **Fresh Recon** (`--headed open <baseUrl>`) only for new entry routes, or **Codegen** (`references/charters.md` §0b–0c).
+2. **High-Speed Resume (`npx cortex explore`):** Start via `--from-spec <spec> [--until-step "<step>"]`, `--from-seed <seeder> --url <url>`, or `<1s` `--checkpoint <name>` (headless default; `--headed` optional). Use `--url <baseUrl>` only for new routes (`references/charters.md` §0b–0c).
 3. **Checkpoint 1:** Present **Top 3 Uncovered Scenarios** (`references/charters.md`) and pick **1** to explore.
 
-## 2. Multi-Page, Multi-Portal & API Recon (FR-1.2, FR-1.3)
-Traverse with multi-oracle checks (`references/charters.md`):
-- **State & Actors:** Run `snapshot -i` and `eval "location.href"`; record `conditionRef` and `actors`.
-- **Locator Contract:** Map `@e<N>` refs to `parentScope`, `filterTextRef`, and semantic locators.
-- **API & A11y Telemetry:** Run `console`, `errors`, `network requests`, `a11y --json`; record `networkContracts`.
+## 2. Batched Multi-Page, Multi-Portal & API Recon (FR-1.2, FR-1.3)
+Traverse via `cortex explore` (auto-resolves `@e<N>` locators, redacts secrets, captures network/errors, returns compact `-i` deltas):
+- **Actions:** `npx cortex explore act <cmd> ... --step "<business>"` or `batch '[...]'`.
+- **Cross-Portal & State:** `capture <var>` + `actor <id> --url <url>` + `checkpoint save <name>`.
+- **A11y & Oracles:** Run `a11y --json` and multi-oracle checks (`references/charters.md`).
 
 ## 3. Defect Triage & Shards (FR-1.4, FR-2.1)
 - **Defects:** `npx agent-browser --session explore screenshot defects/evidence.png --annotate` + `defects/DEFECT-<timestamp>.md` (`references/defect-template.md`).
 - **Shards:** Update `.agents/domain/shards/<feature>.md` (≤ 150 lines).
 
-## 4. Debrief & Tape Emission (FR-1.5)
-1. **Checkpoint 2:** Present the **Session Debrief Matrix** (`references/charters.md`) for human selection.
-2. Emit/extend `.exploratory/tapes/<scenario-id>.json`, run `npm run validate:tapes` + `npm run domain:graph -- --seed-from-tapes`, and autonomously run `02-solid-architect` on `<scenario-id>`.
+## 4. Debrief & 1-Command Compilation (FR-1.5)
+1. **Checkpoint 2:** Present the **Session Debrief Matrix** (`references/charters.md`).
+2. Run `npx cortex explore finish --scenario <id> --compile` + `npm run domain:graph -- --seed-from-tapes`.

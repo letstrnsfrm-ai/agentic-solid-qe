@@ -295,6 +295,11 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
           `[${file}] Invalid resumesFrom.seedClientRef '${rf.seedClientRef}'. Must be a safe ApiClient/Builder member reference.`
         );
       }
+      if (rf.flowRef !== undefined && !isSafeMemberRef(rf.flowRef)) {
+        errors.push(
+          `[${file}] Invalid resumesFrom.flowRef '${rf.flowRef}'. Must be a safe FlowContract class/method reference.`
+        );
+      }
       if (
         rf.checkpointPath !== undefined &&
         (typeof rf.checkpointPath !== 'string' || !SAFE_CHECKPOINT_PATH_REGEX.test(rf.checkpointPath))

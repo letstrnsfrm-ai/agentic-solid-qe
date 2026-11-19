@@ -1,8 +1,9 @@
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect, type BrowserContext, type Page } from '@playwright/test';
 import { LoginPage } from '@pages/login.page';
 import { InventoryPage } from '@pages/inventory.page';
 import { CheckoutPage } from '@pages/checkout.page';
 import { registerOverlayHandlers } from '@shared/ui/overlay-handler';
+import { holdForExplore } from '@shared/ui/explore-handshake';
 
 /**
  * Segregated Fixture Contract (OCP & ISP).
@@ -15,6 +16,8 @@ export interface AppFixtures {
   explorePause: void;
 }
 
+const activeExploreContexts = new Map<string, { page: Page; context: BrowserContext; held: boolean }>();
+
 export const test = base.extend<AppFixtures>({
   loginPage: async ({ page }, use) => {
     await use(new LoginPage(page));
@@ -26,15 +29,43 @@ export const test = base.extend<AppFixtures>({
     await use(new CheckoutPage(page));
   },
   explorePause: [
-    async ({ page }, use) => {
+    async ({ page, context }, use, testInfo) => {
       await registerOverlayHandlers(page);
-      await use();
-      if (!process.env.CI && process.env.PW_PAUSE_FOR_EXPLORE === '1') {
-        await page.pause();
+      const state = { page, context, held: false };
+      activeExploreContexts.set(testInfo.testId, state);
+      try {
+        await use();
+        if (!process.env.CI && process.env.PW_PAUSE_FOR_EXPLORE === '1' && !state.held) {
+          state.held = true;
+          await holdForExplore(page, context);
+        }
+      } finally {
+        activeExploreContexts.delete(testInfo.testId);
       }
     },
     { auto: true },
   ],
 });
+
+if (!process.env.CI && process.env.PW_PAUSE_FOR_EXPLORE === '1' && process.env.PW_EXPLORE_UNTIL_STEP) {
+  const targetStep = process.env.PW_EXPLORE_UNTIL_STEP.toLowerCase();
+  const originalStep = test.step.bind(test);
+  test.step = (async <T>(title: string, body: () => Promise<T>, options?: { box?: boolean }): Promise<T> => {
+    const result = await originalStep(title, body, options);
+    if (title.toLowerCase().includes(targetStep)) {
+      let active: { page: Page; context: BrowserContext; held: boolean } | undefined;
+      try {
+        active = activeExploreContexts.get(test.info().testId);
+      } catch {
+        /* outside test context */
+      }
+      if (active && !active.held) {
+        active.held = true;
+        await holdForExplore(active.page, active.context, { pausedAtStep: title });
+      }
+    }
+    return result;
+  }) as typeof test.step;
+}
 
 export { expect };

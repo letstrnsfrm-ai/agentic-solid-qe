@@ -13,27 +13,36 @@ When a Quality Engineer asks to explore a feature they do not know end-to-end ye
    - Dynamic runtime values generated along the flow (e.g., Order ID, Quote Reference, Calculated Tax/Total) that must be verified on downstream pages (`capturedVariables`).
    - Network/API requests (`GET`/`POST`/`PUT`/`DELETE`) triggered during page transitions (`networkContracts`).
 
-## 0b. Resume-from-Spec Exploration Mode (Point A ➔ Point B ➔ Point C)
+## 0b. High-Speed Resume-from-Spec, API-Seed & Checkpoint Mode (Point A ➔ Point B ➔ Point C)
 
-When Point A of an E2E journey is already automated in `tests/*.spec.ts` (for example, login, quote creation, or cart setup) and you want to explore downstream **Point B ➔ Point C** business scenarios without manually replaying Point A:
-1. **Run Point A and Pause Automatically (Zero Spec Edits):**
+When Point A of a complex E2E journey requires heavy seeded data or is already automated in `tests/*.spec.ts`, use **`npx cortex explore`** (headless by default for maximum speed; pass `--headed` for MFA/CAPTCHA or human observation):
+
+1. **Reach Point A & Auto-Attach on a Free CDP Port (Zero Spec Edits):**
    ```bash
-   npm run test:explore -- tests/<point-a>.spec.ts -g "<test title>"
+   # Option A — Reuse an existing spec (optionally pausing mid-test after a specific test.step()):
+   npx cortex explore start --from-spec tests/<point-a>.spec.ts --grep "<test title>" --until-step "Submit quote" --scenario <point-b-id>
+
+   # Option B — Instant <1s restore from a previously saved browser checkpoint (cookies + localStorage + sessionStorage + URL + variables):
+   npx cortex explore start --checkpoint <point-a-name> --scenario <point-b-id>
+
+   # Option C — Fast API Seeder for fresh/mutating backend entities:
+   npx cortex explore start --from-seed scripts/seed-quote.mjs --url "https://app.example.com/quotes/{{quoteId}}" --scenario <point-b-id>
    ```
-   `npm run test:explore` sets `PW_PAUSE_FOR_EXPLORE=1` (triggering `await page.pause()` in `src/fixtures/app.fixture.ts` after the test's automated steps finish) and `EXPLORE_CDP_PORT=9222` (non-CI only).
-   - *Alternative (`--debug=cli`):* Run `npx playwright test tests/<point-a>.spec.ts -g "<test title>" --debug=cli` (or place a temporary `await page.pause()` at a specific `test.step()`).
-2. **Attach `@playwright/cli` to the Paused Browser at Point A:**
+   `app.fixture.ts` automatically executes `holdForExplore()` (non-blocking CDP handshake in `.exploratory/live-session.json` + automatic checkpoint capture) instead of blocking on Playwright Inspector.
+2. **Explore Point B ➔ Point C in Batched 1-Round-Trip Calls (Auto-Recording Live Draft Tape):**
    ```bash
-   npx playwright-cli -s=explore attach --cdp=http://localhost:9222
-   # Or, when launched with --debug=cli:
-   npx playwright-cli -s=explore attach
+   npx cortex explore batch '[["fill","@e2","user@example.com"],["fill","@e3","secret"],["click","@e5"]]' --step "Complete underwriting review"
+   npx cortex explore capture quoteId --from url --expr "quotes/([A-Z0-9-]+)"
+   npx cortex explore checkpoint save quote-ready
+   npx cortex explore actor underwriter --url "https://agent.example.com/referrals/{{quoteId}}" --auth .auth/underwriter.json
    ```
-3. **Explore Point B ➔ Point C Live:**
-   - Run `npx playwright-cli -s=explore snapshot --filename=.playwright-cli/page-point-a.yml` and continue traversing Point B and Point C (`click`, `fill`, `console error`, `snapshot`).
-   - When done, detach cleanly (`npx playwright-cli -s=explore detach`) without killing the test runner, or press Resume in the Playwright Inspector.
-4. **Emit or Extend the Session Tape:**
-   - **Linear E2E Expansion:** Append the newly discovered `B ➔ C` `semanticSteps`, `networkContracts`, and `expectedStates` to the existing parent `.exploratory/tapes/<scenario>.json` and recompile with `npx cortex compile <scenario> --apply --force-spec`.
-   - **Downstream Branching Scenario:** Emit a new `.exploratory/tapes/<downstream-scenario>.json` with `resumesFrom: { scenarioId, specFile, resumeStep }` so `/02-solid-architect` reuses Point A's existing Page/Component classes.
+   Every `act`/`batch` call resolves `@e<N>` refs to semantic locators, auto-redacts sensitive inputs into `dataBuilderRef` placeholders, appends new `networkContracts`, and returns a compact `-i` snapshot delta + errors in a single command.
+3. **1-Command Finalize, Release Browser & Compile to SOLID:**
+   ```bash
+   npx cortex explore finish --scenario <point-b-id> --compile
+   ```
+   This validates `.exploratory/tapes/<point-b-id>.json`, signals `.exploratory/live-session.release` so the held Point-A browser exits cleanly, and compiles reusable `FlowContract` (`src/flows/*.flow.ts`) / `StateSeederContract` / `restoreCheckpoint()` SOLID automation.
+   *(Fallback for manual Playwright Inspector debugging: `npm run test:explore -- tests/<point-a>.spec.ts` + `npx agent-browser --session explore --cdp 9222 snapshot -i`.)*
 
 ## 0c. Human-Driven Codegen Recording Mode (Fresh Start or Pause Anywhere)
 

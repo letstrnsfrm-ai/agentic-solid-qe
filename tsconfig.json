@@ -17,6 +17,7 @@
       "@contracts/*": ["src/contracts/*"],
       "@components/*": ["src/components/*"],
       "@pages/*": ["src/pages/*"],
+      "@flows/*": ["src/flows/*"],
       "@fixtures/*": ["src/fixtures/*"],
       "@data/*": ["src/data/*"],
       "@domains/*": ["src/domains/*"],

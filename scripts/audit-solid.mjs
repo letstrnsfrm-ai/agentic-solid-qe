@@ -350,6 +350,34 @@ for (const file of seederFiles) {
   }
 }
 
+// 3a-ter. Audit Reusable SOLID Flows across src/flows and src/domains/*/flows (<= 150 lines, zero expect(), FlowContract)
+const flowFiles = filterSquad
+  ? walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.flow.ts')
+  : [
+      ...walkFiles(path.join(ROOT, 'src/flows'), '.flow.ts'),
+      ...walkFiles(path.join(ROOT, 'src/domains'), '.flow.ts'),
+    ];
+for (const file of flowFiles) {
+  const content = fs.readFileSync(file, 'utf8');
+  const lines = content.split('\n').length;
+  if (lines > MAX_COMPONENT_LINES) {
+    violations.push(
+      `[SRP Line Cap] ${rel(file)} has ${lines} lines (max ${MAX_COMPONENT_LINES}). Compose smaller domain flows.`
+    );
+  }
+  const codeOnly = stripComments(content);
+  if (/\bexpect\s*\(/.test(codeOnly)) {
+    violations.push(
+      `[SRP Assertion Ban] ${rel(file)} contains an expect() call. Flows execute reusable UI journeys; assertions belong in tests/*.spec.ts.`
+    );
+  }
+  if (!/\bimplements\s+FlowContract\b/.test(codeOnly)) {
+    violations.push(
+      `[LSP Contract] ${rel(file)} must implement FlowContract from src/contracts/flow.contract.ts.`
+    );
+  }
+}
+
 // 3b. Verify Published Capabilities in Domain Shards match exported classes/interfaces in src/
 const allSrcTsFiles = walkFiles(path.join(ROOT, 'src'), '.ts');
 const exportedSymbols = new Set();

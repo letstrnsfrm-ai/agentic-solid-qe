@@ -137,6 +137,11 @@
           "type": "string",
           "pattern": "^\\.exploratory/checkpoints/[a-z0-9-]+\\.json$",
           "description": "Relative path to a saved checkpoint state file (.exploratory/checkpoints/<scenarioId>.json) used when handoffStrategy is 'checkpoint-state'."
+        },
+        "flowRef": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*(\\(\\))?)*$",
+          "description": "Reusable FlowContract class/method reference (e.g., CheckoutFlow.execute()) used when handoffStrategy is 'ui-prereq'."
         }
       }
     },

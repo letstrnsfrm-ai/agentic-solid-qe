@@ -9,6 +9,7 @@ playwright/.cache/
 .playwright/
 .auth/
 .exploratory/checkpoints/
+.exploratory/live-*
 .agents/legacy-backups/
 .env
 .env.*

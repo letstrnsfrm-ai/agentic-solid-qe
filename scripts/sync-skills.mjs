@@ -41,6 +41,7 @@ Usage:
   cortex upgrade               Resolve latest release tag and incrementally sync skills, contracts, and upgrade patches
   cortex report                Emit opt-in sanitized governance telemetry (schemaVersion: 1.0.0) to Cortex Cloud
   cortex compile [<tape>]      Compile Session Tape into SOLID Components, Pages, Builders, Fixtures & Spec (--apply)
+  cortex explore <cmd>         High-speed Point-A seed/spec/checkpoint attach, batched explore & live tape recorder
   cortex heal [--spec <path>]  Diagnose failing specs & heal drifted locators (--apply)
   cortex init [target-dir] [--url <url>] [--name "<App Name>"] [--reset] [--demo] [--dry-run]
   cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>] [--dry-run] [--force]
@@ -60,6 +61,7 @@ const subcommandDelegateMap = {
   upgrade: 'upgrade-framework.mjs',
   report: 'report-cloud.mjs',
   compile: 'compile-tape.mjs',
+  explore: 'explore-session.mjs',
   heal: 'heal-drift.mjs',
   migrate: 'migrate-skill.mjs',
   graph: 'build-domain-graph.mjs',
@@ -530,10 +532,12 @@ export interface ErrorBannerContract extends IdentifiableComponent {
 
   for (const sharedPath of [
     'src/contracts/api-client.contract.ts',
+    'src/contracts/flow.contract.ts',
     'src/contracts/state-seeder.contract.ts',
     'src/contracts/wizard-step.contract.ts',
     'src/shared/api/auth-token.bridge.ts',
     'src/shared/data/relative-date.helper.ts',
+    'src/shared/ui/explore-handshake.ts',
   ]) {
     copyRecursive(path.join(SOURCE_ROOT, sharedPath), path.join(TARGET_ROOT, sharedPath), {
       overwrite,
@@ -576,7 +580,8 @@ export class UserBuilder {
 
   writeFileSafe(
     path.join(TARGET_ROOT, 'src/fixtures/app.fixture.ts'),
-    `import { test as base, expect } from '@playwright/test';
+    `import { test as base, expect, type BrowserContext, type Page } from '@playwright/test';
+import { holdForExplore } from '@shared/ui/explore-handshake';
 
 /**
  * Segregated Fixture Contract (OCP & ISP).
@@ -586,17 +591,47 @@ export interface AppFixtures {
   explorePause: void;
 }
 
+const activeExploreContexts = new Map<string, { page: Page; context: BrowserContext; held: boolean }>();
+
 export const test = base.extend<AppFixtures>({
   explorePause: [
-    async ({ page }, use) => {
-      await use();
-      if (process.env.PW_PAUSE_FOR_EXPLORE === '1' && !process.env.CI) {
-        await page.pause();
+    async ({ page, context }, use, testInfo) => {
+      const state = { page, context, held: false };
+      activeExploreContexts.set(testInfo.testId, state);
+      try {
+        await use();
+        if (process.env.PW_PAUSE_FOR_EXPLORE === '1' && !process.env.CI && !state.held) {
+          state.held = true;
+          await holdForExplore(page, context);
+        }
+      } finally {
+        activeExploreContexts.delete(testInfo.testId);
       }
     },
     { auto: true },
   ],
 });
+
+if (!process.env.CI && process.env.PW_PAUSE_FOR_EXPLORE === '1' && process.env.PW_EXPLORE_UNTIL_STEP) {
+  const targetStep = process.env.PW_EXPLORE_UNTIL_STEP.toLowerCase();
+  const originalStep = test.step.bind(test);
+  test.step = (async <T>(title: string, body: () => Promise<T>, options?: { box?: boolean }): Promise<T> => {
+    const result = await originalStep(title, body, options);
+    if (title.toLowerCase().includes(targetStep)) {
+      let active: { page: Page; context: BrowserContext; held: boolean } | undefined;
+      try {
+        active = activeExploreContexts.get(test.info().testId);
+      } catch {
+        /* outside test context */
+      }
+      if (active && !active.held) {
+        active.held = true;
+        await holdForExplore(active.page, active.context, { pausedAtStep: title });
+      }
+    }
+    return result;
+  }) as typeof test.step;
+}
 
 export { expect };
 `,
@@ -661,6 +696,7 @@ function mergeConsumerPackageJson() {
     'test:headed': 'playwright test --headed',
     'test:ui': 'playwright test --ui',
     'test:explore': 'PW_PAUSE_FOR_EXPLORE=1 EXPLORE_CDP_PORT=9222 playwright test --project=chromium --headed --timeout=0',
+    explore: 'node scripts/explore-session.mjs',
     report: 'playwright show-report',
     typecheck: 'tsc --noEmit',
     'domain:graph': 'node scripts/build-domain-graph.mjs',
@@ -836,6 +872,7 @@ function mergeConsumerTsConfig() {
     '@contracts/*': ['src/contracts/*'],
     '@components/*': ['src/components/*'],
     '@pages/*': ['src/pages/*'],
+    '@flows/*': ['src/flows/*'],
     '@fixtures/*': ['src/fixtures/*'],
     '@data/*': ['src/data/*'],
     '@domains/*': ['src/domains/*'],
@@ -1042,6 +1079,7 @@ const coreEnginePaths = [
   'scripts/build-domain-graph.mjs',
   'scripts/build-system-map.mjs',
   'scripts/compile-tape.mjs',
+  'scripts/explore-session.mjs',
   'scripts/heal-drift.mjs',
   'scripts/migrate-skill.mjs',
   'scripts/legacy-test-migrator.mjs',
@@ -1211,11 +1249,13 @@ if (command === 'init') {
     'src/contracts/identifiable-component.contract.ts',
     'src/contracts/error-banner.contract.ts',
     'src/contracts/api-client.contract.ts',
+    'src/contracts/flow.contract.ts',
     'src/contracts/state-seeder.contract.ts',
     'src/contracts/catalog-list.contract.ts',
     'src/contracts/wizard-step.contract.ts',
     'src/shared/api/auth-token.bridge.ts',
     'src/shared/data/relative-date.helper.ts',
+    'src/shared/ui/explore-handshake.ts',
     'src/shared/ui/overlay-handler.ts',
   ]) {
     copyRecursive(path.join(SOURCE_ROOT, foundationalPath), path.join(TARGET_ROOT, foundationalPath), {

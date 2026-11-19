@@ -348,6 +348,7 @@ function toImportAlias(relPath) {
   if (withoutExt.startsWith('src/contracts/')) return `@contracts/${withoutExt.slice('src/contracts/'.length)}`;
   if (withoutExt.startsWith('src/components/')) return `@components/${withoutExt.slice('src/components/'.length)}`;
   if (withoutExt.startsWith('src/pages/')) return `@pages/${withoutExt.slice('src/pages/'.length)}`;
+  if (withoutExt.startsWith('src/flows/')) return `@flows/${withoutExt.slice('src/flows/'.length)}`;
   if (withoutExt.startsWith('src/fixtures/')) return `@fixtures/${withoutExt.slice('src/fixtures/'.length)}`;
   if (withoutExt.startsWith('src/data/')) return `@data/${withoutExt.slice('src/data/'.length)}`;
   if (withoutExt.startsWith('src/domains/')) return `@domains/${withoutExt.slice('src/domains/'.length)}`;
@@ -1184,6 +1185,75 @@ export class ${seederClass} implements StateSeederContract<void, Record<string, 
     }
   }
 
+  // 5c. Reusable SOLID Flow Layer (FlowContract<void, Record<string, string>>) for ui-prereq handoff
+  const flowImports = new Map(); // FlowClass -> { importAlias, fixtureProp }
+  if (tape.resumesFrom && typeof tape.resumesFrom === 'object') {
+    const rf = tape.resumesFrom;
+    const strategy =
+      rf.handoffStrategy ||
+      (rf.checkpointPath ? 'checkpoint-state' : rf.seedClientRef ? 'api-seed' : 'ui-prereq');
+    if (strategy === 'ui-prereq') {
+      const parsedFlow = rf.flowRef ? parseBuilderRef(rf.flowRef) : null;
+      const rawFlowClass =
+        parsedFlow?.builderClass ||
+        `${toPascalCase(rf.scenarioId || path.basename(rf.specFile || 'prerequisite', '.spec.ts'))}Flow`;
+      const flowClass = rawFlowClass.endsWith('Flow') ? rawFlowClass : `${rawFlowClass}Flow`;
+      if (isSafeClassName(flowClass)) {
+        const stem = stripClassSuffix(flowClass, ['Flow']) || 'Prerequisite';
+        const fixtureProp = `${toCamelCase(stem)}Flow`;
+        publishedCapabilities.add(flowClass);
+        const existingFlow = existingClasses.get(flowClass);
+        if (existingFlow) {
+          flowImports.set(flowClass, { importAlias: existingFlow.importAlias, fixtureProp });
+          plannedOperations.push({
+            layer: 'flow',
+            action: 'reuse-existing',
+            className: flowClass,
+            file: existingFlow.relPath,
+            addedMembers: [],
+          });
+        } else {
+          const kebabStem = toKebabCase(stem);
+          const targetRel = `${baseSrcDir}/flows/${kebabStem}.flow.ts`;
+          const importAlias = toImportAlias(targetRel);
+          flowImports.set(flowClass, { importAlias, fixtureProp });
+          const parentComment = sanitizeCodeComment(rf.specFile || rf.scenarioId || 'point-a');
+          const codeContent = `import type { Page } from '@playwright/test';
+import type { FlowContract } from '@contracts/flow.contract';
+
+/**
+ * Reusable Point-A UI Prerequisite Flow (SRP <= 150 lines, zero expect(), LSP: FlowContract).
+ * Extracted from prerequisite '${parentComment}' for scenario '${sanitizeCodeComment(scenarioId)}'.
+ */
+export class ${flowClass} implements FlowContract<void, Record<string, string>> {
+  constructor(private readonly page: Page) {}
+
+  async execute(): Promise<Record<string, string>> {
+    await this.page.goto(${JSON.stringify(tape.baseUrl || '/')});
+    return {};
+  }
+}
+`;
+          plannedOperations.push({
+            layer: 'flow',
+            action: 'create',
+            className: flowClass,
+            file: targetRel,
+            contract: 'FlowContract',
+            addedMembers: ['execute'],
+            codeContent,
+          });
+        }
+        allFixtureEntries.push({
+          propName: fixtureProp,
+          typeName: flowClass,
+          importAlias: flowImports.get(flowClass).importAlias,
+          kind: 'flow',
+        });
+      }
+    }
+  }
+
   if (fs.existsSync(fixtureFullPath)) {
     let fixtureContent = fs.readFileSync(fixtureFullPath, 'utf8');
     const missingEntries = allFixtureEntries.filter(
@@ -1344,6 +1414,13 @@ export { expect };
     };
 
     const capturedVarsDeclared = new Set();
+    if (tape.resumesFrom && Array.isArray(tape.capturedVariables)) {
+      for (const cv of tape.capturedVariables) {
+        if (cv?.name) {
+          capturedVarsDeclared.add(assertSafeJsIdentifier(cv.name, 'capturedVariables.name'));
+        }
+      }
+    }
     const businessGroups = [];
     const primaryPageFixture = pageFixtureDescriptors.keys().next().value;
 
@@ -1549,28 +1626,33 @@ export { expect };
       const parentLabel = sanitizeCodeComment(rf.scenarioId || rf.specFile || 'point-a');
       const annotationDesc = `${parentLabel} (${strategy}${rf.resumeStep ? `: ${sanitizeCodeComment(rf.resumeStep)}` : ''})`;
 
+      const buildHydrationLines = (sourceVar, indent = '      ') => {
+        const declared = [...capturedVarsDeclared];
+        if (declared.length === 0) return `${indent}void ${sourceVar};`;
+        return declared
+          .map(
+            (v) =>
+              `${indent}if (typeof ${sourceVar}[${JSON.stringify(v)}] === 'string') ${v} = ${sourceVar}[${JSON.stringify(v)}];`
+          )
+          .join('\n');
+      };
+
       if (strategy === 'checkpoint-state') {
-        extraNodeImports.push("import fs from 'node:fs';", "import path from 'node:path';");
+        extraNodeImports.push("import { restoreCheckpoint } from '@shared/ui/explore-handshake';");
         if (!injectedFixtures.includes('context')) {
           injectedFixtures.push('context');
+        }
+        if (!injectedFixtures.includes('page')) {
+          injectedFixtures.push('page');
         }
         const safeCheckpointRel =
           rf.checkpointPath ||
           `.exploratory/checkpoints/${String(rf.scenarioId || 'point-a').replace(/[^a-z0-9-]/g, '-')}.json`;
+        const hydrateBlock = buildHydrationLines('checkpointVars');
         resumesFromPreamble = `    test.info().annotations.push({ type: 'resumesFrom', description: ${JSON.stringify(annotationDesc)} });
     await test.step(${JSON.stringify(`Restore Point-A checkpoint state (${parentLabel})`)}, async () => {
-      const checkpointFile = path.resolve(process.cwd(), ${JSON.stringify(safeCheckpointRel)});
-      if (!fs.existsSync(checkpointFile)) {
-        throw new Error(${JSON.stringify(`Missing Point-A checkpoint state at ${safeCheckpointRel}. Run the parent spec or 'npm run test:explore' first.`)});
-      }
-      const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8')) as {
-        cookies?: Parameters<typeof context.addCookies>[0];
-        variables?: Record<string, string>;
-      };
-      if (Array.isArray(checkpoint.cookies) && checkpoint.cookies.length > 0) {
-        await context.addCookies(checkpoint.cookies);
-      }
-      void checkpoint.variables;
+      const checkpointVars = await restoreCheckpoint(context, page, ${JSON.stringify(safeCheckpointRel)});
+${hydrateBlock}
     });\n\n`;
       } else if (strategy === 'api-seed') {
         const parsedSeed = rf.seedClientRef ? parseBuilderRef(rf.seedClientRef) : null;
@@ -1582,7 +1664,18 @@ export { expect };
             if (!injectedFixtures.includes(seederDesc.fixtureProp)) {
               injectedFixtures.push(seederDesc.fixtureProp);
             }
-            seedCallStmt = `void ${seederDesc.fixtureProp}; // Isolated state seeded via ${parsedSeed.builderClass} fixture with auto-teardown`;
+            const declared = [...capturedVarsDeclared];
+            if (declared.length > 0) {
+              const hydrateLines = declared
+                .map(
+                  (v) =>
+                    `      if (typeof ${seederDesc.fixtureProp}[${JSON.stringify(v)}] === 'string') ${v} = String(${seederDesc.fixtureProp}[${JSON.stringify(v)}]);`
+                )
+                .join('\n');
+              seedCallStmt = `// Isolated state seeded via ${parsedSeed.builderClass} fixture with auto-teardown\n${hydrateLines}`;
+            } else {
+              seedCallStmt = `void ${seederDesc.fixtureProp}; // Isolated state seeded via ${parsedSeed.builderClass} fixture with auto-teardown`;
+            }
           } else if (apiDesc) {
             if (!injectedFixtures.includes(apiDesc.fixtureProp)) {
               injectedFixtures.push(apiDesc.fixtureProp);
@@ -1598,9 +1691,18 @@ export { expect };
       ${seedCallStmt}
     });\n\n`;
       } else {
+        const flowDesc = [...flowImports.values()][0] || null;
+        let flowCallBlock = `      // Prerequisite spec: ${sanitizeCodeComment(rf.specFile || rf.scenarioId || 'point-a')}`;
+        if (flowDesc) {
+          if (!injectedFixtures.includes(flowDesc.fixtureProp)) {
+            injectedFixtures.push(flowDesc.fixtureProp);
+          }
+          const hydrateBlock = buildHydrationLines('prereqVars');
+          flowCallBlock = `      const prereqVars = await ${flowDesc.fixtureProp}.execute();\n${hydrateBlock}`;
+        }
         resumesFromPreamble = `    test.info().annotations.push({ type: 'resumesFrom', description: ${JSON.stringify(annotationDesc)} });
     await test.step(${JSON.stringify(`Resume from Point-A prerequisite (${parentLabel})`)}, async () => {
-      // Prerequisite spec: ${sanitizeCodeComment(rf.specFile || rf.scenarioId || 'point-a')}
+${flowCallBlock}
     });\n\n`;
       }
     }

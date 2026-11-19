@@ -70,6 +70,7 @@ const CORE_ENGINE_SCRIPTS = new Set([
   'scripts/build-domain-graph.mjs',
   'scripts/build-system-map.mjs',
   'scripts/compile-tape.mjs',
+  'scripts/explore-session.mjs',
   'scripts/heal-drift.mjs',
   'scripts/migrate-skill.mjs',
   'scripts/legacy-test-migrator.mjs',

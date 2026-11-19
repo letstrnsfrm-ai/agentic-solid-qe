@@ -2979,3 +2979,237 @@ test('Enterprise Security Hardening: heal-drift locator allowlist, DEFECT redact
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('30. High-speed cortex explore orchestrator helpers: snapshot delta, locator resolution, secret redaction, multi-actor draft tape, and path confinement', async () => {
+  const {
+    validateSafeId,
+    resolveConfinedPath,
+    findFreePort,
+    parseSnapshotRefs,
+    computeSnapshotDelta,
+    resolveSemanticLocator,
+    redactInputToBuilderRef,
+    interpolateVariables,
+    parseNetworkContracts,
+    createDraftTape,
+    appendRecordedAction,
+    switchDraftActor,
+    finalizeDraftTape,
+  } = await import('./explore-session.mjs');
+
+  // Safe ID & path confinement
+  assert.equal(validateSafeId('quote-review-2', 'scenario'), 'quote-review-2');
+  assert.throws(() => validateSafeId('../evil', 'scenario'), /Invalid scenario/);
+  assert.throws(() => resolveConfinedPath(REPO_ROOT, '../../etc/passwd', 'tests/', '--from-spec'), /Unsafe --from-spec/);
+  assert.throws(() => resolveConfinedPath(REPO_ROOT, 'scripts/evil.mjs', 'tests/', '--from-spec'), /Must stay confined/);
+
+  // Free ephemeral port
+  const port = await findFreePort();
+  assert.ok(Number.isInteger(port) && port > 1024 && port < 65536);
+
+  // Snapshot parsing, delta & semantic locator resolution
+  const snap1 = '- textbox "Email" [ref=e1]\n- textbox "Password" [ref=e2]\n- button "Sign In" [ref=e3]';
+  const snap2 = '- textbox "Email" [ref=e1]\n- button "Approve Quote" [ref=e4]';
+  const refMap = parseSnapshotRefs(snap1);
+  assert.equal(refMap.size, 3);
+  assert.deepEqual(resolveSemanticLocator('@e3', refMap), {
+    strategy: 'getByRole',
+    role: 'button',
+    value: 'Sign In',
+  });
+  const delta = computeSnapshotDelta(snap1, snap2);
+  assert.equal(delta.addedCount, 1);
+  assert.equal(delta.removedCount, 2);
+  assert.match(delta.deltaLines[0], /Approve Quote/);
+
+  // Secret redaction & variable interpolation
+  const red = redactInputToBuilderRef(refMap.get('@e2'), 'SuperSecret123!', 'quote-approval');
+  assert.equal(red.redacted, true);
+  assert.equal(red.dataBuilderRef, 'QuoteApprovalDataBuilder.standard().password');
+  assert.equal(
+    interpolateVariables('https://agent.example.com/quotes/{{quoteId}}', { quoteId: 'Q-991' }),
+    'https://agent.example.com/quotes/Q-991'
+  );
+
+  // Network contract extraction (skips static assets)
+  const netContracts = parseNetworkContracts(
+    'GET https://app.example.com/static/app.js 200\nPOST https://api.example.com/api/v1/quotes 201\n',
+    []
+  );
+  assert.equal(netContracts.length, 1);
+  assert.deepEqual(netContracts[0], { method: 'POST', urlPattern: '/api/v1/quotes', expectedStatus: 201 });
+
+  // Multi-actor draft tape recording & finalization
+  const draft = createDraftTape({
+    scenarioId: 'quote-approval',
+    baseUrl: 'https://app.example.com',
+    actor: 'customer',
+    resumesFrom: { scenarioId: 'quote-create', specFile: 'tests/quote-create.spec.ts', handoffStrategy: 'ui-prereq' },
+  });
+  const rec = appendRecordedAction(draft, {
+    action: 'fill',
+    refOrSelector: '@e2',
+    value: 'SuperSecret123!',
+    refMap,
+    pageRoute: '/login',
+    businessStep: 'Authenticate customer',
+    actor: 'customer',
+  });
+  assert.equal(rec.redacted, true);
+  switchDraftActor(draft, { actorId: 'underwriter', portalBaseUrl: 'https://agent.example.com' });
+  const finalized = finalizeDraftTape(draft, 'quote-approval');
+  assert.equal(finalized.actors.length, 2);
+  assert.equal(finalized.semanticSteps.length, 1);
+  assert.equal(finalized.expectedStates.length, 1);
+  assert.ok(!JSON.stringify(finalized).includes('SuperSecret123!'), 'Draft tape must never leak raw secret');
+});
+
+test('31. Executable resumesFrom compilation (FlowContract + restoreCheckpoint + api-seed hydration) and Flow SOLID audit', () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-flow-resumes-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpRoot, '--url', 'https://app.example.com', '--name', 'FlowApp'], REPO_ROOT);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+    assert.ok(fs.existsSync(path.join(tmpRoot, 'src/contracts/flow.contract.ts')), 'init must seed flow.contract.ts');
+    assert.ok(fs.existsSync(path.join(tmpRoot, 'src/shared/ui/explore-handshake.ts')), 'init must seed explore-handshake.ts');
+    assert.ok(fs.existsSync(path.join(tmpRoot, 'scripts/explore-session.mjs')), 'init must sync explore-session.mjs');
+
+    const tsCfg = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'tsconfig.json'), 'utf8'));
+    assert.deepEqual(tsCfg.compilerOptions.paths['@flows/*'], ['src/flows/*']);
+
+    // 1. ui-prereq tape compiles reusable FlowContract class + fixture + spec invocation
+    const uiTapePath = path.join(tmpRoot, '.exploratory/tapes/policy-endorsement.json');
+    fs.mkdirSync(path.dirname(uiTapePath), { recursive: true });
+    fs.writeFileSync(
+      uiTapePath,
+      JSON.stringify(
+        {
+          schemaVersion: '1.0.0',
+          scenarioId: 'policy-endorsement',
+          title: 'Underwriter endorses bound policy',
+          charter: 'happy-path-baseline',
+          baseUrl: 'https://app.example.com',
+          recordedAt: '2026-11-19T00:00:00Z',
+          tags: ['@p0', '@smoke'],
+          persona: { role: 'underwriter', dataBuilderRef: 'EndorsementBuilder.standard()' },
+          preconditions: ['Policy bound in Point A'],
+          resumesFrom: {
+            scenarioId: 'quote-bind',
+            specFile: 'tests/quote-bind.spec.ts',
+            handoffStrategy: 'ui-prereq',
+            flowRef: 'QuoteBindFlow.execute()',
+          },
+          capturedVariables: [{ name: 'policyNumber', capturedAtStep: 1, source: 'textContent' }],
+          networkContracts: [],
+          semanticSteps: [
+            {
+              stepIndex: 1,
+              intent: 'Start endorsement workflow',
+              businessStep: 'Open endorsement form',
+              pageRoute: '/endorse',
+              componentCandidate: 'EndorseHeaderComponent',
+              action: 'click',
+              locatorContract: { strategy: 'getByRole', role: 'button', value: 'Start Endorsement' },
+            },
+          ],
+          expectedStates: [
+            {
+              description: 'Endorsement form header is visible',
+              businessStep: 'Verify endorsement form opened',
+              targetComponent: 'EndorseHeaderComponent',
+              targetProperty: 'startEndorsement',
+              assertionType: 'toBeVisible',
+              expectedValueRef: 'true',
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+
+    const compUi = runNode(path.join(tmpRoot, 'scripts/compile-tape.mjs'), ['policy-endorsement', '--apply'], tmpRoot);
+    assert.equal(compUi.status, 0, `compile ui-prereq failed: ${compUi.stderr}\n${compUi.stdout}`);
+
+    const flowFile = path.join(tmpRoot, 'src/flows/quote-bind.flow.ts');
+    assert.ok(fs.existsSync(flowFile), 'Expected compile-tape to scaffold src/flows/quote-bind.flow.ts');
+    const flowSrc = fs.readFileSync(flowFile, 'utf8');
+    assert.match(flowSrc, /implements FlowContract/);
+
+    const uiSpecSrc = fs.readFileSync(path.join(tmpRoot, 'tests/policy-endorsement.spec.ts'), 'utf8');
+    assert.match(uiSpecSrc, /await quoteBindFlow\.execute\(\)/);
+    assert.match(uiSpecSrc, /prereqVars\["policyNumber"\]/);
+
+    // 2. checkpoint-state tape compiles restoreCheckpoint(context, page, ...)
+    const ckTapePath = path.join(tmpRoot, '.exploratory/tapes/policy-renewal.json');
+    fs.writeFileSync(
+      ckTapePath,
+      JSON.stringify(
+        {
+          schemaVersion: '1.0.0',
+          scenarioId: 'policy-renewal',
+          title: 'Customer renews policy from checkpoint',
+          charter: 'happy-path-baseline',
+          baseUrl: 'https://app.example.com',
+          recordedAt: '2026-11-19T00:00:00Z',
+          tags: ['@p1', '@regression'],
+          persona: { role: 'customer', dataBuilderRef: 'RenewalBuilder.standard()' },
+          preconditions: ['Checkpoint captured'],
+          resumesFrom: {
+            scenarioId: 'quote-bind',
+            handoffStrategy: 'checkpoint-state',
+            checkpointPath: '.exploratory/checkpoints/quote-bind.json',
+          },
+          capturedVariables: [{ name: 'policyNumber', capturedAtStep: 1, source: 'textContent' }],
+          networkContracts: [],
+          semanticSteps: [
+            {
+              stepIndex: 1,
+              intent: 'Accept renewal terms',
+              businessStep: 'Accept renewal terms',
+              pageRoute: '/renew',
+              componentCandidate: 'RenewalFormComponent',
+              action: 'click',
+              locatorContract: { strategy: 'getByRole', role: 'button', value: 'Renew Now' },
+            },
+          ],
+          expectedStates: [
+            {
+              description: 'Renewal confirmation is visible',
+              businessStep: 'Verify renewal confirmation',
+              targetComponent: 'RenewalFormComponent',
+              targetProperty: 'renewNow',
+              assertionType: 'toBeVisible',
+              expectedValueRef: 'true',
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+
+    const compCk = runNode(path.join(tmpRoot, 'scripts/compile-tape.mjs'), ['policy-renewal', '--apply'], tmpRoot);
+    assert.equal(compCk.status, 0, `compile checkpoint-state failed: ${compCk.stderr}\n${compCk.stdout}`);
+    const ckSpecSrc = fs.readFileSync(path.join(tmpRoot, 'tests/policy-renewal.spec.ts'), 'utf8');
+    assert.match(ckSpecSrc, /restoreCheckpoint\(context, page, "\.exploratory\/checkpoints\/quote-bind\.json"\)/);
+    assert.match(ckSpecSrc, /checkpointVars\["policyNumber"\]/);
+
+    // 3. audit-solid passes on valid FlowContract and fails when expect() is added to a flow
+    const passAudit = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.equal(passAudit.status, 0, `audit-solid failed on valid Flow: ${passAudit.stderr}\n${passAudit.stdout}`);
+
+    fs.writeFileSync(
+      flowFile,
+      flowSrc.replace('return {};', 'expect(this.page).toBeDefined();\n    return {};'),
+      'utf8'
+    );
+    const failAudit = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.notEqual(failAudit.status, 0, 'audit-solid must reject expect() inside src/flows/*.flow.ts');
+    assert.match(failAudit.stderr, /\[SRP Assertion Ban\].*quote-bind\.flow\.ts/);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
