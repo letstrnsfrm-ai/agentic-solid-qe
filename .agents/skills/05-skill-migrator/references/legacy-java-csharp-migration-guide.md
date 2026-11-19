@@ -9,7 +9,7 @@
 When you run `init .` inside a Java (`pom.xml`, `build.gradle`) or C# (`*.sln`, `*.csproj`) repository:
 
 ```bash
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe init . --url https://your-app.com --name "Your App"
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.25.0 init . --url https://your-app.com --name "Your App"
 ```
 
 - **Zero Collision:** `init` auto-detects the Java/C# root and installs the Playwright suite side-by-side in `e2e-playwright/` (pass `--here` to override).

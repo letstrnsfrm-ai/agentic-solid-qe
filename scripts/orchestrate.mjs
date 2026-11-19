@@ -163,11 +163,19 @@ function runCoverageAnalyzer(rootDir, squad) {
   return JSON.parse(res.stdout);
 }
 
+export function assertSafeSquadName(rawSquad) {
+  const s = String(rawSquad ?? '').trim().toLowerCase();
+  if (!/^[a-z0-9-]+$/.test(s)) {
+    throw new Error(`Invalid --squad value '${rawSquad}'. Must match ^[a-z0-9-]+$.`);
+  }
+  return s;
+}
+
 /**
  * Compute the full Stage 0–4 Master Orchestration Blueprint for `rootDir`.
  */
 export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {}) {
-  const squad = options.squad || null;
+  const squad = options.squad ? assertSafeSquadName(options.squad) : null;
   const coverage = runCoverageAnalyzer(rootDir, squad);
 
   const legacyRulesAndPrompts = detectLegacySkillArtifacts(rootDir);
@@ -392,6 +400,15 @@ Usage:
     else if (args[i].startsWith('--squad=')) squad = args[i].slice('--squad='.length);
     else if (args[i] === '--json') jsonOut = true;
     else if (args[i] === '--run') runNext = true;
+  }
+
+  if (squad !== null) {
+    try {
+      squad = assertSafeSquadName(squad);
+    } catch (err) {
+      console.error(`❌ ${err.message}`);
+      process.exit(1);
+    }
   }
 
   const rootDir = process.cwd();

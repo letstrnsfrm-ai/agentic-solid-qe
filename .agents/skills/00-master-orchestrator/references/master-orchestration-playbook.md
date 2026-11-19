@@ -66,7 +66,7 @@ Never attempt to automate an entire application in a single unverified batch. Us
 ### Stage 0: Foundation, Auth & Legacy Onboarding
 - **Goal:** Establish a clean SOLID skeleton, migrate pre-existing team prompts/scripts, configure target `baseUrl`, capture persona `storageState`, and map top-level routes into Domain Shards.
 - **Actions:**
-  1. New repo: `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 init . --url <url> --name "<App>"` (or `npx cortex sync` for existing consumers).
+  1. New repo: `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.25.0 init . --url <url> --name "<App>"` (or `npx cortex sync` for existing consumers).
   2. Discover & migrate legacy prompts/scripts: `npm run migrate:skill -- --discover` ➔ `/05-skill-migrator`.
   3. Bootstrap auth & route shards: `/00-env-bootstrap`.
 - **Exit Criteria:** `.agents/domain/domain-memory.md` has a valid `Base URL`, `.auth/<persona>.json` is captured (if authenticated), and initial `.agents/domain/shards/*.md` files are indexed (`npm run domain:graph`, which also refreshes the interactive `reports/system-map.html` visualizer — or run `npm run map` / `npx cortex map` anytime).

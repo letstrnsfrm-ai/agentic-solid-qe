@@ -38,9 +38,9 @@ stages:
               versionSpec: '22.x'
           - script: npm ci --ignore-scripts
             displayName: 'Install dependencies'
-          - script: npx playwright install --with-deps chromium
+          - script: npx --no-install playwright install --with-deps chromium
             displayName: 'Install Playwright Chromium'
-          - script: npx playwright test --project=chromium --shard=$(System.JobPositionInPhase)/$(System.TotalJobsInPhase)
+          - script: npx --no-install playwright test --project=chromium --shard=$(System.JobPositionInPhase)/$(System.TotalJobsInPhase)
             displayName: 'Execute Playwright Shard'
           - task: PublishTestResults@2
             condition: succeededOrFailed()

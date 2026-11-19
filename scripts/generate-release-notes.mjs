@@ -401,12 +401,18 @@ function assertValidSha(sha, sourceLabel) {
   return sha;
 }
 
-function resolveSafeRepoOutputPath(targetPath, flagName) {
-  const resolved = path.resolve(ROOT, targetPath);
-  const relToRoot = path.relative(ROOT, resolved);
+export function resolveSafeRepoOutputPath(targetPath, flagName, rootDir = ROOT) {
+  const resolved = path.resolve(rootDir, targetPath);
+  const relToRoot = path.relative(rootDir, resolved);
   if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
-    console.error(`❌ Invalid ${flagName} path '${targetPath}'. Output path must reside within the repository root.`);
-    process.exit(1);
+    throw new Error(
+      `Invalid ${flagName} path '${targetPath}'. Output path must reside within the repository root.`
+    );
+  }
+  if (fs.existsSync(resolved) && fs.lstatSync(resolved).isSymbolicLink()) {
+    throw new Error(
+      `Security Error: Refusing to write ${flagName} to symbolic link '${targetPath}'.`
+    );
   }
   return resolved;
 }
@@ -560,4 +566,9 @@ function main() {
   }
 }
 
-main();
+const isMain =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+if (isMain) {
+  main();
+}

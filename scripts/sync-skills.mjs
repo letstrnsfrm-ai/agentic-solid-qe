@@ -3,8 +3,8 @@
  * CLI Installer, Onboarding Initializer & Upgrader for Agentic-SOLID-QE.
  *
  * Usage:
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync [target-dir]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.25.0 init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.25.0 sync [target-dir]
  *   npm run init:app -- --url https://your-app.com --name "Your App"
  */
 import crypto from 'node:crypto';
@@ -681,7 +681,7 @@ function mergeConsumerPackageJson() {
     '@playwright/cli': '0.1.22',
     '@playwright/test': '1.64.1',
     '@types/node': '22.20.5',
-    'agent-browser': '^0.43.0',
+    'agent-browser': '0.43.0',
     typescript: '5.9.3',
   };
 
@@ -734,7 +734,7 @@ function mergeConsumerPackageJson() {
       modified = true;
     }
     for (const [dep, ver] of Object.entries(requiredDevDeps)) {
-      if (!allDeps[dep]) {
+      if (!allDeps[dep] || (dep === 'agent-browser' && pkg.devDependencies[dep] === '^0.43.0')) {
         pkg.devDependencies[dep] = ver;
         modified = true;
       }
@@ -759,7 +759,7 @@ function mergeConsumerPackageJson() {
 }
 
 /**
- * Ensures consumer repos have supply-chain protections enabled in .npmrc (ignore-scripts=true, audit-level=high)
+ * Ensures consumer repos have supply-chain protections enabled in .npmrc (ignore-scripts=true, save-exact=true, audit-level=high)
  * without overwriting custom registry configurations.
  */
 function mergeConsumerNpmrc() {
@@ -768,6 +768,7 @@ function mergeConsumerNpmrc() {
   const existing = fs.existsSync(npmrcPath) ? fs.readFileSync(npmrcPath, 'utf8') : '';
   const requiredSettings = [
     { key: 'ignore-scripts', line: 'ignore-scripts=true' },
+    { key: 'save-exact', line: 'save-exact=true' },
     { key: 'audit-level', line: 'audit-level=high' },
   ];
   const missingLines = requiredSettings

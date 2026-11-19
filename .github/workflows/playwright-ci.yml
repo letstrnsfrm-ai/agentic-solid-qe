@@ -54,7 +54,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npx playwright install --with-deps chromium
+      - run: npx --no-install playwright install --with-deps chromium
       - name: Run Affected Smoke / P0 Suite
         env:
           BASE_URL: ${{ vars.BASE_URL }}
@@ -66,7 +66,7 @@ jobs:
             echo "❌ Security Error: Unsafe GITHUB_BASE_REF format."
             exit 1
           fi
-          npx playwright test --project=chromium --only-changed="origin/$GITHUB_BASE_REF" --grep "@smoke|@p0" --pass-with-no-tests
+          npx --no-install playwright test --project=chromium --only-changed="origin/$GITHUB_BASE_REF" --grep "@smoke|@p0" --pass-with-no-tests
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: failure()
         with:
@@ -93,7 +93,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npx playwright install --with-deps chromium
+      - run: npx --no-install playwright install --with-deps chromium
       - name: Validate Dispatch Inputs & Target Origin Policy
         env:
           INPUT_TARGET_URL: ${{ inputs.target_url }}
@@ -152,9 +152,9 @@ jobs:
           TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
         run: |
           if [ -n "$GREP_TAGS" ]; then
-            npx playwright test --project=chromium --grep "$GREP_TAGS" --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --pass-with-no-tests
+            npx --no-install playwright test --project=chromium --grep "$GREP_TAGS" --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --pass-with-no-tests
           else
-            npx playwright test --project=chromium --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --pass-with-no-tests
+            npx --no-install playwright test --project=chromium --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --pass-with-no-tests
           fi
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: always()
@@ -182,7 +182,7 @@ jobs:
           path: all-blob-reports
           pattern: blob-report-*
           merge-multiple: true
-      - run: npx playwright merge-reports --reporter=html ./all-blob-reports
+      - run: npx --no-install playwright merge-reports --reporter=html ./all-blob-reports
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: playwright-report-merged

@@ -2935,6 +2935,46 @@ test('Enterprise Security Hardening: heal-drift locator allowlist, DEFECT redact
     assert.equal(assertSafeLegacyScanRoot(tmpDir, tmpDir), path.resolve(tmpDir));
     assert.throws(() => assertSafeLegacyScanRoot('/etc', tmpDir), /Security Error/);
     assert.throws(() => assertSafeLegacyScanRoot('/', tmpDir), /Security Error/);
+
+    // 7. orchestrate.mjs --squad validation & generate-release-notes.mjs symlink rejection
+    const { assertSafeSquadName: assertSafeOrchestrateSquad } = await import('./orchestrate.mjs');
+    const { resolveSafeRepoOutputPath } = await import('./generate-release-notes.mjs');
+    assert.equal(assertSafeOrchestrateSquad('Claims-Portal'), 'claims-portal');
+    assert.throws(() => assertSafeOrchestrateSquad('claims; rm -rf /'), /Invalid --squad/);
+
+    const realOut = path.join(tmpDir, 'real-notes.md');
+    const symOut = path.join(tmpDir, 'sym-notes.md');
+    fs.writeFileSync(realOut, 'ok', 'utf8');
+    fs.symlinkSync(realOut, symOut);
+    assert.throws(
+      () => resolveSafeRepoOutputPath('sym-notes.md', '--output', tmpDir),
+      /Security Error: Refusing to write --output to symbolic link/
+    );
+    assert.throws(
+      () => resolveSafeRepoOutputPath('../outside-notes.md', '--output', tmpDir),
+      /Output path must reside within the repository root/
+    );
+
+    // 8. audit-solid.mjs [Enterprise Dependency Pinning Gate] rejects floating semver ranges
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'unpinned-test',
+          version: '0.1.0',
+          devDependencies: {
+            '@playwright/test': '1.64.1',
+            'agent-browser': '^0.43.0',
+          },
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+    const unpinnedAudit = runNode(path.join(REPO_ROOT, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.notEqual(unpinnedAudit.status, 0, 'audit-solid.mjs must fail when package.json has caret range');
+    assert.match(unpinnedAudit.stderr, /\[Enterprise Dependency Pinning Gate\].*agent-browser/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

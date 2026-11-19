@@ -349,7 +349,7 @@ Options:
     targetTag = (await fetchLatestReleaseTag(repoSlug)) || '';
     if (!targetTag) {
       console.error(
-        `❌ Could not resolve latest release tag from GitHub (offline or rate-limited). Pass '--to <tag>' explicitly or run 'npx --yes github:${repoSlug}#v0.9.1 sync'.`
+        `❌ Could not resolve latest release tag from GitHub (offline or rate-limited). Pass '--to <tag>' explicitly or run 'npx --yes github:${repoSlug}#v0.25.0 sync'.`
       );
       process.exit(1);
     }

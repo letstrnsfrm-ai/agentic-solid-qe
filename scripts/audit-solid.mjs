@@ -762,6 +762,29 @@ if (fs.existsSync(path.join(ROOT, '.git'))) {
   }
 }
 
+// 8. Audit package.json for exact dependency version pinning (no floating ^, ~, *, >=, or latest ranges)
+const pkgJsonPath = path.join(ROOT, 'package.json');
+if (fs.existsSync(pkgJsonPath)) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+    const EXACT_SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+    for (const section of ['dependencies', 'devDependencies', 'overrides']) {
+      const deps = pkg[section];
+      if (!deps || typeof deps !== 'object') continue;
+      for (const [depName, depVer] of Object.entries(deps)) {
+        if (typeof depVer !== 'string') continue;
+        if (!EXACT_SEMVER_REGEX.test(depVer.trim())) {
+          violations.push(
+            `[Enterprise Dependency Pinning Gate] package.json ${section}["${depName}"] uses non-pinned version "${depVer}". Pin exact semver versions (e.g., "1.2.3") and set save-exact=true in .npmrc.`
+          );
+        }
+      }
+    }
+  } catch {
+    /* ignore malformed package.json */
+  }
+}
+
 if (warnings.length > 0) {
   console.warn('\n⚠️  SOLID & Scale Hygiene Warnings:\n');
   for (const w of warnings) {

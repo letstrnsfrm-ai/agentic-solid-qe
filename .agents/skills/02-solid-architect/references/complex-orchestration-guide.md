@@ -227,7 +227,7 @@ Teams that already have `agentic-solid-qe` enabled in their repositories receive
 
 1. **Run the Non-Destructive Sync Command:**
    ```bash
-   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync
+   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.25.0 sync
    ```
    *(Or `npm run upgrade:skills` / `npm run sync:skills`)*
 2. **What `sync` Updates Automatically vs. Preserves:**
