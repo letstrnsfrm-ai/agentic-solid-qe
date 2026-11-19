@@ -238,7 +238,10 @@ export function createDraftTape({
   };
 }
 
-export function appendRecordedAction(draftTape, { action, refOrSelector, value, refMap, pageRoute, businessStep, actor }) {
+export function appendRecordedAction(
+  draftTape,
+  { action, refOrSelector, value, refMap, pageRoute, businessStep, actor, domainGraph }
+) {
   const allowedActions = new Set(['goto', 'fill', 'click', 'select', 'check', 'uncheck', 'press', 'hover', 'wait']);
   const normalizedAction = action === 'type' ? 'fill' : action;
   if (!allowedActions.has(normalizedAction)) return null;
@@ -259,18 +262,21 @@ export function appendRecordedAction(draftTape, { action, refOrSelector, value, 
   }
 
   const stepLabel = businessStep || `Complete ${pageRoute || 'current'} workflow interaction`;
+  const existingComp = resolveComponentFromDomainGraph(pageRoute || '/', domainGraph);
   const stepObj = {
     stepIndex,
     intent: `${normalizedAction} ${locatorContract.value || pageRoute || 'control'}`,
     businessStep: stepLabel,
     pageRoute: pageRoute || '/',
-    componentCandidate: `${String(pageRoute || 'main')
-      .replace(/^\/+|\/+$/g, '')
-      .split(/[^a-zA-Z0-9]+/)
-      .filter(Boolean)
-      .slice(-1)
-      .map((p) => p[0].toUpperCase() + p.slice(1))
-      .join('') || 'Main'}SectionComponent`,
+    componentCandidate:
+      existingComp ||
+      `${String(pageRoute || 'main')
+        .replace(/^\/+|\/+$/g, '')
+        .split(/[^a-zA-Z0-9]+/)
+        .filter(Boolean)
+        .slice(-1)
+        .map((p) => p[0].toUpperCase() + p.slice(1))
+        .join('') || 'Main'}SectionComponent`,
     action: normalizedAction,
     locatorContract,
     ...(dataBuilderRef ? { dataBuilderRef } : {}),
@@ -335,6 +341,241 @@ export function finalizeDraftTape(draftTape, scenarioId) {
   return finalized;
 }
 
+// ─── Phase 2: Speed, Token Compression, Domain Reuse & Seeder Promotion ─────
+
+export function resolveLocalBin(binName, rootDir = ROOT) {
+  const ext = process.platform === 'win32' ? '.cmd' : '';
+  const localPath = path.join(rootDir, 'node_modules', '.bin', `${binName}${ext}`);
+  if (fs.existsSync(localPath)) {
+    return { command: localPath, prefixArgs: [] };
+  }
+  return { command: 'npx', prefixArgs: ['--no-install', binName] };
+}
+
+export function pruneSnapshotLines(
+  lines = [],
+  { prevChromeLines = new Set(), scope = '', maxRepeatedRows = 2, maxLines = 30 } = {}
+) {
+  const rawArr = Array.isArray(lines)
+    ? lines.map((l) => String(l).trim()).filter(Boolean)
+    : String(lines || '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+  // 1. Optional landmark scope filter (e.g. --scope main | dialog | form)
+  let scoped = rawArr;
+  if (scope) {
+    const scopeRe = new RegExp(`\\b${scope.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    const idx = rawArr.findIndex((l) => scopeRe.test(l));
+    if (idx !== -1) {
+      scoped = rawArr.slice(idx);
+    }
+  }
+
+  // 2. Drop persistent boilerplate chrome lines seen across previous routes
+  const withoutChrome = prevChromeLines.size > 0 ? scoped.filter((l) => !prevChromeLines.has(l)) : scoped;
+
+  // 3. Collapse consecutive repeated sibling rows/items/options (e.g. 50-row tables)
+  const collapsed = [];
+  let prevRoleKey = '';
+  let repeatCount = 0;
+  let suppressedCount = 0;
+  const flushSuppressed = () => {
+    if (suppressedCount > 0) {
+      collapsed.push(`... (+${suppressedCount} similar ${prevRoleKey || 'item'} entries)`);
+      suppressedCount = 0;
+    }
+  };
+
+  for (const line of withoutChrome) {
+    const m = line.match(/^(?:-\s+|@e\d+\s+\[?)([a-zA-Z0-9_-]+)/);
+    const roleKey = m ? m[1].toLowerCase() : '';
+    const isRepeatable = ['listitem', 'row', 'option', 'gridcell', 'cell', 'link', 'treeitem'].includes(roleKey);
+    if (isRepeatable && roleKey === prevRoleKey) {
+      repeatCount++;
+      if (repeatCount > maxRepeatedRows) {
+        suppressedCount++;
+        continue;
+      }
+    } else {
+      flushSuppressed();
+      prevRoleKey = roleKey;
+      repeatCount = 1;
+    }
+    collapsed.push(line);
+  }
+  flushSuppressed();
+
+  const truncated = collapsed.length > maxLines;
+  const finalLines = truncated ? [...collapsed.slice(0, maxLines), `... (+${collapsed.length - maxLines} more)`] : collapsed;
+  return {
+    lines: finalLines,
+    originalCount: rawArr.length,
+    prunedCount: rawArr.length - finalLines.length,
+  };
+}
+
+export function formatCompactOutput(payload = {}) {
+  const parts = [];
+  if (payload.status) parts.push(`STATUS: ${payload.status}`);
+  if (payload.url) parts.push(`URL: ${payload.url}`);
+  if (payload.actor) parts.push(`ACTOR: ${payload.actor}`);
+  if (payload.cdpPort) parts.push(`CDP: ${payload.cdpPort}`);
+  if (typeof payload.recordedSteps === 'number') parts.push(`STEPS: +${payload.recordedSteps}`);
+  if (payload.redactedInputs) parts.push(`REDACTED: ${payload.redactedInputs}`);
+  if (payload.snapshotDelta) {
+    parts.push(`REFS: +${payload.snapshotDelta.addedCount}/${payload.snapshotDelta.totalInteractive}`);
+  } else if (typeof payload.interactiveRefs === 'number') {
+    parts.push(`REFS: ${payload.interactiveRefs}`);
+  }
+
+  const out = [parts.join(' | ')];
+  const refLines = payload.snapshotDelta?.deltaLines || payload.snapshot || [];
+  if (refLines.length > 0) {
+    const terseRefs = refLines.map((l) => {
+      const m = l.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?.*?\[ref=(e\d+)\]/);
+      if (m) return `@${m[3]}[${m[1]}${m[2] ? ` "${m[2]}"` : ''}]`;
+      return l;
+    });
+    out.push(terseRefs.join(' | '));
+  }
+  if (Array.isArray(payload.assertions) && payload.assertions.length > 0) {
+    out.push(
+      `ASSERT: ${payload.assertions.map((a) => `${a.assertionType}(${a.target})=${a.passed ? 'OK' : 'WARN'}`).join(', ')}`
+    );
+  }
+  if (Array.isArray(payload.newNetworkContracts) && payload.newNetworkContracts.length > 0) {
+    out.push(
+      `API: ${payload.newNetworkContracts.map((c) => `${c.method} ${c.urlPattern} (${c.expectedStatus})`).join(', ')}`
+    );
+  }
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    out.push(`ERR(${payload.errors.length}): ${payload.errors.slice(0, 3).join(' ; ')}`);
+  }
+  if (payload.tape) {
+    out.push(`TAPE: ${payload.tape}${payload.compiled ? ' [compiled]' : ''}${payload.verified ? ' [verified]' : ''}`);
+  }
+  if (payload.seederFile) {
+    out.push(`SEEDER: ${payload.seederFile}`);
+  }
+  if (payload.seederTip) {
+    out.push(`TIP: ${payload.seederTip}`);
+  }
+  return out.join('\n');
+}
+
+export function resolveComponentFromDomainGraph(pageRoute = '/', domainGraph = null) {
+  if (!domainGraph || !Array.isArray(domainGraph.shards)) return null;
+  const normRoute = String(pageRoute || '/').replace(/\/+$/, '') || '/';
+  for (const shard of domainGraph.shards) {
+    const routes = Array.isArray(shard.routes) ? shard.routes : [];
+    const matches = routes.some((r) => {
+      const nr = String(r).replace(/\/+$/, '') || '/';
+      return nr === normRoute || (nr !== '/' && normRoute.startsWith(nr));
+    });
+    if (matches && Array.isArray(shard.publishedCapabilities)) {
+      const comp = shard.publishedCapabilities.find((c) => /Component$/.test(c));
+      if (comp) return comp;
+    }
+  }
+  return null;
+}
+
+export function appendRecordedAssertion(
+  draftTape,
+  { refOrSelector, assertionType = 'toBeVisible', expectedValue = 'true', refMap, pageRoute, businessStep, actor, domainGraph }
+) {
+  const allowedAssertions = new Set(['toBeVisible', 'toContainText', 'toHaveText', 'toHaveValue', 'toHaveURL', 'toBeEnabled', 'toBeHidden']);
+  const safeAssertion = allowedAssertions.has(assertionType) ? assertionType : 'toBeVisible';
+  const loc = resolveSemanticLocator(refOrSelector, refMap);
+  const compName =
+    resolveComponentFromDomainGraph(pageRoute, domainGraph) ||
+    draftTape.semanticSteps[draftTape.semanticSteps.length - 1]?.componentCandidate ||
+    'MainSectionComponent';
+  const rawProp = String(loc.value || 'root')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map((p, idx) => (idx === 0 ? p : p[0].toUpperCase() + p.slice(1)))
+    .join('');
+  const targetProperty = rawProp || 'root';
+
+  const expectedObj = {
+    description: `Verify ${loc.value || targetProperty} satisfies ${safeAssertion}`,
+    businessStep: businessStep || `Verify ${pageRoute || 'workflow'} state`,
+    targetComponent: compName,
+    targetProperty,
+    assertionType: safeAssertion,
+    expectedValueRef: String(expectedValue ?? 'true'),
+    ...(actor ? { actor } : {}),
+  };
+  draftTape.expectedStates.push(expectedObj);
+  return expectedObj;
+}
+
+export function detectMutatingApiContracts(networkContracts = []) {
+  return (Array.isArray(networkContracts) ? networkContracts : []).filter((c) =>
+    ['POST', 'PUT', 'PATCH'].includes(String(c?.method || '').toUpperCase())
+  );
+}
+
+export function buildSeederCodeFromTape(tape, mutatingContracts = []) {
+  const scenarioId = validateSafeId(tape?.scenarioId || 'seeded-state', 'scenarioId');
+  const pascal = scenarioId
+    .split('-')
+    .filter(Boolean)
+    .map((p) => p[0].toUpperCase() + p.slice(1))
+    .join('');
+  const className = `${pascal}Seeder`;
+  const primary = mutatingContracts[0] || { method: 'POST', urlPattern: '/api/v1/seed', expectedStatus: 201 };
+  const method = String(primary.method || 'POST').toLowerCase();
+  const varNames = (Array.isArray(tape?.capturedVariables) ? tape.capturedVariables : [])
+    .map((v) => v?.name)
+    .filter((n) => typeof n === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(n));
+
+  const extractLines =
+    varNames.length > 0
+      ? varNames.map((v) => `      ${v}: String(body[${JSON.stringify(v)}] ?? body.id ?? crypto.randomUUID()),`).join('\n')
+      : '      id: String(body.id ?? crypto.randomUUID()),';
+
+  return {
+    className,
+    relPath: `src/seeders/${scenarioId}.seeder.ts`,
+    codeContent: `import crypto from 'node:crypto';
+import type { APIRequestContext } from '@playwright/test';
+import type { StateSeederContract } from '@contracts/state-seeder.contract';
+
+/**
+ * Auto-Promoted API State Seeder (SRP <= 150 lines, zero expect(), LSP: StateSeederContract).
+ * Promoted from mutating API contract observed during exploration of '${scenarioId}'.
+ */
+export class ${className} implements StateSeederContract<Record<string, unknown>, Record<string, string>> {
+  constructor(
+    private readonly request: APIRequestContext,
+    private readonly baseUrl: string
+  ) {}
+
+  async seed(payload: Record<string, unknown> = {}): Promise<Record<string, string>> {
+    const res = await this.request.${method}(\`\${this.baseUrl.replace(/\\/+$/, '')}${primary.urlPattern}\`, {
+      data: payload,
+    });
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    return {
+${extractLines}
+    };
+  }
+
+  async teardown(handle: Record<string, string>): Promise<void> {
+    void handle;
+  }
+}
+`,
+  };
+}
+
 // ─── Private CLI I/O & Agent-Browser Process Helpers ────────────────────────
 
 function writePrivateJson(filePath, data) {
@@ -353,12 +594,53 @@ function readJsonOrNull(filePath) {
 }
 
 function runAgentBrowser(session, args, { allowFail = false } = {}) {
-  const fullArgs = ['--no-install', 'agent-browser', '--session', session, ...args];
-  const res = spawnSync('npx', fullArgs, { cwd: ROOT, encoding: 'utf8' });
+  const { command, prefixArgs } = resolveLocalBin('agent-browser');
+  const fullArgs = [...prefixArgs, '--session', session, ...args];
+  const res = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8' });
   if (res.status !== 0 && !allowFail) {
     throw new Error(`agent-browser failed (${args.join(' ')}): ${(res.stderr || res.stdout || '').trim()}`);
   }
   return (res.stdout || '').trim();
+}
+
+async function collectSinglePassCdpTelemetry(cdpPort) {
+  if (!cdpPort) return null;
+  try {
+    const pw = await import('@playwright/test');
+    const browser = await pw.chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
+    try {
+      const ctx = browser.contexts()[0];
+      const page = ctx?.pages()[0];
+      if (!ctx || !page) return null;
+      const url = page.url();
+      const cookies = await ctx.cookies();
+      let storage = { localStorage: {}, sessionStorage: {} };
+      try {
+        storage = await page.evaluate(() => {
+          const read = (s) => {
+            const o = {};
+            for (let i = 0; i < s.length; i++) {
+              const k = s.key(i);
+              if (k !== null) o[k] = s.getItem(k) ?? '';
+            }
+            return o;
+          };
+          return { localStorage: read(window.localStorage), sessionStorage: read(window.sessionStorage) };
+        });
+      } catch {
+        /* cross-origin or blank */
+      }
+      return { url, cookies, ...storage };
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  } catch {
+    return null;
+  }
+}
+
+function emitOutput(payload, { json = false } = {}) {
+  console.log(json ? JSON.stringify(payload, null, 2) : formatCompactOutput(payload));
 }
 
 async function waitForLiveHandshake(timeoutMs = 60_000) {
@@ -387,25 +669,23 @@ function printHelp() {
   console.log(`Usage: cortex explore <subcommand> [options]
 
 Subcommands:
-  start       Reach Point A and attach agent-browser (headless by default):
+  start       Reach Point A and attach agent-browser (headless by default; compact DSL output, --json opt-in):
                 --from-spec <tests/foo.spec.ts> [--grep "<title>"] [--until-step "<step>"] [--headed]
                 --from-seed <src/...|scripts/...> --url <url> [--auth <.auth/p.json>]
-                --checkpoint <name>
-                --url <url> [--auth <.auth/p.json>]
-                [--scenario <id>] [--actor <id>] [--session <name>]
-  act         Execute a single action, auto-record into live draft tape, and return compact -i delta:
-                cortex explore act <click|fill|select|check|press|goto> [args...] [--step "<business step>"]
-  batch       Execute a JSON array of actions in 1 round-trip and return compact -i delta + errors:
-                cortex explore batch '[["fill","@e2","val"],["click","@e5"]]' [--step "<business step>"]
+                --checkpoint <name> | --url <url> [--scope main] [--scenario <id>] [--actor <id>] [--json]
+  act         Execute 1 action or inline assert, record to draft tape, return pruned -i delta:
+                cortex explore act <click|fill|select|check|press|goto|assert> [args...] [--step "<business>"] [--scope main] [--json]
+  batch       Execute JSON array of actions/assertions in 1 round-trip with pruned -i delta + errors:
+                cortex explore batch '[["fill","@e2","val"],["click","@e5"],["assert","@e9","toBeVisible"]]' [--step "<business>"] [--scope main] [--json]
   actor       Switch portal/actor mid-session carrying capturedVariables:
-                cortex explore actor <actorId> [--url <portal-url>] [--auth <.auth/p.json>]
+                cortex explore actor <actorId> [--url <portal-url>] [--auth <.auth/p.json>] [--json]
   capture     Capture a runtime variable (e.g. quoteId) for cross-portal reuse:
                 cortex explore capture <varName> --from <url|eval> --expr "<regex|js>"
   checkpoint  Save or list reusable <1s browser checkpoints (.exploratory/checkpoints/):
                 cortex explore checkpoint save <name> | list
-  finish      Finalize & validate Session Tape, release held Point-A browser, optionally compile:
-                cortex explore finish [--scenario <id>] [--compile] [--keep-browser]
-  status      Show active exploration session, actor, capturedVariables, and recorded step count
+  finish      Finalize & validate Session Tape, release browser, optionally compile, verify single spec, or promote API seeder:
+                cortex explore finish [--scenario <id>] [--compile] [--verify] [--emit-seeder] [--keep-browser] [--json]
+  status      Show active exploration session, actor, capturedVariables, and recorded step count [--json]
 `);
 }
 
@@ -422,7 +702,9 @@ async function cmdStart(args) {
   const checkpointName = getFlagValue(args, '--checkpoint');
   const rawUrl = getFlagValue(args, '--url', process.env.BASE_URL || '');
   const authPath = getFlagValue(args, '--auth');
+  const scope = getFlagValue(args, '--scope', '');
   const headed = args.includes('--headed');
+  const jsonOut = args.includes('--json');
 
   let cdpPort = null;
   let currentUrl = rawUrl;
@@ -437,11 +719,12 @@ async function cmdStart(args) {
     if (fs.existsSync(LIVE_SESSION_FILE)) fs.unlinkSync(LIVE_SESSION_FILE);
     if (fs.existsSync(RELEASE_SENTINEL_FILE)) fs.unlinkSync(RELEASE_SENTINEL_FILE);
 
-    const pwArgs = ['--no-install', 'playwright', 'test', safeSpec.relPath, '--project=chromium', '--timeout=0'];
+    const pwBin = resolveLocalBin('playwright');
+    const pwArgs = [...pwBin.prefixArgs, 'test', safeSpec.relPath, '--project=chromium', '--timeout=0'];
     if (headed) pwArgs.push('--headed');
     if (grepTitle) pwArgs.push('-g', grepTitle);
 
-    const child = spawn('npx', pwArgs, {
+    const child = spawn(pwBin.command, pwArgs, {
       cwd: ROOT,
       detached: true,
       stdio: 'ignore',
@@ -555,38 +838,67 @@ async function cmdStart(args) {
     startedAt: new Date().toISOString(),
   });
 
-  console.log(
-    JSON.stringify(
-      {
-        status: 'ready',
-        session,
-        scenarioId,
-        actor: actorId,
-        cdpPort,
-        url: liveUrl.replace(/^"|"$/g, ''),
-        checkpointPath,
-        variables,
-        interactiveRefs: parseSnapshotRefs(snap).size,
-        snapshot: snap.split('\n').slice(0, 40),
-      },
-      null,
-      2
-    )
+  const prunedStart = pruneSnapshotLines(snap, { scope });
+  emitOutput(
+    {
+      status: 'ready',
+      session,
+      scenarioId,
+      actor: actorId,
+      cdpPort,
+      url: liveUrl.replace(/^"|"$/g, ''),
+      checkpointPath,
+      variables,
+      interactiveRefs: parseSnapshotRefs(snap).size,
+      snapshot: prunedStart.lines,
+    },
+    { json: jsonOut }
   );
 }
 
-async function executeActions(actionTuples, { stepTitle }) {
+async function executeActions(actionTuples, { stepTitle, scope = '', json = false }) {
   const state = readJsonOrNull(LIVE_STATE_FILE);
   const draftTape = readJsonOrNull(LIVE_DRAFT_TAPE_FILE);
   if (!state || !draftTape) {
     throw new Error('No active explore session. Run `cortex explore start ...` first.');
   }
+  const domainGraph = readJsonOrNull(path.join(ROOT, '.agents', 'domain', 'domain-graph.json'));
   const session = state.activeSession || state.session;
-  let refMap = parseSnapshotRefs(state.lastSnapshot || '');
+  const refMap = parseSnapshotRefs(state.lastSnapshot || '');
   const recorded = [];
+  const recordedAssertions = [];
 
   for (const tuple of actionTuples) {
-    const [action, target, rawVal] = tuple;
+    const [action, target, rawVal, extraVal] = tuple;
+    let pageRoute = '/';
+    try {
+      pageRoute = new URL(state.url).pathname || '/';
+    } catch {
+      /* fallback */
+    }
+
+    if (action === 'assert') {
+      const assertionType = rawVal || 'toBeVisible';
+      const expectedValue = extraVal !== undefined ? interpolateVariables(String(extraVal), state.variables) : 'true';
+      const expectedObj = appendRecordedAssertion(draftTape, {
+        refOrSelector: target,
+        assertionType,
+        expectedValue,
+        refMap,
+        pageRoute,
+        businessStep: stepTitle,
+        actor: state.actor,
+        domainGraph,
+      });
+      const targetExists = refMap.has(target) || String(state.lastSnapshot || '').includes(String(target || ''));
+      recordedAssertions.push({
+        target: expectedObj.targetProperty,
+        assertionType: expectedObj.assertionType,
+        passed: targetExists,
+      });
+      continue;
+    }
+
     const interpolatedVal = rawVal !== undefined ? interpolateVariables(String(rawVal), state.variables) : undefined;
     const interpolatedTarget = target !== undefined ? interpolateVariables(String(target), state.variables) : undefined;
 
@@ -595,12 +907,6 @@ async function executeActions(actionTuples, { stepTitle }) {
     if (interpolatedVal !== undefined) cliArgs.push(interpolatedVal);
     runAgentBrowser(session, cliArgs);
 
-    let pageRoute = '/';
-    try {
-      pageRoute = new URL(state.url).pathname || '/';
-    } catch {
-      /* fallback */
-    }
     const rec = appendRecordedAction(draftTape, {
       action,
       refOrSelector: interpolatedTarget,
@@ -609,15 +915,16 @@ async function executeActions(actionTuples, { stepTitle }) {
       pageRoute,
       businessStep: stepTitle,
       actor: state.actor,
+      domainGraph,
     });
     if (rec) recorded.push(rec);
   }
 
   const nextSnap = runAgentBrowser(session, ['snapshot', '-i'], { allowFail: true });
-  const nextUrl = (runAgentBrowser(session, ['eval', 'location.href'], { allowFail: true }) || state.url).replace(
-    /^"|"$/g,
-    ''
-  );
+  const cdpTelemetry = await collectSinglePassCdpTelemetry(state.cdpPort);
+  const nextUrl =
+    cdpTelemetry?.url ||
+    (runAgentBrowser(session, ['eval', 'location.href'], { allowFail: true }) || state.url).replace(/^"|"$/g, '');
   const errorsOut = runAgentBrowser(session, ['errors'], { allowFail: true });
   const netOut = runAgentBrowser(session, ['network', 'requests'], { allowFail: true });
 
@@ -625,27 +932,38 @@ async function executeActions(actionTuples, { stepTitle }) {
   if (newContracts.length > 0) {
     draftTape.networkContracts.push(...newContracts);
   }
-  const delta = computeSnapshotDelta(state.lastSnapshot || '', nextSnap);
+  const rawDelta = computeSnapshotDelta(state.lastSnapshot || '', nextSnap);
+  const prevChrome = new Set(Array.isArray(state.chromeLines) ? state.chromeLines : []);
+  const pruned = pruneSnapshotLines(rawDelta.deltaLines, { prevChromeLines: prevChrome, scope });
+  const delta = { ...rawDelta, deltaLines: pruned.lines, prunedCount: pruned.prunedCount };
+
+  // Track persistent chrome lines that appear identically across route transitions
+  if (nextUrl !== state.url && state.lastSnapshot) {
+    const prevSet = new Set(String(state.lastSnapshot).split('\n').map((l) => l.trim()).filter(Boolean));
+    const persistent = String(nextSnap)
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && prevSet.has(l));
+    state.chromeLines = [...new Set([...prevChrome, ...persistent])].slice(0, 80);
+  }
 
   state.lastSnapshot = nextSnap;
   state.url = nextUrl;
   writePrivateJson(LIVE_STATE_FILE, state);
   writePrivateJson(LIVE_DRAFT_TAPE_FILE, draftTape);
 
-  console.log(
-    JSON.stringify(
-      {
-        url: nextUrl,
-        actor: state.actor,
-        recordedSteps: recorded.length,
-        redactedInputs: recorded.filter((r) => r.redacted).length,
-        snapshotDelta: delta,
-        newNetworkContracts: newContracts,
-        errors: errorsOut ? errorsOut.split('\n').filter(Boolean) : [],
-      },
-      null,
-      2
-    )
+  emitOutput(
+    {
+      url: nextUrl,
+      actor: state.actor,
+      recordedSteps: recorded.length,
+      redactedInputs: recorded.filter((r) => r.redacted).length,
+      assertions: recordedAssertions,
+      snapshotDelta: delta,
+      newNetworkContracts: newContracts,
+      errors: errorsOut ? errorsOut.split('\n').filter(Boolean) : [],
+    },
+    { json }
   );
 }
 
@@ -654,6 +972,7 @@ async function cmdActor(args) {
   const urlFlag = getFlagValue(args, '--url');
   const authPath = getFlagValue(args, '--auth');
   const role = getFlagValue(args, '--role', actorId);
+  const jsonOut = args.includes('--json');
   const state = readJsonOrNull(LIVE_STATE_FILE);
   const draftTape = readJsonOrNull(LIVE_DRAFT_TAPE_FILE);
   if (!state || !draftTape) {
@@ -681,12 +1000,9 @@ async function cmdActor(args) {
   writePrivateJson(LIVE_STATE_FILE, state);
   writePrivateJson(LIVE_DRAFT_TAPE_FILE, draftTape);
 
-  console.log(
-    JSON.stringify(
-      { status: 'switched-actor', actor: actorId, activeSession: actorSession, url: targetUrl, variables: state.variables },
-      null,
-      2
-    )
+  emitOutput(
+    { status: 'switched-actor', actor: actorId, activeSession: actorSession, url: targetUrl, variables: state.variables },
+    { json: jsonOut }
   );
 }
 
@@ -735,34 +1051,39 @@ async function cmdCheckpoint(args) {
     const state = readJsonOrNull(LIVE_STATE_FILE);
     if (!state) throw new Error('No active explore session.');
     const session = state.activeSession || state.session;
-    const rawDump = runAgentBrowser(
-      session,
-      [
-        'eval',
-        'JSON.stringify({ url: location.href, localStorage: Object.fromEntries(Object.entries(localStorage)), sessionStorage: Object.fromEntries(Object.entries(sessionStorage)) })',
-      ],
-      { allowFail: true }
-    );
-    let parsed = { url: state.url, localStorage: {}, sessionStorage: {} };
-    try {
-      const inner = JSON.parse(rawDump);
-      parsed = typeof inner === 'string' ? JSON.parse(inner) : inner;
-    } catch {
-      /* fallback */
+
+    let parsed = (await collectSinglePassCdpTelemetry(state.cdpPort)) || null;
+    if (!parsed) {
+      const rawDump = runAgentBrowser(
+        session,
+        [
+          'eval',
+          'JSON.stringify({ url: location.href, localStorage: Object.fromEntries(Object.entries(localStorage)), sessionStorage: Object.fromEntries(Object.entries(sessionStorage)) })',
+        ],
+        { allowFail: true }
+      );
+      parsed = { url: state.url, cookies: [], localStorage: {}, sessionStorage: {} };
+      try {
+        const inner = JSON.parse(rawDump);
+        const obj = typeof inner === 'string' ? JSON.parse(inner) : inner;
+        parsed = { ...parsed, ...obj };
+      } catch {
+        /* fallback */
+      }
     }
     const ckPath = path.join(CHECKPOINTS_DIR, `${name}.json`);
     writePrivateJson(ckPath, {
       schemaVersion: '1.0.0',
       capturedAt: new Date().toISOString(),
       url: parsed.url || state.url,
-      cookies: [],
+      cookies: Array.isArray(parsed.cookies) ? parsed.cookies : [],
       localStorage: parsed.localStorage || {},
       sessionStorage: parsed.sessionStorage || {},
       variables: state.variables || {},
       actor: state.actor,
       scenarioId: state.scenarioId,
     });
-    console.log(JSON.stringify({ saved: `.exploratory/checkpoints/${name}.json` }, null, 2));
+    console.log(JSON.stringify({ saved: `.exploratory/checkpoints/${name}.json`, cookies: (parsed.cookies || []).length }, null, 2));
     return;
   }
   throw new Error(`Unknown checkpoint subcommand '${sub}'. Use 'save <name>' or 'list'.`);
@@ -774,7 +1095,10 @@ async function cmdFinish(args) {
   if (!draftTape) throw new Error('No active draft tape found.');
   const scenarioId = validateSafeId(getFlagValue(args, '--scenario', draftTape.scenarioId), 'scenario');
   const shouldCompile = args.includes('--compile');
+  const shouldVerify = args.includes('--verify');
+  const emitSeeder = args.includes('--emit-seeder');
   const keepBrowser = args.includes('--keep-browser');
+  const jsonOut = args.includes('--json');
 
   const finalized = finalizeDraftTape(draftTape, scenarioId);
   fs.mkdirSync(TAPES_DIR, { recursive: true });
@@ -787,6 +1111,19 @@ async function cmdFinish(args) {
     if (state?.session) {
       runAgentBrowser(state.session, ['close'], { allowFail: true });
     }
+  }
+
+  let seederFile = null;
+  const mutatingContracts = detectMutatingApiContracts(finalized.networkContracts);
+  let seederTip = null;
+  if (emitSeeder && mutatingContracts.length > 0) {
+    const built = buildSeederCodeFromTape(finalized, mutatingContracts);
+    const safeOut = resolveConfinedPath(ROOT, built.relPath, 'src/seeders/', 'seeder output');
+    fs.mkdirSync(path.dirname(safeOut.absPath), { recursive: true });
+    fs.writeFileSync(safeOut.absPath, built.codeContent, 'utf8');
+    seederFile = safeOut.relPath;
+  } else if (mutatingContracts.length > 0) {
+    seederTip = `Detected ${mutatingContracts.length} mutating API call(s) (${mutatingContracts[0].method} ${mutatingContracts[0].urlPattern}); re-run with --emit-seeder to promote Point A to a <300ms StateSeederContract.`;
   }
 
   const valRes = spawnSync(process.execPath, [path.join(__dirname, 'validate-tapes.mjs')], {
@@ -808,16 +1145,41 @@ async function cmdFinish(args) {
     }
   }
 
-  console.log(
-    JSON.stringify(
-      {
-        status: 'finished',
-        tape: `.exploratory/tapes/${scenarioId}.json`,
-        compiled: shouldCompile,
-      },
-      null,
-      2
-    )
+  let verified = false;
+  if (shouldVerify) {
+    const tscBin = resolveLocalBin('tsc');
+    const tscRes = spawnSync(tscBin.command, [...tscBin.prefixArgs, '--noEmit'], { cwd: ROOT, stdio: 'inherit' });
+    if (tscRes.status !== 0) process.exit(tscRes.status ?? 1);
+
+    const auditRes = spawnSync(process.execPath, [path.join(__dirname, 'audit-solid.mjs')], {
+      cwd: ROOT,
+      stdio: 'inherit',
+    });
+    if (auditRes.status !== 0) process.exit(auditRes.status ?? 1);
+
+    const specRel = `tests/${scenarioId}.spec.ts`;
+    if (fs.existsSync(path.join(ROOT, specRel))) {
+      const pwBin = resolveLocalBin('playwright');
+      const pwRes = spawnSync(
+        pwBin.command,
+        [...pwBin.prefixArgs, 'test', specRel, '--project=chromium'],
+        { cwd: ROOT, stdio: 'inherit' }
+      );
+      if (pwRes.status !== 0) process.exit(pwRes.status ?? 1);
+    }
+    verified = true;
+  }
+
+  emitOutput(
+    {
+      status: 'finished',
+      tape: `.exploratory/tapes/${scenarioId}.json`,
+      compiled: shouldCompile,
+      verified,
+      ...(seederFile ? { seederFile } : {}),
+      ...(seederTip ? { seederTip } : {}),
+    },
+    { json: jsonOut }
   );
 }
 
@@ -831,21 +1193,26 @@ async function main() {
   if (cmd === 'start') return cmdStart(args.slice(1));
   if (cmd === 'act') {
     const stepTitle = getFlagValue(args, '--step');
+    const scope = getFlagValue(args, '--scope', '');
+    const json = args.includes('--json');
     const clean = [];
     for (let i = 1; i < args.length; i++) {
-      if (args[i] === '--step') {
+      if (args[i] === '--step' || args[i] === '--scope') {
         i++;
         continue;
       }
+      if (args[i] === '--json') continue;
       clean.push(args[i]);
     }
-    return executeActions([clean], { stepTitle });
+    return executeActions([clean], { stepTitle, scope, json });
   }
   if (cmd === 'batch') {
     const stepTitle = getFlagValue(args, '--step');
+    const scope = getFlagValue(args, '--scope', '');
+    const json = args.includes('--json');
     const tuples = JSON.parse(args[1] || '[]');
     if (!Array.isArray(tuples)) throw new Error('batch expects a JSON array of action tuples.');
-    return executeActions(tuples, { stepTitle });
+    return executeActions(tuples, { stepTitle, scope, json });
   }
   if (cmd === 'actor') return cmdActor(args.slice(1));
   if (cmd === 'capture') return cmdCapture(args.slice(1));
@@ -854,20 +1221,18 @@ async function main() {
   if (cmd === 'status') {
     const state = readJsonOrNull(LIVE_STATE_FILE);
     const draft = readJsonOrNull(LIVE_DRAFT_TAPE_FILE);
-    console.log(
-      JSON.stringify(
-        {
-          active: Boolean(state),
-          session: state?.session || null,
-          actor: state?.actor || null,
-          url: state?.url || null,
-          cdpPort: state?.cdpPort || null,
-          variables: state?.variables || {},
-          recordedSteps: draft?.semanticSteps?.length || 0,
-        },
-        null,
-        2
-      )
+    const json = args.includes('--json');
+    emitOutput(
+      {
+        status: state ? 'active' : 'idle',
+        session: state?.session || null,
+        actor: state?.actor || null,
+        url: state?.url || null,
+        cdpPort: state?.cdpPort || null,
+        variables: state?.variables || {},
+        recordedSteps: draft?.semanticSteps?.length || 0,
+      },
+      { json }
     );
     return;
   }

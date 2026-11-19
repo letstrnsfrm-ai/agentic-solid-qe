@@ -31,17 +31,17 @@ When Point A of a complex E2E journey requires heavy seeded data or is already a
    `app.fixture.ts` automatically executes `holdForExplore()` (non-blocking CDP handshake in `.exploratory/live-session.json` + automatic checkpoint capture) instead of blocking on Playwright Inspector.
 2. **Explore Point B ➔ Point C in Batched 1-Round-Trip Calls (Auto-Recording Live Draft Tape):**
    ```bash
-   npx cortex explore batch '[["fill","@e2","user@example.com"],["fill","@e3","secret"],["click","@e5"]]' --step "Complete underwriting review"
+   npx cortex explore batch '[["fill","@e2","user@example.com"],["fill","@e3","secret"],["click","@e5"],["assert","@e9","toContainText","Approved"]]' --step "Complete underwriting review" --scope main
    npx cortex explore capture quoteId --from url --expr "quotes/([A-Z0-9-]+)"
    npx cortex explore checkpoint save quote-ready
    npx cortex explore actor underwriter --url "https://agent.example.com/referrals/{{quoteId}}" --auth .auth/underwriter.json
    ```
-   Every `act`/`batch` call resolves `@e<N>` refs to semantic locators, auto-redacts sensitive inputs into `dataBuilderRef` placeholders, appends new `networkContracts`, and returns a compact `-i` snapshot delta + errors in a single command.
-3. **1-Command Finalize, Release Browser & Compile to SOLID:**
+   Every `act`/`batch` call invokes `node_modules/.bin/agent-browser` directly (zero `npx` overhead), reuses published component names from `domain-graph.json`, resolves `@e<N>` semantic locators, auto-redacts secrets, records inline `assert` tuples into `expectedStates[]`, prunes repeated table/list rows & persistent chrome, and outputs an ultra-compact DSL (`--json` opt-in).
+3. **1-Command Finalize, Release Browser, Compile, Targeted Verify & Seeder Promotion:**
    ```bash
-   npx cortex explore finish --scenario <point-b-id> --compile
+   npx cortex explore finish --scenario <point-b-id> --compile --verify --emit-seeder
    ```
-   This validates `.exploratory/tapes/<point-b-id>.json`, signals `.exploratory/live-session.release` so the held Point-A browser exits cleanly, and compiles reusable `FlowContract` (`src/flows/*.flow.ts`) / `StateSeederContract` / `restoreCheckpoint()` SOLID automation.
+   This validates `.exploratory/tapes/<point-b-id>.json`, releases `.exploratory/live-session.release`, compiles reusable `FlowContract` / `StateSeederContract` / `restoreCheckpoint()` SOLID automation, runs targeted single-spec verification (`tsc` + `audit:solid` + compiled `.spec.ts`), and promotes observed mutating API calls (`POST`/`PUT`/`PATCH`) into a `<300ms` `StateSeederContract` when `--emit-seeder` is passed.
    *(Fallback for manual Playwright Inspector debugging: `npm run test:explore -- tests/<point-a>.spec.ts` + `npx agent-browser --session explore --cdp 9222 snapshot -i`.)*
 
 ## 0c. Human-Driven Codegen Recording Mode (Fresh Start or Pause Anywhere)

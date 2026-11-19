@@ -3213,3 +3213,120 @@ test('31. Executable resumesFrom compilation (FlowContract + restoreCheckpoint +
   }
 });
 
+test('32. Phase 2 explore speed & token efficiency: direct bin, snapshot pruning, compact DSL, domain-graph reuse, inline assertions, and --emit-seeder promotion', async () => {
+  const {
+    resolveLocalBin,
+    pruneSnapshotLines,
+    formatCompactOutput,
+    resolveComponentFromDomainGraph,
+    appendRecordedAction,
+    appendRecordedAssertion,
+    detectMutatingApiContracts,
+    buildSeederCodeFromTape,
+    createDraftTape,
+    parseSnapshotRefs,
+  } = await import('./explore-session.mjs');
+
+  // 1. Direct local binary resolution avoids npx wrapper overhead when node_modules/.bin exists
+  const abBin = resolveLocalBin('agent-browser', REPO_ROOT);
+  assert.ok(
+    abBin.command.includes(path.join('node_modules', '.bin', 'agent-browser')) && abBin.prefixArgs.length === 0,
+    `Expected direct local binary resolution, got: ${JSON.stringify(abBin)}`
+  );
+
+  // 2. Structural snapshot pruning: scope + chrome removal + repeated row collapse
+  const bloatedSnap = [
+    '- link "Home" [ref=e1]',
+    '- link "Logout" [ref=e2]',
+    '- main "Quotes Table"',
+    '- row "Quote Q-1" [ref=e3]',
+    '- row "Quote Q-2" [ref=e4]',
+    '- row "Quote Q-3" [ref=e5]',
+    '- row "Quote Q-4" [ref=e6]',
+    '- row "Quote Q-5" [ref=e7]',
+    '- button "Approve" [ref=e8]',
+  ];
+  const pruned = pruneSnapshotLines(bloatedSnap, {
+    prevChromeLines: new Set(['- link "Home" [ref=e1]', '- link "Logout" [ref=e2]']),
+    scope: 'main',
+    maxRepeatedRows: 2,
+  });
+  assert.ok(pruned.lines.some((l) => l.includes('(+3 similar row entries)')), 'Expected repeated rows to collapse');
+  assert.ok(!pruned.lines.some((l) => l.includes('Logout')), 'Expected persistent chrome to be stripped');
+  assert.ok(pruned.lines.some((l) => l.includes('Approve')), 'Expected primary action button to remain');
+
+  // 3. Compact DSL output is dramatically shorter than pretty JSON
+  const payload = {
+    url: 'https://app.example.com/quotes/Q-1',
+    actor: 'underwriter',
+    recordedSteps: 2,
+    redactedInputs: 1,
+    snapshotDelta: { addedCount: 2, totalInteractive: 10, deltaLines: ['- button "Approve" [ref=e8]'] },
+    newNetworkContracts: [{ method: 'POST', urlPattern: '/api/v1/quotes', expectedStatus: 201 }],
+    assertions: [{ target: 'approve', assertionType: 'toBeVisible', passed: true }],
+    errors: [],
+  };
+  const compact = formatCompactOutput(payload);
+  assert.match(compact, /URL: https:\/\/app\.example\.com\/quotes\/Q-1/);
+  assert.match(compact, /@e8\[button "Approve"\]/);
+  assert.match(compact, /ASSERT: toBeVisible\(approve\)=OK/);
+  assert.match(compact, /API: POST \/api\/v1\/quotes \(201\)/);
+  assert.ok(compact.length < JSON.stringify(payload, null, 2).length * 0.65, 'Compact DSL must save >35% characters');
+
+  // 4. Domain-graph component reuse & inline assertions
+  const mockGraph = {
+    shards: [
+      {
+        id: 'quotes',
+        routes: ['/quotes'],
+        publishedCapabilities: ['QuoteHeaderComponent', 'QuotePage'],
+      },
+    ],
+  };
+  assert.equal(resolveComponentFromDomainGraph('/quotes/Q-1', mockGraph), 'QuoteHeaderComponent');
+
+  const draft = createDraftTape({ scenarioId: 'quote-fast', baseUrl: 'https://app.example.com', actor: 'underwriter' });
+  const refMap = parseSnapshotRefs('- button "Approve" [ref=e8]\n- heading "Approved" [ref=e9]');
+  const rec = appendRecordedAction(draft, {
+    action: 'click',
+    refOrSelector: '@e8',
+    refMap,
+    pageRoute: '/quotes/Q-1',
+    businessStep: 'Approve quote',
+    actor: 'underwriter',
+    domainGraph: mockGraph,
+  });
+  assert.equal(rec.stepObj.componentCandidate, 'QuoteHeaderComponent');
+
+  const exp = appendRecordedAssertion(draft, {
+    refOrSelector: '@e9',
+    assertionType: 'toContainText',
+    expectedValue: 'Approved',
+    refMap,
+    pageRoute: '/quotes/Q-1',
+    businessStep: 'Verify quote approved',
+    actor: 'underwriter',
+    domainGraph: mockGraph,
+  });
+  assert.equal(exp.targetComponent, 'QuoteHeaderComponent');
+  assert.equal(exp.assertionType, 'toContainText');
+  assert.equal(draft.expectedStates.length, 1);
+
+  // 5. Mutating API detection & StateSeederContract promotion passes audit-solid
+  const mutating = detectMutatingApiContracts([
+    { method: 'GET', urlPattern: '/api/v1/quotes', expectedStatus: 200 },
+    { method: 'POST', urlPattern: '/api/v1/quotes', expectedStatus: 201 },
+  ]);
+  assert.equal(mutating.length, 1);
+  draft.capturedVariables.push({ name: 'quoteId', capturedAtStep: 1, source: 'urlParam' });
+  const seeder = buildSeederCodeFromTape(draft, mutating);
+  assert.equal(seeder.className, 'QuoteFastSeeder');
+  assert.equal(seeder.relPath, 'src/seeders/quote-fast.seeder.ts');
+  assert.match(seeder.codeContent, /implements StateSeederContract/);
+  assert.match(seeder.codeContent, /this\.request\.post/);
+  assert.match(seeder.codeContent, /quoteId:/);
+  const seederCodeOnly = seeder.codeContent.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/\bexpect\s*\(/.test(seederCodeOnly), 'Promoted seeder must contain zero expect() calls');
+});
+
+
