@@ -74,7 +74,118 @@ function slugifyKebab(raw) {
 }
 
 function escapeSingleQuote(val) {
-  return String(val || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return String(val || '')
+    .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+const ALLOWED_LOCATOR_CALL_RE =
+  /^(?:(?:page|this\.root)\.)?(?:getBy(?:Role|TestId|Label|Placeholder|Text|AltText|Title)|locator)\([\s\S]+\)$/;
+
+export function assertSafePlaywrightLocatorExpr(rawExpr) {
+  const expr = String(rawExpr || '').trim();
+  if (
+    !expr ||
+    /[\r\n\u2028\u2029\u202A-\u202E\u2066-\u2069`]/.test(expr) ||
+    !ALLOWED_LOCATOR_CALL_RE.test(expr)
+  ) {
+    throw new Error(
+      `Security Error: Unsafe Playwright locator expression '${rawExpr}'. Must be a single-line semantic locator call (getByRole, getByTestId, getByLabel, getByPlaceholder, getByText, or locator).`
+    );
+  }
+
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let parenDepth = 0;
+  let braceDepth = 0;
+
+  for (let i = 0; i < expr.length; i++) {
+    const ch = expr[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (inSingle || inDouble) continue;
+
+    if (ch === ';') {
+      throw new Error(
+        `Security Error: Statement separator ';' is forbidden in locator expression '${rawExpr}'.`
+      );
+    }
+    if (ch === '(') parenDepth++;
+    else if (ch === ')') {
+      parenDepth--;
+      if (parenDepth < 0) {
+        throw new Error(`Security Error: Unbalanced parentheses in locator expression '${rawExpr}'.`);
+      }
+      if (parenDepth === 0 && i < expr.length - 1) {
+        const rest = expr.slice(i + 1);
+        if (!/^\.(?:first|last|nth|getBy(?:Role|TestId|Label|Placeholder|Text|AltText|Title)|locator|filter)\(/.test(rest)) {
+          throw new Error(
+            `Security Error: Trailing expression '${rest}' is not an allowed Playwright locator chain in '${rawExpr}'.`
+          );
+        }
+      }
+    } else if (ch === '{') braceDepth++;
+    else if (ch === '}') {
+      braceDepth--;
+      if (braceDepth < 0) {
+        throw new Error(`Security Error: Unbalanced braces in locator expression '${rawExpr}'.`);
+      }
+    }
+  }
+
+  if (inSingle || inDouble || parenDepth !== 0 || braceDepth !== 0) {
+    throw new Error(
+      `Security Error: Unterminated string literal or unbalanced delimiters in locator expression '${rawExpr}'.`
+    );
+  }
+
+  return expr.replace(/^(?:page|this\.root)\./, '');
+}
+
+export function sanitizeDefectErrorExcerpt(rawText) {
+  return String(rawText || '')
+    .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
+    .replace(
+      /\b(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+      '[REDACTED_JWT]'
+    )
+    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, '[REDACTED_GITHUB_TOKEN]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[REDACTED_GITHUB_PAT]')
+    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_API_KEY]')
+    .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]')
+    .replace(/\bAIza[0-9A-Za-z_-]{35}\b/g, '[REDACTED_GCP_KEY]')
+    .replace(/\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g, '[REDACTED_SLACK_TOKEN]')
+    .replace(/\bnpm_[A-Za-z0-9]{36}\b/g, '[REDACTED_NPM_TOKEN]')
+    .replace(/\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/g, '[REDACTED_SENDGRID_KEY]')
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]')
+    .replace(
+      /\b(https?:\/\/|postgres(?:ql)?:\/\/|mysql:\/\/|mongodb(?:\+srv)?:\/\/|redis(?:s)?:\/\/)[^/\s:@'"`]+:[^/\s@'"`]+@/gi,
+      '$1[REDACTED_CREDENTIALS]@'
+    )
+    .replace(
+      /\b(password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token)\s*([:=])\s*(['"`])([^'"`\n]{4,})\3/gi,
+      '$1$2$3[REDACTED]$3'
+    );
 }
 
 /**
@@ -376,6 +487,9 @@ function findLatestSnapshot(projectRoot, explicitSnapshot) {
  * Analyze a failing test / artifact and optionally apply safe healing or defect logging.
  */
 export function analyzeAndHealDrift(projectRoot, options = {}) {
+  if (options.to !== undefined && options.to !== null) {
+    assertSafePlaywrightLocatorExpr(options.to);
+  }
   const artifacts = parseErrorContextArtifacts(projectRoot);
   const activeArtifact = artifacts[0] || {};
   const errorText = options.error || activeArtifact.errorText || '';
@@ -449,6 +563,7 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
     if (!isWithinDir(defectFull, projectRoot)) {
       throw new Error(`Refusing to write defect outside project root: ${defectFull}`);
     }
+    const safeExcerpt = sanitizeDefectErrorExcerpt(errorText.slice(0, 1200));
     fs.mkdirSync(path.dirname(defectFull), { recursive: true });
     fs.writeFileSync(
       defectFull,
@@ -462,7 +577,7 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
         ``,
         `## Error Excerpt`,
         `\`\`\``,
-        errorText.slice(0, 1200),
+        safeExcerpt,
         `\`\`\``,
         ``,
         `## Guardrail Note`,
@@ -483,12 +598,13 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
     return result;
   }
 
+  const cleanExpr = assertSafePlaywrightLocatorExpr(replacementExpr);
+
   if (componentMatch) {
     if (!isWithinDir(componentMatch.filePath, projectRoot)) {
       throw new Error(`Refusing to patch component outside project root: ${componentMatch.filePath}`);
     }
     const compLines = fs.readFileSync(componentMatch.filePath, 'utf8').split('\n');
-    const cleanExpr = replacementExpr.replace(/^(?:page|this\.root)\./, '');
     compLines[componentMatch.lineIndex] = `    this.${componentMatch.propertyName} = ${componentMatch.prefix}${cleanExpr};`;
     fs.writeFileSync(componentMatch.filePath, compLines.join('\n'), 'utf8');
     result.appliedChanges.push(componentMatch.relPath);

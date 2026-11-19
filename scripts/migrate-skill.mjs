@@ -26,6 +26,7 @@ const legacyMigrator = fs.existsSync(legacyMigratorUrl)
   ? await import(legacyMigratorUrl.href)
   : {
       applyLegacyMigrationPlan: () => null,
+      assertSafeLegacyScanRoot: (p) => p,
       buildLegacyMigrationPlan: () => ({ found: false }),
       discoverLegacyTests: () => ({
         detected: false,
@@ -42,6 +43,7 @@ const legacyMigrator = fs.existsSync(legacyMigratorUrl)
     };
 const {
   applyLegacyMigrationPlan,
+  assertSafeLegacyScanRoot,
   buildLegacyMigrationPlan,
   discoverLegacyTests,
   loadMigrationManifest,
@@ -400,13 +402,20 @@ function runWorkspaceDiscovery() {
     : 0;
 
   const existingManifest = loadMigrationManifest(ROOT);
-  const resolvedLegacyRoot = legacyRootArg
+  const rawLegacyRoot = legacyRootArg
     ? path.resolve(ROOT, legacyRootArg)
     : existingManifest?.legacySourceRoot
       ? path.resolve(ROOT, existingManifest.legacySourceRoot)
       : ['e2e-playwright', 'qe-playwright'].includes(path.basename(scanRoot))
         ? path.dirname(scanRoot)
         : scanRoot;
+  let resolvedLegacyRoot;
+  try {
+    resolvedLegacyRoot = assertSafeLegacyScanRoot(rawLegacyRoot, ROOT);
+  } catch (err) {
+    console.error(`❌ ${err.message}`);
+    process.exit(1);
+  }
 
   const legacyDiscovery = discoverLegacyTests(resolvedLegacyRoot);
   if (legacyDiscovery.tests.length > 0 && !sourceArg) {
@@ -463,13 +472,20 @@ if (discoverMode) {
 
 if (legacyTargetArg) {
   const existingManifest = loadMigrationManifest(ROOT);
-  const resolvedLegacyRoot = legacyRootArg
+  const rawLegacyRoot = legacyRootArg
     ? path.resolve(ROOT, legacyRootArg)
     : existingManifest?.legacySourceRoot
       ? path.resolve(ROOT, existingManifest.legacySourceRoot)
       : ['e2e-playwright', 'qe-playwright'].includes(path.basename(ROOT))
         ? path.dirname(ROOT)
         : ROOT;
+  let resolvedLegacyRoot;
+  try {
+    resolvedLegacyRoot = assertSafeLegacyScanRoot(rawLegacyRoot, ROOT);
+  } catch (err) {
+    console.error(`❌ ${err.message}`);
+    process.exit(1);
+  }
 
   if (allSlicesFlag) {
     const waveResult = migrateMonolithAllSlices(resolvedLegacyRoot, ROOT, legacyTargetArg, {

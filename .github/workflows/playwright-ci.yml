@@ -58,9 +58,15 @@ jobs:
       - name: Run Affected Smoke / P0 Suite
         env:
           BASE_URL: ${{ vars.BASE_URL }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
           TEST_USERNAME: ${{ secrets.TEST_USERNAME }}
           TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
-        run: npx playwright test --project=chromium --only-changed="origin/${{ github.base_ref }}" --grep "@smoke|@p0" --pass-with-no-tests
+        run: |
+          if [[ ! "$GITHUB_BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "❌ Security Error: Unsafe GITHUB_BASE_REF format."
+            exit 1
+          fi
+          npx playwright test --project=chromium --only-changed="origin/$GITHUB_BASE_REF" --grep "@smoke|@p0" --pass-with-no-tests
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: failure()
         with:

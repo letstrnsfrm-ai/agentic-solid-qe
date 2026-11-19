@@ -735,7 +735,12 @@ export class ${clientClass} implements ApiClientContract {
     payload?: TPayload,
     extraHeaders?: Record<string, string>
   ): Promise<ApiResponseEnvelope<TResponse>> {
-    const url = endpoint.startsWith('http') ? endpoint : \`\${this.baseUrl}\${endpoint}\`;
+    const baseOrigin = new URL(this.baseUrl).origin;
+    const resolvedUrl = new URL(endpoint, this.baseUrl);
+    if (resolvedUrl.origin !== baseOrigin) {
+      throw new Error(\`Security Error: Cross-origin API client request to '\${resolvedUrl.origin}' is blocked (expected '\${baseOrigin}').\`);
+    }
+    const url = resolvedUrl.toString();
     const baseHeaders = this.storageStatePath
       ? AuthTokenBridge.extractAuthHeaders(this.storageStatePath, { targetOrigin: url })
       : {};

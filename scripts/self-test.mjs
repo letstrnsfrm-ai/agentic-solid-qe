@@ -2642,17 +2642,16 @@ public class PurchaseFlowTests {
     const auditRes = runNode(path.join(pwDir, 'scripts/audit-solid.mjs'), [], pwDir);
     assert.equal(auditRes.status, 0, `audit-solid failed: ${auditRes.stderr}\n${auditRes.stdout}`);
 
-    // Link root node_modules so tsc --noEmit can typecheck the generated Playwright TypeScript
-    const pwNodeModules = path.join(pwDir, 'node_modules');
-    if (!fs.existsSync(pwNodeModules)) {
-      fs.symlinkSync(path.join(REPO_ROOT, 'node_modules'), pwNodeModules, 'dir');
+    // Link root node_modules if present so tsc --noEmit can typecheck the generated Playwright TypeScript
+    const tscBin = path.join(REPO_ROOT, 'node_modules/.bin/tsc');
+    if (fs.existsSync(tscBin)) {
+      const pwNodeModules = path.join(pwDir, 'node_modules');
+      if (!fs.existsSync(pwNodeModules)) {
+        fs.symlinkSync(path.join(REPO_ROOT, 'node_modules'), pwNodeModules, 'dir');
+      }
+      const tscRes = spawnSync(tscBin, ['--noEmit'], { cwd: pwDir, encoding: 'utf8' });
+      assert.equal(tscRes.status, 0, `tsc --noEmit failed on compiled slices:\n${tscRes.stdout}\n${tscRes.stderr}`);
     }
-    const tscRes = spawnSync(
-      path.join(REPO_ROOT, 'node_modules/.bin/tsc'),
-      ['--noEmit'],
-      { cwd: pwDir, encoding: 'utf8' }
-    );
-    assert.equal(tscRes.status, 0, `tsc --noEmit failed on compiled slices:\n${tscRes.stdout}\n${tscRes.stderr}`);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -2844,6 +2843,99 @@ test('28. StateSeederContract: init seeds contract, compile-tape scaffolds seede
   }
 });
 
+test('Enterprise Security Hardening: heal-drift locator allowlist, DEFECT redaction, export-auth-state confinement, offline policy, and legacyRoot bounds', async () => {
+  const { assertSafePlaywrightLocatorExpr, sanitizeDefectErrorExcerpt, analyzeAndHealDrift } =
+    await import('./heal-drift.mjs');
+  const { assertSafeSessionName, assertSafeAuthOutputPath } =
+    await import('./export-auth-state.mjs');
+  const { isEnterpriseOfflineMode, resolveUpgradeRepoSlug, assertSafeSquadName } =
+    await import('./upgrade-framework.mjs');
+  const { assertSafeCloudUrl } = await import('./report-cloud.mjs');
+  const { assertSafeLegacyScanRoot } = await import('./legacy-test-migrator.mjs');
 
+  // 1. heal-drift.mjs locator allowlist & code-injection rejection
+  assert.equal(
+    assertSafePlaywrightLocatorExpr("this.root.getByRole('button', { name: 'Sign In', exact: true })"),
+    "getByRole('button', { name: 'Sign In', exact: true })"
+  );
+  assert.throws(
+    () => assertSafePlaywrightLocatorExpr("getByTestId('x'); process.exit(1)"),
+    /Security Error/
+  );
+  assert.throws(
+    () => assertSafePlaywrightLocatorExpr("eval('alert(1)')"),
+    /Security Error/
+  );
+  assert.throws(
+    () => assertSafePlaywrightLocatorExpr("getByText(`injected ${process.env.SECRET}`)"),
+    /Security Error/
+  );
 
+  // 2. heal-drift.mjs DEFECT-*.md secret & BiDi redaction
+  const fakeJwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlMTIzNDU2';
+  const redacted = sanitizeDefectErrorExcerpt(
+    `HTTP 500 error\u202E with Authorization: Bearer ${fakeJwt} and password="SuperSecretPassword123!"`
+  );
+  assert.ok(!redacted.includes(fakeJwt), 'JWT must be redacted from defect excerpt');
+  assert.ok(!redacted.includes('SuperSecretPassword123!'), 'Password must be redacted from defect excerpt');
+  assert.ok(!redacted.includes('\u202E'), 'BiDi control char must be stripped from defect excerpt');
+  assert.ok(redacted.includes('[REDACTED_JWT]'), 'Redacted placeholder must appear');
 
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-enterprise-sec-'));
+  try {
+    const regRes = analyzeAndHealDrift(tmpDir, {
+      error: `HTTP 500 Internal Server Error: Bearer ${fakeJwt}`,
+      spec: 'tests/checkout.spec.ts',
+      httpStatuses: [500],
+      apply: true,
+    });
+    assert.equal(regRes.status, 'defect-logged');
+    const defectContent = fs.readFileSync(path.join(tmpDir, regRes.defectFile), 'utf8');
+    assert.ok(!defectContent.includes(fakeJwt), 'Written DEFECT-*.md must not contain raw JWT');
+
+    // 3. export-auth-state.mjs flag-injection & .auth/*.json confinement
+    assert.equal(assertSafeSessionName('auth-admin_1'), 'auth-admin_1');
+    assert.throws(() => assertSafeSessionName('--cdp=9222'), /Security Error/);
+    assert.throws(() => assertSafeSessionName('auth; rm -rf /'), /Security Error/);
+
+    const validAuth = assertSafeAuthOutputPath('.auth/standard.json', tmpDir);
+    assert.ok(validAuth.resolvedOut.endsWith(path.join('.auth', 'standard.json')));
+    assert.throws(() => assertSafeAuthOutputPath('../outside.json', tmpDir), /Security Error/);
+    assert.throws(() => assertSafeAuthOutputPath('package.json', tmpDir), /Security Error/);
+
+    // 4. upgrade-framework.mjs offline policy, repo slug & squad validation
+    assert.equal(isEnterpriseOfflineMode({ CORTEX_OFFLINE: '1' }), true);
+    assert.equal(isEnterpriseOfflineMode({ CORTEX_NO_NETWORK: 'true' }), true);
+    assert.equal(isEnterpriseOfflineMode({}), false);
+    assert.equal(resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'my-org/internal-qe' }), 'my-org/internal-qe');
+    assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: '../evil/repo' }), /Security Error/);
+    assert.equal(assertSafeSquadName('motor-b2c'), 'motor-b2c');
+    assert.throws(() => assertSafeSquadName('motor & calc.exe'), /Security Error/);
+
+    // 5. report-cloud.mjs offline policy & CORTEX_ALLOWED_CLOUD_HOSTS allowlist
+    assert.throws(
+      () => assertSafeCloudUrl('https://cloud.example.com/api/v1/reports', { CORTEX_OFFLINE: '1' }),
+      /Security Policy/
+    );
+    assert.throws(
+      () =>
+        assertSafeCloudUrl('https://untrusted.example.com/api/v1/reports', {
+          CORTEX_ALLOWED_CLOUD_HOSTS: 'cortex.internal.corp, telemetry.internal.corp',
+        }),
+      /CORTEX_ALLOWED_CLOUD_HOSTS/
+    );
+    assert.equal(
+      assertSafeCloudUrl('https://cortex.internal.corp/api/v1/reports', {
+        CORTEX_ALLOWED_CLOUD_HOSTS: 'cortex.internal.corp, telemetry.internal.corp',
+      }),
+      'https://cortex.internal.corp/api/v1/reports'
+    );
+
+    // 6. legacy-test-migrator.mjs legacyRoot boundary enforcement
+    assert.equal(assertSafeLegacyScanRoot(tmpDir, tmpDir), path.resolve(tmpDir));
+    assert.throws(() => assertSafeLegacyScanRoot('/etc', tmpDir), /Security Error/);
+    assert.throws(() => assertSafeLegacyScanRoot('/', tmpDir), /Security Error/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

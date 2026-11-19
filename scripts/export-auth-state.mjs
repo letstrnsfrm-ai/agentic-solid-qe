@@ -23,8 +23,44 @@ function parseArgs(argv) {
   return args;
 }
 
+const SAFE_SESSION_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const SAFE_AUTH_OUT_RE = /^\.auth\/[a-zA-Z0-9_-]+\.json$/;
+
+export function assertSafeSessionName(session) {
+  const s = String(session || '').trim();
+  if (!SAFE_SESSION_NAME_RE.test(s)) {
+    throw new Error(
+      `Security Error: Invalid --session name '${session}'. Must match /^[a-zA-Z0-9_-]{1,64}$/ (no flags or shell characters).`
+    );
+  }
+  return s;
+}
+
+export function assertSafeAuthOutputPath(outPath, root = process.cwd()) {
+  const normalized = String(outPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!SAFE_AUTH_OUT_RE.test(normalized)) {
+    throw new Error(
+      `Security Error: Output path '${outPath}' must match '.auth/<persona>.json' inside the repository.`
+    );
+  }
+  const authDir = path.resolve(root, '.auth');
+  const resolvedOut = path.resolve(root, normalized);
+  const relToAuth = path.relative(authDir, resolvedOut);
+  if (relToAuth.startsWith('..') || path.isAbsolute(relToAuth)) {
+    throw new Error(`Security Error: Output path '${outPath}' resolves outside '.auth/'.`);
+  }
+  if (fs.existsSync(authDir) && fs.lstatSync(authDir).isSymbolicLink()) {
+    throw new Error(`Security Error: Refusing to write to symbolic link directory '.auth'.`);
+  }
+  if (fs.existsSync(resolvedOut) && fs.lstatSync(resolvedOut).isSymbolicLink()) {
+    throw new Error(`Security Error: Refusing to overwrite symbolic link '${outPath}'.`);
+  }
+  return { authDir, resolvedOut };
+}
+
 function runAgentBrowser(session, cmdArgs) {
-  const res = spawnSync('npx', ['--no-install', 'agent-browser', '--session', session, ...cmdArgs], {
+  const safeSession = assertSafeSessionName(session);
+  const res = spawnSync('npx', ['--no-install', 'agent-browser', '--session', safeSession, ...cmdArgs], {
     encoding: 'utf8',
     timeout: 15000,
   });
@@ -45,25 +81,32 @@ export function buildStorageState({ cookies = [], origin = '', localStorageEntri
 function main() {
   const { session, out } = parseArgs(process.argv.slice(2));
   const root = process.cwd();
-  const resolvedOut = path.resolve(root, out);
-  if (!resolvedOut.startsWith(root + path.sep)) {
-    throw new Error(`Security Error: Output path '${out}' must stay inside the repository root.`);
-  }
+  const safeSession = assertSafeSessionName(session);
+  const { authDir, resolvedOut } = assertSafeAuthOutputPath(out, root);
 
-  const cookiesRaw = runAgentBrowser(session, ['cookies', 'get', '--json']);
+  const cookiesRaw = runAgentBrowser(safeSession, ['cookies', 'get', '--json']);
   const parsedCookies = cookiesRaw ? JSON.parse(cookiesRaw) : [];
   const cookies = Array.isArray(parsedCookies) ? parsedCookies : parsedCookies.cookies || [];
 
-  const origin = runAgentBrowser(session, ['eval', '() => location.origin']).replace(/^"|"$/g, '');
-  const lsRaw = runAgentBrowser(session, [
+  const origin = runAgentBrowser(safeSession, ['eval', '() => location.origin']).replace(/^"|"$/g, '');
+  const lsRaw = runAgentBrowser(safeSession, [
     'eval',
     '() => Object.entries(localStorage).map(([name, value]) => ({ name, value }))',
   ]);
   const localStorageEntries = lsRaw ? JSON.parse(lsRaw) : [];
 
   const state = buildStorageState({ cookies, origin, localStorageEntries });
-  fs.mkdirSync(path.dirname(resolvedOut), { recursive: true });
-  fs.writeFileSync(resolvedOut, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  fs.mkdirSync(authDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(resolvedOut, JSON.stringify(state, null, 2) + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  try {
+    fs.chmodSync(authDir, 0o700);
+    fs.chmodSync(resolvedOut, 0o600);
+  } catch {
+    /* ignore chmod no-op on non-POSIX platforms */
+  }
   console.log(`Exported Playwright storageState (${cookies.length} cookies, ${localStorageEntries.length} localStorage keys) -> ${out}`);
 }
 

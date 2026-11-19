@@ -32,7 +32,17 @@ const FORBIDDEN_HOSTS = new Set([
   'instance-data',
 ]);
 
-function assertSafeCloudUrl(rawUrl) {
+export function assertSafeCloudUrl(rawUrl, env = process.env) {
+  if (
+    env.CORTEX_OFFLINE === '1' ||
+    env.CORTEX_OFFLINE === 'true' ||
+    env.CORTEX_NO_NETWORK === '1' ||
+    env.CORTEX_NO_NETWORK === 'true'
+  ) {
+    throw new Error(
+      'Security Policy: Outbound Cortex Cloud telemetry is disabled when CORTEX_OFFLINE=1 or CORTEX_NO_NETWORK=1.'
+    );
+  }
   let parsed;
   try {
     parsed = new URL(rawUrl);
@@ -56,6 +66,20 @@ function assertSafeCloudUrl(rawUrl) {
   }
   if (parsed.protocol === 'http:' && host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') {
     throw new Error('CORTEX_CLOUD_URL must use https:// for non-localhost endpoints.');
+  }
+  const allowedHostsRaw = (env.CORTEX_ALLOWED_CLOUD_HOSTS || '').trim();
+  if (allowedHostsRaw) {
+    const allowedHosts = new Set(
+      allowedHostsRaw
+        .split(',')
+        .map((h) => h.trim().toLowerCase())
+        .filter(Boolean)
+    );
+    if (allowedHosts.size > 0 && !allowedHosts.has(host)) {
+      throw new Error(
+        `Security Policy: CORTEX_CLOUD_URL host '${host}' is not in CORTEX_ALLOWED_CLOUD_HOSTS.`
+      );
+    }
   }
   return parsed.toString();
 }
@@ -218,6 +242,10 @@ Environment:
       console.error(`❌ Security Error: --out path '${outFile}' must stay inside repository root.`);
       process.exit(1);
     }
+    if (fs.existsSync(resolvedOut) && fs.lstatSync(resolvedOut).isSymbolicLink()) {
+      console.error(`❌ Security Error: Refusing to overwrite symbolic link '${outFile}'.`);
+      process.exit(1);
+    }
     fs.mkdirSync(path.dirname(resolvedOut), { recursive: true });
     fs.writeFileSync(resolvedOut, JSON.stringify(payload, null, 2) + '\n', 'utf8');
     console.log(`📝 Wrote sanitized Cortex report -> ${path.relative(ROOT, resolvedOut)}`);
@@ -255,6 +283,7 @@ Environment:
       'User-Agent': `agentic-solid-qe/${payload.cliVersion}`,
     },
     body: JSON.stringify(payload),
+    redirect: 'error',
     signal: AbortSignal.timeout(10000),
   });
 

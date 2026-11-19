@@ -37,9 +37,132 @@ const SKIP_DIRS = new Set([
 
 export const MIGRATION_MANIFEST_REL_PATH = '.agents/domain/migration-manifest.json';
 
+const FORBIDDEN_TS_IDENTIFIERS = new Set([
+  '__proto__',
+  'prototype',
+  'constructor',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'debugger',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'false',
+  'finally',
+  'for',
+  'function',
+  'if',
+  'import',
+  'in',
+  'instanceof',
+  'new',
+  'null',
+  'return',
+  'super',
+  'switch',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'typeof',
+  'var',
+  'void',
+  'while',
+  'with',
+  'yield',
+  'let',
+  'static',
+  'implements',
+  'interface',
+  'package',
+  'private',
+  'protected',
+  'public',
+  'await',
+  'eval',
+  'arguments',
+]);
+
 function isWithinDir(targetPath, baseDir) {
   const relPath = path.relative(baseDir, targetPath);
   return relPath === '' || (!relPath.startsWith('..') && !path.isAbsolute(relPath));
+}
+
+export function assertSafeLegacyScanRoot(resolvedLegacyRoot, workspaceRoot = process.cwd()) {
+  const normalizedTarget = path.resolve(resolvedLegacyRoot);
+  const normalizedWorkspace = path.resolve(workspaceRoot);
+  const parentBoundary = path.dirname(normalizedWorkspace);
+
+  const forbiddenExact = new Set([
+    '/',
+    '/root',
+    '/etc',
+    '/usr',
+    '/var',
+    '/bin',
+    '/sbin',
+    '/lib',
+    '/lib64',
+    '/opt',
+    '/proc',
+    '/sys',
+    '/dev',
+    '/tmp',
+    '/System',
+    '/Library',
+    '/Users',
+  ]);
+  const forbiddenPrefixes = [
+    '/etc/',
+    '/usr/',
+    '/var/',
+    '/bin/',
+    '/sbin/',
+    '/lib/',
+    '/proc/',
+    '/sys/',
+    '/dev/',
+    '/System/',
+    '/Library/',
+  ];
+
+  if (
+    forbiddenExact.has(normalizedTarget) ||
+    forbiddenPrefixes.some((prefix) => normalizedTarget.startsWith(prefix))
+  ) {
+    throw new Error(
+      `Security Error: Refusing to scan protected system directory '${normalizedTarget}' as legacy root.`
+    );
+  }
+
+  if (
+    !isWithinDir(normalizedTarget, normalizedWorkspace) &&
+    !isWithinDir(normalizedTarget, parentBoundary)
+  ) {
+    throw new Error(
+      `Security Error: Legacy root '${normalizedTarget}' resolves outside the repository and its immediate parent directory ('${parentBoundary}').`
+    );
+  }
+
+  if (fs.existsSync(normalizedTarget) && fs.lstatSync(normalizedTarget).isSymbolicLink()) {
+    throw new Error(
+      `Security Error: Refusing to scan symbolic link legacy root '${normalizedTarget}'.`
+    );
+  }
+
+  return normalizedTarget;
 }
 
 function readTextSafe(filePath) {
@@ -98,12 +221,26 @@ function toPascalCase(raw) {
     .split(/\s+/)
     .filter(Boolean);
   if (words.length === 0) return 'LegacyFeature';
-  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+  let pascal = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+  if (/^[0-9]/.test(pascal)) {
+    pascal = `Field${pascal}`;
+  }
+  if (FORBIDDEN_TS_IDENTIFIERS.has(pascal)) {
+    pascal = `${pascal}Model`;
+  }
+  return pascal;
 }
 
 function toCamelCase(raw) {
   const pascal = toPascalCase(raw);
-  return pascal.charAt(0).toLowerCase() + pascal.slice(1);
+  let camel = pascal.charAt(0).toLowerCase() + pascal.slice(1);
+  if (/^[0-9]/.test(camel)) {
+    camel = `field${camel}`;
+  }
+  if (FORBIDDEN_TS_IDENTIFIERS.has(camel)) {
+    camel = `${camel}Field`;
+  }
+  return camel;
 }
 
 /**
@@ -219,7 +356,14 @@ function isSensitiveFieldName(name) {
 }
 
 function escapeSingleQuote(val) {
-  return String(val || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return String(val || '')
+    .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 function parsePageObjectLocators(content, language) {
@@ -421,7 +565,8 @@ function extractParameterizationDatasets(content, testMethod, language) {
     // @Test(dataProvider = "name") -> find @DataProvider(name = "name") in same file
     const dpRef = attrBlock.match(/dataProvider\s*=\s*"([^"]+)"/);
     if (dpRef) {
-      const dpRegex = new RegExp(`@DataProvider\\s*\\(\\s*name\\s*=\\s*"${dpRef[1]}"\\s*\\)[\\s\\S]*?return\\s+new\\s+Object\\s*\\[\\]\\[\\]\\s*\\{([\\s\\S]*?)\\};`);
+      const escapedDpName = dpRef[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const dpRegex = new RegExp(`@DataProvider\\s*\\(\\s*name\\s*=\\s*"${escapedDpName}"\\s*\\)[\\s\\S]*?return\\s+new\\s+Object\\s*\\[\\]\\[\\]\\s*\\{([\\s\\S]*?)\\};`);
       const dpMatch = content.match(dpRegex);
       if (dpMatch) {
         for (const rm of dpMatch[1].matchAll(/\{([^{}]+)\}/g)) {

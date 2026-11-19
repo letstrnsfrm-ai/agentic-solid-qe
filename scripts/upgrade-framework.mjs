@@ -13,10 +13,40 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const REPO_SLUG = 'letstrnsfrm-ai/agentic-solid-qe';
-const REPO_GIT_URL = `https://github.com/${REPO_SLUG}.git`;
-const RELEASES_API_URL = `https://api.github.com/repos/${REPO_SLUG}/releases/latest`;
+const DEFAULT_REPO_SLUG = 'letstrnsfrm-ai/agentic-solid-qe';
+const SAFE_REPO_SLUG_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const SAFE_SQUAD_NAME_RE = /^[a-z0-9][a-z0-9-]*$/i;
 const SEMVER_TAG_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([a-z0-9.]+))?$/i;
+
+export function isEnterpriseOfflineMode(env = process.env) {
+  return (
+    env.CORTEX_OFFLINE === '1' ||
+    env.CORTEX_OFFLINE === 'true' ||
+    env.CORTEX_NO_NETWORK === '1' ||
+    env.CORTEX_NO_NETWORK === 'true'
+  );
+}
+
+export function resolveUpgradeRepoSlug(env = process.env) {
+  const custom = (env.CORTEX_UPGRADE_REPO || '').trim();
+  if (!custom) return DEFAULT_REPO_SLUG;
+  if (!SAFE_REPO_SLUG_RE.test(custom) || custom.includes('..')) {
+    throw new Error(
+      `Security Error: Invalid CORTEX_UPGRADE_REPO '${custom}'. Must match 'owner/repo' ([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+).`
+    );
+  }
+  return custom;
+}
+
+export function assertSafeSquadName(squadName) {
+  const s = String(squadName || '').trim();
+  if (!SAFE_SQUAD_NAME_RE.test(s) || s.includes('..')) {
+    throw new Error(
+      `Security Error: Invalid --squad '${squadName}'. Must be a kebab-case identifier ([a-z0-9-]) with no shell metacharacters.`
+    );
+  }
+  return s.toLowerCase();
+}
 
 export function normalizeVersion(raw) {
   if (!raw) return null;
@@ -74,14 +104,23 @@ export function resolveInstalledVersion(targetRoot) {
   return { version: '0.0.0', source: 'untracked' };
 }
 
-export async function fetchLatestReleaseTag() {
+export async function fetchLatestReleaseTag(repoSlug = resolveUpgradeRepoSlug()) {
+  if (isEnterpriseOfflineMode()) {
+    throw new Error(
+      'Security Policy: Outbound release resolution is disabled when CORTEX_OFFLINE=1 or CORTEX_NO_NETWORK=1.'
+    );
+  }
+  const releasesApiUrl = `https://api.github.com/repos/${repoSlug}/releases/latest`;
+  const repoGitUrl = `https://github.com/${repoSlug}.git`;
+
   // 1. Try GitHub Releases API (fastest, respects published releases)
   try {
-    const res = await fetch(RELEASES_API_URL, {
+    const res = await fetch(releasesApiUrl, {
       headers: {
         Accept: 'application/vnd.github+json',
         'User-Agent': 'agentic-solid-qe-cli',
       },
+      redirect: 'error',
       signal: AbortSignal.timeout(5000),
     });
     if (res.ok) {
@@ -95,7 +134,7 @@ export async function fetchLatestReleaseTag() {
   }
 
   // 2. Fallback: git ls-remote --tags
-  const gitRes = spawnSync('git', ['ls-remote', '--tags', '--refs', REPO_GIT_URL], {
+  const gitRes = spawnSync('git', ['ls-remote', '--tags', '--refs', repoGitUrl], {
     encoding: 'utf8',
     timeout: 8000,
   });
@@ -278,6 +317,9 @@ Options:
   }
 
   const targetRoot = path.resolve(process.cwd(), targetDir);
+  if (squadName) {
+    squadName = assertSafeSquadName(squadName);
+  }
   if (showDiff) {
     process.exit(runDiffPatches(targetRoot));
   }
@@ -285,6 +327,14 @@ Options:
     process.exit(runApplyPatches(targetRoot, { dryRun, force }));
   }
 
+  if (isEnterpriseOfflineMode()) {
+    console.error(
+      '❌ Security Policy: Remote framework upgrade is blocked when CORTEX_OFFLINE=1 or CORTEX_NO_NETWORK=1. Use a pre-installed internal registry package (`npx --no-install cortex sync`).'
+    );
+    process.exit(1);
+  }
+
+  const repoSlug = resolveUpgradeRepoSlug();
   const current = resolveInstalledVersion(targetRoot);
 
   let targetTag = '';
@@ -295,11 +345,11 @@ Options:
     }
     targetTag = explicitTag.startsWith('v') ? explicitTag : `v${explicitTag}`;
   } else {
-    console.log(`🔎 Checking latest release for ${REPO_SLUG}...`);
-    targetTag = (await fetchLatestReleaseTag()) || '';
+    console.log(`🔎 Checking latest release for ${repoSlug}...`);
+    targetTag = (await fetchLatestReleaseTag(repoSlug)) || '';
     if (!targetTag) {
       console.error(
-        `❌ Could not resolve latest release tag from GitHub (offline or rate-limited). Pass '--to <tag>' explicitly or run 'npx --yes github:${REPO_SLUG}#v0.9.1 sync'.`
+        `❌ Could not resolve latest release tag from GitHub (offline or rate-limited). Pass '--to <tag>' explicitly or run 'npx --yes github:${repoSlug}#v0.9.1 sync'.`
       );
       process.exit(1);
     }
@@ -314,14 +364,14 @@ Options:
   if (checkOnly) {
     if (cmp > 0) {
       console.log(`\n✨ Update available: ${current.version} -> ${targetVer}`);
-      console.log(`   Run: npx --yes github:${REPO_SLUG}#${targetTag} sync ${targetDir === '.' ? '' : targetDir}`.trim());
+      console.log(`   Run: npx --yes github:${repoSlug}#${targetTag} sync ${targetDir === '.' ? '' : targetDir}`.trim());
     } else {
       console.log(`\n✅ Already up to date (${current.version}).`);
     }
     process.exit(0);
   }
 
-  const syncFlags = ['--yes', `github:${REPO_SLUG}#${targetTag}`, 'sync', targetRoot];
+  const syncFlags = ['--yes', `github:${repoSlug}#${targetTag}`, 'sync', targetRoot];
   if (dryRun) syncFlags.push('--dry-run');
   if (force) syncFlags.push('--force');
   if (squadName) syncFlags.push('--squad', squadName);
