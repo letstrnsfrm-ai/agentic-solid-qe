@@ -16,8 +16,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
-import { discoverLegacyTests } from './legacy-test-migrator.mjs';
+import { analyzeCoverage } from './analyze-coverage.mjs';
+import { buildDomainGraph } from './build-domain-graph.mjs';
+import { compileSessionTape, finalizeBatchDomainRefresh } from './compile-tape.mjs';
+import { analyzeAndHealDrift } from './heal-drift.mjs';
+import { discoverLegacyTests, MIGRATION_MANIFEST_REL_PATH } from './legacy-test-migrator.mjs';
+import {
+  selectNextWaveBatch,
+  executeWaveBatch,
+  generateMigrationDashboard,
+} from './migration-wave-factory.mjs';
+import { runFastVerify } from './verify-fast.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -144,21 +155,7 @@ function detectCiConfigured(rootDir) {
 }
 
 function runCoverageAnalyzer(rootDir, squad) {
-  const scriptToRun = path.join(__dirname, 'analyze-coverage.mjs');
-
-  const args = [scriptToRun, '--summary', '--json'];
-  if (squad) args.push('--squad', squad);
-
-  const res = spawnSync(process.execPath, args, {
-    cwd: rootDir,
-    encoding: 'utf8',
-    maxBuffer: 10 * 1024 * 1024,
-  });
-
-  if (res.status !== 0) {
-    throw new Error(`analyze-coverage.mjs failed (exit ${res.status}): ${res.stderr || res.stdout}`);
-  }
-  return JSON.parse(res.stdout);
+  return analyzeCoverage(rootDir, { squad, summary: true, writeGraph: false });
 }
 
 export function assertSafeSquadName(rawSquad) {
@@ -397,8 +394,37 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       openDefects: openDefects.length,
       ciConfigured,
     },
+    queuePreview: {
+      uncompiledTapes: uncompiledTapes.slice(0, 10),
+      uncoveredShards: uncoveredShards.slice(0, 10),
+      failingArtifacts: failingArtifacts.slice(0, 5),
+    },
     nextAction,
   };
+}
+
+export function computeBlueprintFingerprint(bp) {
+  const h = bp?.healthSnapshot || {};
+  return [
+    bp?.nextAction?.skill || '',
+    bp?.nextAction?.command || '',
+    h.uncompiledTapes || 0,
+    h.failingTestArtifacts || 0,
+    h.legacyCodeTestsPending || 0,
+    h.uncoveredShards || 0,
+    h.automatedSpecs || 0,
+  ].join('|');
+}
+
+export function formatCompactBlueprint(bp) {
+  const h = bp.healthSnapshot;
+  return [
+    `CORTEX | ${bp.targetApp.appName} (${bp.targetApp.baseUrl || 'unconfigured'}) | ${bp.maturityStage}`,
+    `HEALTH | shards:${h.domainShards} (uncovered:${h.uncoveredShards}, stale:${h.staleShards}) | tapes:${h.recordedTapes} (uncompiled:${h.uncompiledTapes}) | specs:${h.automatedSpecs} | legacy:${h.legacySkillsAndPrompts}r/${h.legacyCodeTestsPending}t | fails:${h.failingTestArtifacts} | ci:${h.ciConfigured ? 'ok' : 'missing'}`,
+    `NEXT   | /${bp.nextAction.skill} -> ${bp.nextAction.command} [auto:${bp.nextAction.autoRunnable ? 'yes' : 'no'}]`,
+    `WHY    | ${bp.nextAction.why}`,
+    `GATE   | ${bp.nextAction.humanGate}`,
+  ].join('\n');
 }
 
 function formatBlueprintMarkdown(bp) {
@@ -424,8 +450,335 @@ function formatBlueprintMarkdown(bp) {
   return lines.join('\n');
 }
 
+function clearResolvedFailureArtifacts(rootDir) {
+  const resolvedRoot = path.resolve(rootDir);
+  const errorContexts = walkFiles(
+    path.join(resolvedRoot, 'test-results'),
+    (name) => name === 'error-context.md'
+  );
+  for (const ec of errorContexts) {
+    const rel = path.relative(resolvedRoot, ec);
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
+      try {
+        if (!fs.lstatSync(ec).isSymbolicLink()) fs.unlinkSync(ec);
+      } catch {
+        /* ignore cleanup failure */
+      }
+    }
+  }
+  const resultsJson = path.join(resolvedRoot, 'playwright-report/results.json');
+  if (fs.existsSync(resultsJson)) {
+    try {
+      if (!fs.lstatSync(resultsJson).isSymbolicLink()) fs.unlinkSync(resultsJson);
+    } catch {
+      /* ignore cleanup failure */
+    }
+  }
+}
+
+/**
+ * Smart Auto-Drain Orchestrator Loop (`npx cortex orchestrate --loop`).
+ *
+ * Autonomously chains consecutive safe deterministic actions (high-confidence locator heals,
+ * batch Session Tape compilation, Wave-0/Wave-N migration micro-batches) with two-tier
+ * verification, halting immediately at any true human gate, genuine regression/ambiguous drift,
+ * state-fingerprint cycle, or `--max-steps` cap.
+ */
+export async function runOrchestratorLoop(
+  rootDir = process.cwd(),
+  {
+    squad = null,
+    maxSteps = 10,
+    workers = 4,
+    fastOnly = false,
+    skipTests = false,
+    verifyWaves = false,
+    quiet = false,
+  } = {}
+) {
+  const tStart = performance.now();
+  const safeMaxSteps = Math.max(1, Math.min(50, Number.isFinite(Number(maxSteps)) ? Math.floor(Number(maxSteps)) : 10));
+  const safeWorkers = Math.max(1, Math.min(32, Number.isFinite(Number(workers)) ? Math.floor(Number(workers)) : 4));
+
+  const stepsExecuted = [];
+  const mutatedSpecs = new Set();
+  const seenFingerprints = new Set();
+  let didMutate = false;
+  let stoppedReason = 'max-steps-reached';
+  let humanGate = null;
+  let triageReport = null;
+  let bp = null;
+
+  for (let stepIdx = 0; stepIdx < safeMaxSteps; stepIdx++) {
+    bp = buildOrchestrationBlueprint(rootDir, { squad });
+    const fp = computeBlueprintFingerprint(bp);
+
+    if (seenFingerprints.has(fp)) {
+      stoppedReason = 'cycle-detected';
+      humanGate = 'Orchestrator state did not advance after previous step; manual review required.';
+      break;
+    }
+    seenFingerprints.add(fp);
+
+    if (!bp.nextAction.autoRunnable) {
+      stoppedReason = 'human-gate';
+      humanGate = bp.nextAction.humanGate;
+      break;
+    }
+
+    // Priority 2: Failing test artifacts -> dry-run triage first; auto-apply ONLY high-confidence locator drift
+    if (bp.nextAction.skill === '03-drift-healer') {
+      const triage = analyzeAndHealDrift(rootDir, { apply: false });
+      const isSafeHighConfidenceDrift =
+        triage?.rootCause?.category === 'locator-drift' && triage?.autoHealReady === true;
+
+      if (!isSafeHighConfidenceDrift) {
+        triageReport = triage;
+        stoppedReason = 'human-triage-required';
+        humanGate =
+          triage?.rootCause?.category === 'app-regression'
+            ? 'Detected potential genuine application regression — review triage before logging defect.'
+            : triage?.rootCause?.category === 'auth-drift'
+              ? 'Authentication session drift detected — refresh .auth/<persona>.json.'
+              : bp.nextAction.humanGate;
+        stepsExecuted.push({
+          step: stepIdx + 1,
+          skill: '03-drift-healer',
+          status: 'paused-for-triage',
+          category: triage?.rootCause?.category || 'unknown',
+          autoHealReady: Boolean(triage?.autoHealReady),
+        });
+        break;
+      }
+
+      const applied = analyzeAndHealDrift(rootDir, { apply: true });
+      const affectedSpecs = [];
+      if (applied?.spec && /^tests\/[a-zA-Z0-9_./-]+\.spec\.ts$/.test(applied.spec)) {
+        affectedSpecs.push(applied.spec);
+        mutatedSpecs.add(applied.spec);
+      }
+      didMutate = true;
+
+      const vRes = await runFastVerify({
+        rootDir,
+        fast: true,
+        specs: affectedSpecs,
+        skipTests,
+        skipMap: true,
+        workers: safeWorkers,
+        quiet: true,
+      });
+
+      stepsExecuted.push({
+        step: stepIdx + 1,
+        skill: '03-drift-healer',
+        status: vRes.ok ? 'healed-and-verified' : 'heal-verify-failed',
+        appliedChanges: applied.appliedChanges || [],
+        verifyMs: vRes.totalMs,
+      });
+
+      if (!vRes.ok) {
+        stoppedReason = 'heal-verify-failed';
+        humanGate = `Auto-healed locator failed targeted verify (${vRes.failedStage?.stage || 'unknown'}); manual review required.`;
+        break;
+      }
+
+      clearResolvedFailureArtifacts(rootDir);
+      continue;
+    }
+
+    // Priority 3: Batch-compile all queued valid uncompiled Session Tapes in-process + Tier-1 fast verify
+    if (bp.nextAction.skill === '02-solid-architect') {
+      const queuedTapes = (bp.queuePreview?.uncompiledTapes || [])
+        .map((t) => (typeof t === 'string' ? t : t?.scenarioId))
+        .filter((id) => /^[a-z0-9][a-z0-9-]*$/.test(String(id || '')));
+
+      if (queuedTapes.length === 0) {
+        stoppedReason = 'human-gate';
+        humanGate = 'Fix invalid scenarioId in uncompiled Session Tape(s).';
+        break;
+      }
+
+      const sharedGraph = buildDomainGraph({ rootDir, writeToDisk: false });
+      const compiledIds = [];
+      const batchSpecs = [];
+      let compileError = null;
+
+      for (const sid of queuedTapes) {
+        try {
+          const rep = compileSessionTape({
+            tapeInput: sid,
+            squadOverride: squad || '',
+            apply: true,
+            rootDir,
+            domainGraph: sharedGraph,
+            deferGraphRefresh: true,
+            skipMap: true,
+          });
+          compiledIds.push(sid);
+          const specOp = (rep.operations || []).find((op) => op.file && op.file.endsWith('.spec.ts'));
+          if (specOp?.file) {
+            batchSpecs.push(specOp.file);
+            mutatedSpecs.add(specOp.file);
+          }
+        } catch (err) {
+          compileError = { scenarioId: sid, message: String(err.message || err).slice(0, 240) };
+          break;
+        }
+      }
+
+      if (compiledIds.length > 0) {
+        finalizeBatchDomainRefresh(rootDir, { skipMap: true });
+        didMutate = true;
+      }
+
+      if (compileError) {
+        stepsExecuted.push({
+          step: stepIdx + 1,
+          skill: '02-solid-architect',
+          status: 'compile-failed',
+          compiledTapes: compiledIds,
+          error: compileError,
+        });
+        stoppedReason = 'compile-failed';
+        humanGate = `Tape compilation failed for '${compileError.scenarioId}': ${compileError.message}`;
+        break;
+      }
+
+      const vRes = await runFastVerify({
+        rootDir,
+        fast: true,
+        specs: batchSpecs,
+        skipTests,
+        skipMap: true,
+        workers: safeWorkers,
+        quiet: true,
+      });
+
+      stepsExecuted.push({
+        step: stepIdx + 1,
+        skill: '02-solid-architect',
+        status: vRes.ok ? 'compiled-and-verified' : 'verify-failed',
+        compiledTapes: compiledIds,
+        specs: batchSpecs,
+        verifyMs: vRes.totalMs,
+      });
+
+      if (!vRes.ok) {
+        stoppedReason = 'verify-failed';
+        humanGate = `Fast verify failed at '${vRes.failedStage?.stage || 'unknown'}' after compiling ${compiledIds.join(', ')}.`;
+        break;
+      }
+      continue;
+    }
+
+    // Priority 4: Wave Factory autonomous micro-batch execution in-process
+    if (bp.nextAction.skill === '05-skill-migrator') {
+      const manifestPath = path.join(rootDir, MIGRATION_MANIFEST_REL_PATH);
+      if (!fs.existsSync(manifestPath)) {
+        stoppedReason = 'human-gate';
+        humanGate = 'Run cortex wave --scan <legacy-dir> to initialize the migration ledger.';
+        break;
+      }
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const pendingWave0 = (manifest.wave0Prereqs || []).filter((w) => w.status === 'pending');
+      const targetWave = pendingWave0.length > 0 ? 0 : null;
+      const selection = selectNextWaveBatch(manifest, {
+        squad: squad || '',
+        wave: targetWave,
+        batchSize: 5,
+      });
+      if (!selection.batch || selection.batch.length === 0) {
+        stoppedReason = 'wave-queue-empty';
+        humanGate = 'No pending wave items remain; review quarantined or needs-triage ledger items.';
+        break;
+      }
+
+      const execution = executeWaveBatch(manifest, selection, {
+        projectRoot: rootDir,
+        verify: verifyWaves && !skipTests,
+        workers: safeWorkers,
+      });
+      didMutate = true;
+      for (const r of execution.results || []) {
+        if (r.targetSpec && /^tests\/[a-zA-Z0-9_./-]+\.spec\.ts$/.test(r.targetSpec)) {
+          mutatedSpecs.add(r.targetSpec);
+        }
+      }
+      try {
+        generateMigrationDashboard(rootDir);
+      } catch {
+        /* non-fatal */
+      }
+
+      stepsExecuted.push({
+        step: stepIdx + 1,
+        skill: '05-skill-migrator',
+        wave: execution.wave,
+        processed: execution.processed,
+        results: execution.results,
+      });
+      continue;
+    }
+
+    // Priority 6/7: No further mutating auto-actions; exit drain loop cleanly to run Tier-2 final verify once
+    stoppedReason = 'drained-clean';
+    humanGate = bp.nextAction.humanGate;
+    break;
+  }
+
+  // Tier-2 Final Verification Gate (run ONCE at end of drain loop if files mutated or repo was ready to verify)
+  let finalVerify = null;
+  const shouldRunFinalVerify =
+    !fastOnly &&
+    !['cycle-detected', 'compile-failed', 'verify-failed', 'heal-verify-failed', 'human-triage-required'].includes(
+      stoppedReason
+    ) &&
+    (didMutate || stoppedReason === 'drained-clean');
+
+  if (shouldRunFinalVerify) {
+    finalVerify = await runFastVerify({
+      rootDir,
+      fast: false,
+      skipTests,
+      withEngine: false,
+      skipMap: false,
+      workers: safeWorkers,
+      quiet: true,
+    });
+    if (!finalVerify.ok) {
+      stoppedReason = 'final-verify-failed';
+      humanGate = `Final verify failed at '${finalVerify.failedStage?.stage || 'unknown'}'.`;
+    }
+  }
+
+  const finalBlueprint = buildOrchestrationBlueprint(rootDir, { squad });
+  const summary = {
+    mode: 'auto-drain-loop',
+    stepsExecuted,
+    stoppedReason,
+    humanGate,
+    ...(triageReport ? { triageReport } : {}),
+    mutatedSpecs: [...mutatedSpecs],
+    finalVerify,
+    totalMs: Math.round(performance.now() - tStart),
+    finalBlueprint,
+  };
+
+  if (!quiet) {
+    console.log(formatCompactBlueprint(finalBlueprint));
+    console.log(
+      `LOOP   | steps:${stepsExecuted.length} | stopped:${stoppedReason} | mutatedSpecs:${mutatedSpecs.size} | finalVerify:${finalVerify ? (finalVerify.ok ? 'pass' : 'fail') : 'skipped'} | total:${summary.totalMs}ms`
+    );
+  }
+
+  return summary;
+}
+
 // CLI Entrypoint
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === __filename;
+const isMain =
+  Boolean(process.argv[1]) &&
+  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
 if (isMain) {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
@@ -433,19 +786,37 @@ if (isMain) {
 🧠 Master Orchestrator CLI (npx cortex orchestrate)
 
 Usage:
-  npx cortex orchestrate [--squad <squad>] [--json] [--run]
+  npx cortex orchestrate [--squad <squad>] [--json] [--compact] [--run]
+  npx cortex orchestrate --loop [--max-steps 10] [--workers 4] [--fast-only] [--skip-tests] [--verify-waves] [--compact] [--json]
 `);
     process.exit(0);
   }
 
   let squad = null;
   let jsonOut = false;
+  let compactOut = false;
   let runNext = false;
+  let loopMode = false;
+  let maxSteps = 10;
+  let workers = 4;
+  let fastOnly = false;
+  let skipTests = false;
+  let verifyWaves = false;
+
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--squad' && args[i + 1]) squad = args[++i];
     else if (args[i].startsWith('--squad=')) squad = args[i].slice('--squad='.length);
+    else if (args[i] === '--max-steps' && args[i + 1]) maxSteps = Number(args[++i]);
+    else if (args[i].startsWith('--max-steps=')) maxSteps = Number(args[i].slice('--max-steps='.length));
+    else if (args[i] === '--workers' && args[i + 1]) workers = Number(args[++i]);
+    else if (args[i].startsWith('--workers=')) workers = Number(args[i].slice('--workers='.length));
     else if (args[i] === '--json') jsonOut = true;
+    else if (args[i] === '--compact') compactOut = true;
     else if (args[i] === '--run') runNext = true;
+    else if (args[i] === '--loop') loopMode = true;
+    else if (args[i] === '--fast-only') fastOnly = true;
+    else if (args[i] === '--skip-tests') skipTests = true;
+    else if (args[i] === '--verify-waves') verifyWaves = true;
   }
 
   if (squad !== null) {
@@ -458,40 +829,68 @@ Usage:
   }
 
   const rootDir = process.cwd();
-  const blueprint = buildOrchestrationBlueprint(rootDir, { squad });
 
-  if (jsonOut) {
-    console.log(JSON.stringify(blueprint, null, 2));
-  } else {
-    console.log(formatBlueprintMarkdown(blueprint));
-  }
-
-  if (runNext) {
-    if (!blueprint.nextAction.autoRunnable) {
-      if (!jsonOut) {
-        console.log(
-          `⏸️  Next action (/${blueprint.nextAction.skill}) requires interactive browser exploration or human input: ${blueprint.nextAction.humanGate}`
+  if (loopMode) {
+    runOrchestratorLoop(rootDir, {
+      squad,
+      maxSteps,
+      workers,
+      fastOnly,
+      skipTests,
+      verifyWaves,
+      quiet: jsonOut,
+    })
+      .then((res) => {
+        if (jsonOut) {
+          console.log(JSON.stringify(res, null, 2));
+        }
+        const failed = ['compile-failed', 'verify-failed', 'heal-verify-failed', 'final-verify-failed'].includes(
+          res.stoppedReason
         );
-      }
-      process.exit(0);
+        process.exit(failed ? 1 : 0);
+      })
+      .catch((err) => {
+        console.error(`❌ orchestrate --loop failed: ${err.message}`);
+        process.exit(1);
+      });
+  } else {
+    const blueprint = buildOrchestrationBlueprint(rootDir, { squad });
+
+    if (jsonOut) {
+      console.log(JSON.stringify(blueprint, null, 2));
+    } else if (compactOut) {
+      console.log(formatCompactBlueprint(blueprint));
+    } else {
+      console.log(formatBlueprintMarkdown(blueprint));
     }
 
-    if (!jsonOut) {
-      console.log(`🚀 Executing: ${blueprint.nextAction.command}\n`);
-    }
-    if (blueprint.nextAction.runArgs) {
-      const res = spawnSync(process.execPath, blueprint.nextAction.runArgs, {
-        cwd: rootDir,
-        stdio: jsonOut ? 'pipe' : 'inherit',
-      });
-      process.exit(res.status ?? 0);
-    } else if (blueprint.nextAction.npmScript) {
-      const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-      const res = spawnSync(npmCmd, ['run', blueprint.nextAction.npmScript], {
-        cwd: rootDir,
-        stdio: jsonOut ? 'pipe' : 'inherit',
-      });
-      process.exit(res.status ?? 0);
+    if (runNext) {
+      if (!blueprint.nextAction.autoRunnable) {
+        if (!jsonOut) {
+          console.log(
+            `⏸️  Next action (/${blueprint.nextAction.skill}) requires interactive browser exploration or human input: ${blueprint.nextAction.humanGate}`
+          );
+        }
+        process.exit(0);
+      }
+
+      if (!jsonOut) {
+        console.log(`🚀 Executing: ${blueprint.nextAction.command}\n`);
+      }
+      if (blueprint.nextAction.runArgs) {
+        const res = spawnSync(process.execPath, blueprint.nextAction.runArgs, {
+          cwd: rootDir,
+          stdio: jsonOut ? 'pipe' : 'inherit',
+        });
+        process.exit(res.status ?? 0);
+      } else if (blueprint.nextAction.npmScript) {
+        const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+        const res = spawnSync(npmCmd, ['run', blueprint.nextAction.npmScript], {
+          cwd: rootDir,
+          stdio: jsonOut ? 'pipe' : 'inherit',
+        });
+        process.exit(res.status ?? 0);
+      }
     }
   }
 }

@@ -21,6 +21,9 @@ import {
   assertSafeLegacyScanRoot,
 } from './legacy-test-migrator.mjs';
 import { resolveLocalBin } from './explore-session.mjs';
+import { compileSessionTape, finalizeBatchDomainRefresh } from './compile-tape.mjs';
+import { buildDomainGraph } from './build-domain-graph.mjs';
+import { analyzeAndHealDrift } from './heal-drift.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -324,9 +327,161 @@ export function runClosedLoopLiveVerifyAndHeal(specRelPath, projectRoot = ROOT) 
   return { status: 'needs-triage', healed: false, lastError: (firstRun.stderr || firstRun.stdout || 'Playwright run failed').trim().slice(0, 240) };
 }
 
-// ─── 4b. Resilient Continue-on-Error Micro-Batch Executor (`--run`) ─────────
+// ─── 4b. Parallel Batch Verify + Selective Heal + Single Retry ──────────────
 
-export function executeWaveBatch(manifest, selection, { projectRoot = ROOT, verify = false } = {}) {
+export function parsePlaywrightJsonSpecStatus(rawStdout, requestedSpecs = []) {
+  const statusMap = new Map();
+  let parsed = null;
+  try {
+    const startIdx = String(rawStdout || '').indexOf('{');
+    if (startIdx >= 0) {
+      parsed = JSON.parse(String(rawStdout).slice(startIdx));
+    }
+  } catch {
+    return statusMap;
+  }
+  if (!parsed || !Array.isArray(parsed.suites)) return statusMap;
+
+  const visitSuite = (suite, inheritedFile = '') => {
+    const suiteFile = suite.file || inheritedFile || '';
+    for (const spec of suite.specs || []) {
+      const rawFile = String(spec.file || suiteFile || '').replace(/\\/g, '/');
+      const matchedReq =
+        requestedSpecs.find(
+          (req) => req === rawFile || req === `tests/${rawFile}` || req.endsWith(`/${rawFile}`)
+        ) || rawFile;
+      if (!matchedReq) continue;
+      const failed = (spec.tests || []).some((t) =>
+        (t.results || []).some((r) => r.status === 'failed' || r.status === 'timedOut' || r.status === 'interrupted')
+      );
+      const prev = statusMap.get(matchedReq);
+      if (failed) {
+        statusMap.set(matchedReq, 'failed');
+      } else if (prev !== 'failed') {
+        statusMap.set(matchedReq, 'passed');
+      }
+    }
+    for (const child of suite.suites || []) visitSuite(child, suiteFile);
+  };
+  for (const s of parsed.suites) visitSuite(s);
+  return statusMap;
+}
+
+export function runBatchVerifyAndHeal(specRelPaths, { projectRoot = ROOT, workers = 4 } = {}) {
+  const safeWorkers = Math.max(1, Math.min(32, Number.isFinite(Number(workers)) ? Math.floor(Number(workers)) : 4));
+  const validatedSpecs = [];
+  for (const specRelPath of specRelPaths || []) {
+    const normalizedSpec = String(specRelPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!SAFE_SPEC_REL_RE.test(normalizedSpec) || normalizedSpec.includes('..')) {
+      throw new Error(
+        `Security Error: Invalid spec path '${specRelPath}'. Must match tests/<path>.spec.ts with no traversal or leading '-'.`
+      );
+    }
+    assertSafeOutputPath(projectRoot, normalizedSpec);
+    validatedSpecs.push(normalizedSpec);
+  }
+
+  const outcomes = new Map();
+  if (validatedSpecs.length === 0) return outcomes;
+
+  const pwBin = resolveLocalBin('playwright', projectRoot);
+  const firstRun = spawnSync(
+    pwBin.command,
+    [
+      ...pwBin.prefixArgs,
+      'test',
+      ...validatedSpecs,
+      '--project=chromium',
+      `--workers=${safeWorkers}`,
+      '--reporter=json',
+    ],
+    { cwd: projectRoot, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 }
+  );
+
+  if (firstRun.status === 0) {
+    for (const spec of validatedSpecs) {
+      outcomes.set(spec, { status: 'live-verified', healed: false });
+    }
+    return outcomes;
+  }
+
+  const firstStatusMap = parsePlaywrightJsonSpecStatus(firstRun.stdout, validatedSpecs);
+  const failingSpecs = [];
+  for (const spec of validatedSpecs) {
+    if (firstStatusMap.get(spec) === 'passed') {
+      outcomes.set(spec, { status: 'live-verified', healed: false });
+    } else {
+      failingSpecs.push(spec);
+    }
+  }
+
+  // Selective in-process heal for ONLY failing specs
+  const healedSpecsToRetry = [];
+  for (const spec of failingSpecs) {
+    try {
+      const healRes = analyzeAndHealDrift(projectRoot, { spec, apply: true });
+      if (healRes?.status === 'healed') {
+        healedSpecsToRetry.push(spec);
+      } else {
+        outcomes.set(spec, {
+          status: 'needs-triage',
+          healed: false,
+          lastError: (healRes?.rootCause?.summary || firstRun.stderr || 'Playwright run failed').trim().slice(0, 240),
+        });
+      }
+    } catch (err) {
+      outcomes.set(spec, {
+        status: 'needs-triage',
+        healed: false,
+        lastError: String(err.message || err).slice(0, 240),
+      });
+    }
+  }
+
+  // Single parallel retry for ONLY specs that were healed
+  if (healedSpecsToRetry.length > 0) {
+    const retryRun = spawnSync(
+      pwBin.command,
+      [
+        ...pwBin.prefixArgs,
+        'test',
+        ...healedSpecsToRetry,
+        '--project=chromium',
+        `--workers=${safeWorkers}`,
+        '--reporter=json',
+      ],
+      { cwd: projectRoot, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 }
+    );
+    if (retryRun.status === 0) {
+      for (const spec of healedSpecsToRetry) {
+        outcomes.set(spec, { status: 'healed', healed: true });
+      }
+    } else {
+      const retryStatusMap = parsePlaywrightJsonSpecStatus(retryRun.stdout, healedSpecsToRetry);
+      for (const spec of healedSpecsToRetry) {
+        if (retryStatusMap.get(spec) === 'passed') {
+          outcomes.set(spec, { status: 'healed', healed: true });
+        } else {
+          outcomes.set(spec, {
+            status: 'needs-triage',
+            healed: false,
+            lastError: (retryRun.stderr || 'Playwright retry failed after auto-heal').trim().slice(0, 240),
+          });
+        }
+      }
+    }
+  }
+
+  return outcomes;
+}
+
+// ─── 4c. Resilient Continue-on-Error Micro-Batch Executor (`--run`) ─────────
+
+export function executeWaveBatch(
+  manifest,
+  selection,
+  { projectRoot = ROOT, verify = false, workers = 4 } = {}
+) {
   const manifestPath = assertSafeOutputPath(projectRoot, MIGRATION_MANIFEST_REL_PATH);
   const saveManifest = () => {
     manifest.updatedAt = new Date().toISOString();
@@ -347,14 +502,19 @@ export function executeWaveBatch(manifest, selection, { projectRoot = ROOT, veri
         prereq.lastError = String(err.message || err).slice(0, 240);
         scaffolded.push({ id: prereq.id, status: 'needs-triage', lastError: prereq.lastError });
       }
-      saveManifest();
     }
+    saveManifest();
     return { wave: 0, processed: scaffolded.length, results: scaffolded };
   }
 
   const scanRootAbs = assertSafeLegacyScanRoot(path.resolve(projectRoot, manifest.scanRoot || '.'), projectRoot);
-  const compileScript = path.join(__dirname, 'compile-tape.mjs');
+  // Scan legacy repo ONCE per batch & load domainGraph ONCE (eliminates O(N^2) rescans + per-item subprocesses)
+  const cachedDiscovery = discoverLegacyTests(scanRootAbs);
+  const sharedDomainGraph = buildDomainGraph({ rootDir: projectRoot, writeToDisk: false });
+
   const results = [];
+  const compiledForVerify = [];
+  let anyCompiled = false;
 
   for (const item of selection.batch || []) {
     try {
@@ -363,7 +523,13 @@ export function executeWaveBatch(manifest, selection, { projectRoot = ROOT, veri
         throw new Error(`Security Error: Invalid squad '${item.squad}' in migration ledger.`);
       }
       const squadArg = rawSquad;
-      const plan = buildLegacyMigrationPlan(scanRootAbs, item.id, { squad: squadArg });
+      const plan = buildLegacyMigrationPlan(scanRootAbs, item.id, {
+        squad: squadArg,
+        discovery: cachedDiscovery,
+      });
+      if (!plan.found || !plan.draftTape) {
+        throw new Error(`Legacy test '${item.id}' not found in scan root '${manifest.scanRoot}'.`);
+      }
       const scenarioId = plan.draftTape.scenarioId;
       if (!SAFE_SLUG_RE.test(scenarioId)) {
         throw new Error(`Security Error: Invalid scenarioId '${scenarioId}'.`);
@@ -383,19 +549,27 @@ export function executeWaveBatch(manifest, selection, { projectRoot = ROOT, veri
         }
       }
 
-      const compArgs = [compileScript, scenarioId, '--apply'];
-      if (squadArg) compArgs.push('--squad', squadArg);
-      const compRes = spawnSync(process.execPath, compArgs, { cwd: projectRoot, encoding: 'utf8' });
-      if (compRes.status !== 0) {
+      // Compile in-process with deferred graph/map refresh (1x at batch end instead of 3x per item)
+      try {
+        compileSessionTape({
+          tapeInput: scenarioId,
+          squadOverride: squadArg,
+          apply: true,
+          rootDir: projectRoot,
+          domainGraph: sharedDomainGraph,
+          deferGraphRefresh: true,
+          skipMap: true,
+        });
+      } catch (compErr) {
         item.status = 'needs-triage';
-        item.lastError = (compRes.stderr || compRes.stdout || 'compile-tape failed').trim().slice(0, 240);
+        item.lastError = String(compErr.message || compErr).trim().slice(0, 240);
         item.nextAction = `npx cortex explore start --scenario ${scenarioId}`;
         item.updatedAt = new Date().toISOString();
         results.push({ id: item.id, status: 'needs-triage', lastError: item.lastError, nextAction: item.nextAction });
-        saveManifest();
         continue;
       }
 
+      anyCompiled = true;
       const candidateSpecs = [
         squadArg ? `tests/${squadArg}/${scenarioId}.spec.ts` : null,
         `tests/${scenarioId}.spec.ts`,
@@ -406,29 +580,52 @@ export function executeWaveBatch(manifest, selection, { projectRoot = ROOT, veri
       item.status = 'compiled';
       item.lastError = null;
       item.nextAction = null;
-
-      if (verify && specRel) {
-        const verifyRes = runClosedLoopLiveVerifyAndHeal(specRel, projectRoot);
-        item.status = verifyRes.status;
-        if (verifyRes.status === 'needs-triage') {
-          item.lastError = verifyRes.lastError || 'Live verification & auto-heal failed';
-          item.nextAction = `npx cortex explore start --from-spec ${specRel}`;
-        }
-      }
-
       item.updatedAt = new Date().toISOString();
-      results.push({
+
+      const entryResult = {
         id: item.id,
         status: item.status,
         targetSpec: item.targetSpec,
-        ...(item.lastError ? { lastError: item.lastError, nextAction: item.nextAction } : {}),
-      });
+      };
+      results.push(entryResult);
+      if (verify && specRel) {
+        compiledForVerify.push({ item, entryResult, specRel });
+      }
     } catch (err) {
       item.status = 'needs-triage';
       item.lastError = String(err.message || err).slice(0, 240);
       item.nextAction = `node scripts/legacy-test-migrator.mjs --legacy ${item.id}`;
       item.updatedAt = new Date().toISOString();
       results.push({ id: item.id, status: 'needs-triage', lastError: item.lastError, nextAction: item.nextAction });
+    }
+  }
+
+  // Refresh domainGraph + systemMap ONCE after compiling the entire batch
+  if (anyCompiled) {
+    finalizeBatchDomainRefresh(projectRoot, { skipMap: false });
+  }
+  saveManifest();
+
+  // Parallel Playwright batch verification + selective heal + single retry
+  if (verify && compiledForVerify.length > 0) {
+    const outcomes = runBatchVerifyAndHeal(
+      compiledForVerify.map((c) => c.specRel),
+      { projectRoot, workers }
+    );
+    for (const { item, entryResult, specRel } of compiledForVerify) {
+      const outcome = outcomes.get(specRel) || {
+        status: 'needs-triage',
+        lastError: 'Live verification & auto-heal failed',
+      };
+      item.status = outcome.status;
+      entryResult.status = outcome.status;
+      if (outcome.status === 'needs-triage') {
+        item.lastError = outcome.lastError || 'Live verification & auto-heal failed';
+        item.nextAction = `npx cortex explore start --from-spec ${specRel}`;
+        entryResult.lastError = item.lastError;
+        entryResult.nextAction = item.nextAction;
+      }
+      item.updatedAt = new Date().toISOString();
     }
     saveManifest();
   }
@@ -595,7 +792,8 @@ function main() {
   --wave <0|1|2|3>         Select Wave 0 (shared seeders/flows) or Waves 1-3 (tests)
   --batch-size <N>         Token-bounded micro-batch size (default: 5, max: 25)
   --run                    Execute the selected micro-batch (Wave-0 scaffold or Wave 1-3 migrate -> compile)
-  --verify                 With --run, execute live Playwright verify + cortex heal auto-repair per spec
+  --verify                 With --run, execute parallel Playwright batch verify + selective cortex heal auto-repair
+  --workers <N>            Parallel Playwright workers for --verify (default: 4, max: 32)
   --scaffold-wave0         Alias for --wave 0 --run
   --dashboard [out-path]   Generate HTML Migration Burn-Down & N:1 Parity Dashboard (default: reports/migration-dashboard.html)
   --json                   Emit machine-readable JSON output
@@ -608,6 +806,7 @@ function main() {
   const waveArg = getFlag(args, '--wave');
   const wave = waveArg !== undefined ? Number(waveArg) : null;
   const batchSize = Number(getFlag(args, '--batch-size', '5'));
+  const workers = Number(getFlag(args, '--workers', '4'));
   const shouldRun = args.includes('--run') || args.includes('--scaffold-wave0');
   const shouldVerify = args.includes('--verify');
   const wantDashboard = args.includes('--dashboard');
@@ -627,7 +826,7 @@ function main() {
   const selection = selectNextWaveBatch(manifest, { squad, wave, batchSize });
   let execution = null;
   if (shouldRun) {
-    execution = executeWaveBatch(manifest, selection, { projectRoot: ROOT, verify: shouldVerify });
+    execution = executeWaveBatch(manifest, selection, { projectRoot: ROOT, verify: shouldVerify, workers });
   }
 
   let dashboard = null;

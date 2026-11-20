@@ -24,8 +24,8 @@ import {
   validateTapeObject,
 } from './validate-tapes.mjs';
 
-const ROOT = process.cwd();
-const TAPES_DIR = path.join(ROOT, '.exploratory/tapes');
+let ROOT = process.cwd();
+let TAPES_DIR = path.join(ROOT, '.exploratory/tapes');
 const MAX_COMPONENT_LINES = 150;
 const COMPONENT_WARN_LINES = 130;
 const MAX_SCAN_FILE_BYTES = 1024 * 1024;
@@ -435,8 +435,18 @@ export function compileSessionTape({
   squadOverride = '',
   apply = false,
   forceSpec = false,
+  rootDir = process.cwd(),
+  domainGraph: providedDomainGraph = null,
+  deferGraphRefresh = false,
+  skipMap = false,
 } = {}) {
-  const domainGraph = buildDomainGraph({ writeToDisk: true });
+  const prevRoot = ROOT;
+  const prevTapesDir = TAPES_DIR;
+  ROOT = path.resolve(rootDir);
+  TAPES_DIR = path.join(ROOT, '.exploratory/tapes');
+  try {
+  const domainGraph =
+    providedDomainGraph || buildDomainGraph({ rootDir: ROOT, writeToDisk: !apply && !deferGraphRefresh });
   const existingClasses = scanExistingArchitecture();
 
   // 1. Resolve target Session Tape
@@ -1773,8 +1783,9 @@ ${specBody}
     }
 
     // Seed shard if missing, then synchronize **Published Capabilities:** in matching shard
-    seedShardsFromTapes();
-    const updatedGraph = buildDomainGraph({ writeToDisk: false });
+    const seeded = seedShardsFromTapes({ rootDir: ROOT });
+    const updatedGraph =
+      seeded.length > 0 ? buildDomainGraph({ rootDir: ROOT, writeToDisk: false }) : domainGraph;
     const matchingShard = updatedGraph.shards.find(
       (s) => s.id === scenarioId || (resolvedSquad && s.squad === resolvedSquad)
     );
@@ -1797,11 +1808,15 @@ ${specBody}
         fs.writeFileSync(shardFullPath, shardText, 'utf8');
       }
     }
-    buildDomainGraph({ writeToDisk: true });
-    try {
-      buildSystemMap({ quiet: true });
-    } catch {
-      /* non-fatal */
+    if (!deferGraphRefresh) {
+      buildDomainGraph({ rootDir: ROOT, writeToDisk: true });
+      if (!skipMap && path.resolve(ROOT) === path.resolve(process.cwd())) {
+        try {
+          buildSystemMap({ quiet: true });
+        } catch {
+          /* non-fatal */
+        }
+      }
     }
   }
 
@@ -1816,6 +1831,22 @@ ${specBody}
     warnings,
     operations: plannedOperations.map(({ codeContent, ...summary }) => summary),
   };
+  } finally {
+    ROOT = prevRoot;
+    TAPES_DIR = prevTapesDir;
+  }
+}
+
+export function finalizeBatchDomainRefresh(rootDir = process.cwd(), { skipMap = false } = {}) {
+  const graph = buildDomainGraph({ rootDir, writeToDisk: true });
+  if (!skipMap && path.resolve(rootDir) === path.resolve(process.cwd())) {
+    try {
+      buildSystemMap({ quiet: true });
+    } catch {
+      /* non-fatal */
+    }
+  }
+  return graph;
 }
 
 const isMain =
@@ -1828,8 +1859,8 @@ if (isMain) {
 ⚙️  Cortex Deterministic Session-Tape-to-SOLID Compiler (compile-tape.mjs)
 
 Usage:
-  npx cortex compile [<scenario-id-or-tape-path>] [--squad <squad>] [--apply] [--force-spec]
-  npm run compile:tape -- [<scenario-id-or-tape-path>] [--squad <squad>] [--apply]
+  npx cortex compile [<scenario-id-or-tape-path>] [--squad <squad>] [--apply] [--force-spec] [--skip-map]
+  npm run compile:tape -- [<scenario-id-or-tape-path>] [--squad <squad>] [--apply] [--skip-map]
 `);
     process.exit(0);
   }
@@ -1838,6 +1869,7 @@ Usage:
   let squadOverride = '';
   let apply = false;
   let forceSpec = false;
+  let skipMap = false;
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -1845,6 +1877,8 @@ Usage:
       apply = true;
     } else if (a === '--force-spec') {
       forceSpec = true;
+    } else if (a === '--skip-map') {
+      skipMap = true;
     } else if (a === '--squad' && args[i + 1]) {
       squadOverride = args[++i];
     } else if (a.startsWith('--squad=')) {
@@ -1860,6 +1894,7 @@ Usage:
       squadOverride,
       apply,
       forceSpec,
+      skipMap,
     });
     console.log(
       `\n⚙️  Agentic-SOLID-QE Tape Compiler (${report.mode.toUpperCase()}) — Scenario: ${report.scenarioId}\n`
@@ -1871,7 +1906,7 @@ Usage:
       );
     } else {
       console.log(
-        `\n✅ Compiled '${report.scenarioId}' into SOLID TypeScript! Run 'npm run verify' to validate typecheck, domain:graph, audit:solid, and tests.\n`
+        `\n✅ Compiled '${report.scenarioId}' into SOLID TypeScript! Run 'npm run verify:fast' (or 'npm run verify') to validate typecheck, domain:graph, audit:solid, and tests.\n`
       );
     }
   } catch (err) {

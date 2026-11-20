@@ -1624,7 +1624,7 @@ function scaffoldDataBuilder(match, params, datasets, dataModels) {
  * Build a draft Session Tape & migration plan for a legacy Java/C# test (or specific slice).
  */
 export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {}) {
-  const discovery = discoverLegacyTests(scanRoot);
+  const discovery = options.discovery || discoverLegacyTests(scanRoot);
   const match = discovery.tests.find(
     (t) =>
       t.id === targetIdOrFile ||

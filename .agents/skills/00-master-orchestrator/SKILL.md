@@ -5,22 +5,22 @@ description: Autonomous single entry point for Agentic-SOLID-QE. Human gives dir
 
 # Skill 00-Master: Autonomous QE Orchestrator
 
-> **Operating Contract:** Human = **direction & review only**. Agent = **autonomous executor** via sub-skills, pausing only at human gates (`references/master-orchestration-playbook.md`).
+> **Contract:** Human = **direction & review**. Agent = **autonomous executor**, pausing only at human gates (`references/master-orchestration-playbook.md`).
 
-## 1. Auto-Start & Intent-to-Skill Execution
-On `/00-master-orchestrator` or any plain-language QE request:
-1. Run `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`.
-2. Read `.agents/domain/domain-memory.md` and `references/master-orchestration-playbook.md`.
-3. Present a concise **Maturity & Execution Plan**, then **execute**:
-   - **Setup/Auth:** `00-env-bootstrap` ➔ `domain:graph` *(pause only for MFA/CAPTCHA)*.
-   - **Grow Coverage:** `01-cli-explorer` *(resume existing specs via `npm run test:explore` + `agent-browser --cdp 9222` to skip repeated setup)* ➔ *(human picks 1)* ➔ `02-solid-architect` ➔ `npm run verify`.
-   - **Run & Fix Tests:** `playwright test` ➔ `03-drift-healer` ➔ `npm run verify` *(pause only on ambiguous bug vs. drift)*.
-   - **Migrate Legacy:** `05-skill-migrator` ➔ *(human approves triage)* ➔ `02-solid-architect` ➔ `npm run verify`.
-   - **CI/Release:** `04-ci-pipeline` ➔ `npm run verify`.
+## 1. Single-Call Auto-Start & Smart Auto-Drain
+On `/00-master-orchestrator` or any QE request:
+1. Run **`npx cortex orchestrate --loop --compact`** (or `--compact` read-only) to run diagnostics, high-confidence drift heals, batch compilation, and wave micro-batches in-process.
+2. Read `.agents/domain/domain-memory.md` before exploring/authoring; read `references/master-orchestration-playbook.md` *only* on-demand.
+3. Execute remaining interactive work:
+   - **Setup/Auth:** `00-env-bootstrap` ➔ `domain:graph` *(pause for MFA/CAPTCHA)*.
+   - **Coverage:** `01-cli-explorer` (`cortex explore start/batch/finish --compile --verify`) ➔ *(human picks 1)* ➔ `02-solid-architect` ➔ `npm run verify:fast`.
+   - **Failures:** `03-drift-healer` *(auto-heals high-confidence drift; pauses on bug/ambiguity)* ➔ `npm run verify:fast`.
+   - **Legacy:** `05-skill-migrator` (`cortex wave --run --verify --workers 4`) ➔ `npm run verify`.
+   - **CI:** `04-ci-pipeline` ➔ `npm run verify`.
 
-## 2. 5-Stage Coverage Ladder (`1 Test at a Time`)
+## 2. 5-Stage Coverage Ladder (`Smart Auto-Drain`)
 1. **Stage 0:** `init`/`sync`, `05-skill-migrator`, `00-env-bootstrap` (`.auth/*.json`).
-2. **Stage 1 (`@p0`):** `01-cli-explorer` ➔ `02-solid-architect` ➔ `verify`.
+2. **Stage 1 (`@p0`):** `01-cli-explorer` ➔ `02-solid-architect` ➔ `verify:fast` ➔ `verify`.
 3. **Stage 2 (`@smoke`/`@regression`):** `multi-persona-auth`, `boundary-analysis`, `state-interruption`.
 4. **Stage 3:** `WizardStepContract`, `ApiClientContract`, `cross-portal-handoff`.
-5. **Stage 4:** `04-ci-pipeline` + continuous `03-drift-healer`.
+5. **Stage 4:** `04-ci-pipeline` + `03-drift-healer`.
