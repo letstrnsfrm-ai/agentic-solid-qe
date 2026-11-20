@@ -48,8 +48,8 @@ function walkFiles(dir, extFilter) {
   return files;
 }
 
-function rel(filePath) {
-  return path.relative(ROOT, filePath).replace(/\\/g, '/');
+function relFrom(rootDir, filePath) {
+  return path.relative(rootDir, filePath).replace(/\\/g, '/');
 }
 
 function parseProvenanceMetadata(content) {
@@ -83,7 +83,7 @@ function parseProvenanceMetadata(content) {
   };
 }
 
-function parseShardFile(filePath, squadId = 'global') {
+function parseShardFile(filePath, squadId = 'global', rootDir = process.cwd()) {
   const content = fs.readFileSync(filePath, 'utf8');
   const titleMatch = content.match(/^#\s+(.+)$/m);
   const title = titleMatch ? titleMatch[1].trim() : path.basename(filePath, '.md');
@@ -94,7 +94,7 @@ function parseShardFile(filePath, squadId = 'global') {
   return {
     id: path.basename(filePath, '.md'),
     squad: squadId,
-    path: rel(filePath),
+    path: relFrom(rootDir, filePath),
     title,
     routes,
     lines,
@@ -105,8 +105,10 @@ function parseShardFile(filePath, squadId = 'global') {
   };
 }
 
-export function buildDomainGraph({ writeToDisk = true } = {}) {
-  const domainMemoryPath = path.join(DOMAIN_DIR, 'domain-memory.md');
+export function buildDomainGraph({ rootDir = process.cwd(), writeToDisk = true } = {}) {
+  const domainDir = path.join(rootDir, '.agents/domain');
+  const graphOut = path.join(domainDir, 'domain-graph.json');
+  const domainMemoryPath = path.join(domainDir, 'domain-memory.md');
   let appName = 'Unknown';
   let baseUrl = 'http://localhost:3000';
   if (fs.existsSync(domainMemoryPath)) {
@@ -118,7 +120,7 @@ export function buildDomainGraph({ writeToDisk = true } = {}) {
   }
 
   // 1. Scan Tier 1 Domain Sub-Hubs (.agents/domain/domains/<squad>/index.md)
-  const domainsRoot = path.join(DOMAIN_DIR, 'domains');
+  const domainsRoot = path.join(domainDir, 'domains');
   const domainHubs = [];
   const allShards = [];
 
@@ -129,7 +131,7 @@ export function buildDomainGraph({ writeToDisk = true } = {}) {
       const hubIndex = path.join(domainsRoot, squadId, 'index.md');
       const squadShardsDir = path.join(domainsRoot, squadId, 'shards');
       const squadShardFiles = walkFiles(squadShardsDir, '.md');
-      const parsedSquadShards = squadShardFiles.map((f) => parseShardFile(f, squadId));
+      const parsedSquadShards = squadShardFiles.map((f) => parseShardFile(f, squadId, rootDir));
       allShards.push(...parsedSquadShards);
 
       if (fs.existsSync(hubIndex)) {
@@ -138,7 +140,7 @@ export function buildDomainGraph({ writeToDisk = true } = {}) {
         const provenance = parseProvenanceMetadata(hubContent);
         domainHubs.push({
           squad: squadId,
-          hubPath: rel(hubIndex),
+          hubPath: relFrom(rootDir, hubIndex),
           title: titleMatch ? titleMatch[1].trim() : squadId,
           lines: hubContent.split('\n').length,
           ownerSquad: provenance.ownerSquad,
@@ -151,10 +153,10 @@ export function buildDomainGraph({ writeToDisk = true } = {}) {
   }
 
   // 2. Scan Flat / Global Shards (.agents/domain/shards/*.md)
-  const globalShardsDir = path.join(DOMAIN_DIR, 'shards');
+  const globalShardsDir = path.join(domainDir, 'shards');
   const globalShardFiles = walkFiles(globalShardsDir, '.md');
   for (const f of globalShardFiles) {
-    allShards.push(parseShardFile(f, 'global'));
+    allShards.push(parseShardFile(f, 'global', rootDir));
   }
 
   // 3. Build Route -> Shard Lookup Table for O(1) Agent Token Routing
@@ -187,20 +189,21 @@ export function buildDomainGraph({ writeToDisk = true } = {}) {
     codeownersRules,
   };
 
-  if (writeToDisk && fs.existsSync(DOMAIN_DIR)) {
-    fs.writeFileSync(GRAPH_OUT, JSON.stringify(graph, null, 2) + '\n', 'utf8');
+  if (writeToDisk && fs.existsSync(domainDir)) {
+    fs.writeFileSync(graphOut, JSON.stringify(graph, null, 2) + '\n', 'utf8');
   }
 
   return graph;
 }
 
-export function seedShardsFromTapes() {
-  const tapesDir = path.join(ROOT, '.exploratory/tapes');
+export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
+  const domainDir = path.join(rootDir, '.agents/domain');
+  const tapesDir = path.join(rootDir, '.exploratory/tapes');
   if (!fs.existsSync(tapesDir)) return [];
 
-  const existingGraph = buildDomainGraph({ writeToDisk: false });
+  const existingGraph = buildDomainGraph({ rootDir, writeToDisk: false });
   const indexedRoutes = new Set(Object.keys(existingGraph.routeIndex));
-  const domainMemoryPath = path.join(DOMAIN_DIR, 'domain-memory.md');
+  const domainMemoryPath = path.join(domainDir, 'domain-memory.md');
 
   const today = new Date().toISOString().slice(0, 10);
   const createdShards = [];
@@ -235,8 +238,8 @@ export function seedShardsFromTapes() {
     );
 
     const targetShardsDir = matchedHub
-      ? path.join(DOMAIN_DIR, 'domains', matchedHub.squad, 'shards')
-      : path.join(DOMAIN_DIR, 'shards');
+      ? path.join(domainDir, 'domains', matchedHub.squad, 'shards')
+      : path.join(domainDir, 'shards');
     fs.mkdirSync(targetShardsDir, { recursive: true });
 
     const shardPath = path.resolve(targetShardsDir, `${scenarioId}.md`);
@@ -303,7 +306,7 @@ ${compLines}
 ${actorLines}${networkLines}`;
 
     fs.writeFileSync(shardPath, content, 'utf8');
-    const shardRel = rel(shardPath);
+    const shardRel = relFrom(rootDir, shardPath);
     createdShards.push(shardRel);
     for (const r of routeList) indexedRoutes.add(r);
 
@@ -311,7 +314,7 @@ ${actorLines}${networkLines}`;
     const routeSummary = routeList.map((r) => `\`${r}\``).join(', ');
     const summaryText = (tape.title || scenarioId).replace(/\|/g, '-');
     if (matchedHub) {
-      const hubIndexFile = path.join(ROOT, matchedHub.hubPath);
+      const hubIndexFile = path.join(rootDir, matchedHub.hubPath);
       if (fs.existsSync(hubIndexFile)) {
         const hubContent = fs.readFileSync(hubIndexFile, 'utf8');
         if (!hubContent.includes(path.basename(shardPath))) {
@@ -342,6 +345,7 @@ const isMain =
   fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   const seedFromTapes = process.argv.includes('--seed-from-tapes');
+  const skipMap = process.argv.includes('--skip-map');
   if (seedFromTapes) {
     const seeded = seedShardsFromTapes();
     if (seeded.length > 0) {
@@ -351,10 +355,12 @@ if (isMain) {
     }
   }
   const graph = buildDomainGraph({ writeToDisk: true });
-  try {
-    buildSystemMap({ quiet: true });
-  } catch {
-    /* non-fatal if reports/ cannot be written */
+  if (!skipMap) {
+    try {
+      buildSystemMap({ quiet: true });
+    } catch {
+      /* non-fatal if reports/ cannot be written */
+    }
   }
   console.log(
     `🧠 Compiled Federated Domain Graph -> .agents/domain/domain-graph.json (${graph.summary.totalDomainHubs} domain hub(s), ${graph.summary.totalShards} shard(s), ${Object.keys(graph.routeIndex).length} indexed route(s)).`

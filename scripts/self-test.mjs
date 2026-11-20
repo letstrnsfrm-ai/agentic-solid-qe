@@ -3760,8 +3760,178 @@ test('36. Security Audit Remediation: blocks manifest deletion traversal, code i
   }
 });
 
+test('37. Orchestrator Loop Speed Suite: parallel verify-fast, Smart Auto-Drain --loop, drift-heal safety, parallel JSON status & adopter sync', async () => {
+  const { runFastVerify, sanitizeSpecList } = await import('./verify-fast.mjs');
+  const {
+    runOrchestratorLoop,
+    buildOrchestrationBlueprint,
+    formatCompactBlueprint,
+    computeBlueprintFingerprint,
+  } = await import('./orchestrate.mjs');
+  const { parsePlaywrightJsonSpecStatus } = await import('./migration-wave-factory.mjs');
 
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-orch-speed-'));
+  try {
+    // 1. sanitizeSpecList blocks traversal & flag injection
+    assert.deepEqual(sanitizeSpecList(['tests/login.spec.ts', './tests/sub/a.spec.ts'], tmpRoot), [
+      'tests/login.spec.ts',
+      'tests/sub/a.spec.ts',
+    ]);
+    assert.throws(() => sanitizeSpecList(['../evil.spec.ts'], tmpRoot), /Security Error/);
+    assert.throws(() => sanitizeSpecList(['--grep=foo'], tmpRoot), /Security Error/);
 
+    // 2. sync-skills init propagates verify-fast.mjs, verify:fast, incremental tsconfig, and *.tsbuildinfo gitignore
+    const initRes = runNode(
+      SYNC_SCRIPT,
+      ['init', tmpRoot, '--url', 'https://shop.example.com', '--name', 'SpeedShop'],
+      REPO_ROOT
+    );
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+    assert.ok(fs.existsSync(path.join(tmpRoot, 'scripts/verify-fast.mjs')), 'verify-fast.mjs must be synced');
+    const pkg = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'package.json'), 'utf8'));
+    assert.equal(pkg.scripts['verify:fast'], 'node scripts/verify-fast.mjs --fast');
+    assert.equal(pkg.scripts.verify, 'node scripts/verify-fast.mjs');
+    const tsCfg = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'tsconfig.json'), 'utf8'));
+    assert.equal(tsCfg.compilerOptions.incremental, true);
+    assert.equal(tsCfg.compilerOptions.tsBuildInfoFile, '.tsbuildinfo');
+    const gitignore = fs.readFileSync(path.join(tmpRoot, '.gitignore'), 'utf8');
+    assert.match(gitignore, /\*\.tsbuildinfo/);
 
+    // 3. Seed 2 uncompiled Session Tapes and verify --loop drains BOTH in a single auto-drain pass
+    const tapesDir = path.join(tmpRoot, '.exploratory/tapes');
+    fs.mkdirSync(tapesDir, { recursive: true });
+    for (const [id, title, route, btn, comp] of [
+      ['fast-cart-flow', 'Fast Cart Flow', '/cart', 'Open Cart', 'CartPanelComponent'],
+      ['fast-profile-flow', 'Fast Profile Flow', '/profile', 'Save Profile', 'ProfilePanelComponent'],
+    ]) {
+      fs.writeFileSync(
+        path.join(tapesDir, `${id}.json`),
+        JSON.stringify(
+          {
+            schemaVersion: '1.0.0',
+            scenarioId: id,
+            title,
+            charter: 'happy-path-baseline',
+            baseUrl: 'https://shop.example.com',
+            recordedAt: '2026-11-20T00:00:00Z',
+            persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standardUser' },
+            preconditions: ['User has valid credentials'],
+            networkContracts: [],
+            semanticSteps: [
+              {
+                stepIndex: 1,
+                action: 'goto',
+                intent: `Navigate to ${route}`,
+                businessStep: `Open ${title}`,
+                pageRoute: route,
+                componentCandidate: comp,
+                locatorContract: { strategy: 'getByText', value: route },
+              },
+              {
+                stepIndex: 2,
+                action: 'click',
+                intent: `Trigger ${btn}`,
+                businessStep: `Submit ${title}`,
+                pageRoute: route,
+                componentCandidate: comp,
+                locatorContract: { strategy: 'getByRole', role: 'button', value: btn },
+              },
+            ],
+            expectedStates: [
+              {
+                assertionType: 'toBeVisible',
+                targetComponent: comp,
+                targetProperty: 'root',
+                expectedValueRef: 'UserBuilder.standardUser().username',
+              },
+            ],
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+    }
 
+    const beforeBp = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(beforeBp.healthSnapshot.uncompiledTapes, 2);
+    const compactText = formatCompactBlueprint(beforeBp);
+    assert.match(compactText, /^CORTEX \| SpeedShop/);
+    assert.ok(computeBlueprintFingerprint(beforeBp).includes('02-solid-architect'));
 
+    // Remove tsconfig.json in isolated tmpRoot (no node_modules installed there) so static verify exercises domainGraph + auditSolid + validateTapes cleanly
+    fs.unlinkSync(path.join(tmpRoot, 'tsconfig.json'));
+
+    const loopRes = await runOrchestratorLoop(tmpRoot, {
+      maxSteps: 5,
+      skipTests: true,
+      quiet: true,
+    });
+    assert.equal(loopRes.stepsExecuted.length, 1, 'Batch compiler should drain both tapes in 1 loop step');
+    assert.deepEqual(loopRes.stepsExecuted[0].compiledTapes.sort(), ['fast-cart-flow', 'fast-profile-flow']);
+    assert.equal(loopRes.stoppedReason, 'drained-clean');
+    assert.equal(loopRes.finalVerify?.ok, true);
+    assert.equal(loopRes.finalBlueprint.healthSnapshot.uncompiledTapes, 0);
+    assert.equal(loopRes.finalBlueprint.healthSnapshot.automatedSpecs, 2);
+
+    // 4. Genuine app regression failure must PAUSE --loop at human-triage-required (never weaken expect())
+    const errDir = path.join(tmpRoot, 'test-results/regression-case');
+    fs.mkdirSync(errDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(errDir, 'error-context.md'),
+      `# Test info\n- Spec: tests/fast-cart-flow.spec.ts\n## Error\nError: expect(locator).toHaveText("Order Confirmed") failed\nExpected: "Order Confirmed"\nReceived: "500 Internal Server Error"\n`,
+      'utf8'
+    );
+    const regLoop = await runOrchestratorLoop(tmpRoot, { maxSteps: 3, skipTests: true, quiet: true });
+    assert.equal(regLoop.stoppedReason, 'human-triage-required');
+    assert.equal(regLoop.triageReport?.rootCause?.category, 'app-regression');
+
+    // 5. High-confidence locator drift failure must AUTO-HEAL, verify, clear artifact, and drain cleanly
+    fs.mkdirSync(path.join(tmpRoot, '.agent-browser'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agent-browser/page-01.yml'),
+      `- main [ref=e1]:\n  - heading "Cart" [level=1] [ref=e2]\n  - button "Open Shopping Cart" [ref=e12]\n`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(errDir, 'error-context.md'),
+      `# Test info\n- Spec: tests/fast-cart-flow.spec.ts\n## Error\nTimeoutError: waiting for getByRole('button', { name: 'Open Cart', exact: true })\n`,
+      'utf8'
+    );
+    const healLoop = await runOrchestratorLoop(tmpRoot, { maxSteps: 5, skipTests: true, quiet: true });
+    assert.equal(healLoop.stepsExecuted[0].skill, '03-drift-healer');
+    assert.equal(healLoop.stepsExecuted[0].status, 'healed-and-verified');
+    assert.equal(healLoop.stoppedReason, 'drained-clean');
+    assert.equal(healLoop.finalBlueprint.healthSnapshot.failingTestArtifacts, 0);
+
+    // 6. Parallel Playwright JSON status parser distinguishes passing vs failing specs
+    const samplePwJson = JSON.stringify({
+      suites: [
+        {
+          file: 'fast-cart-flow.spec.ts',
+          specs: [{ tests: [{ results: [{ status: 'passed' }] }] }],
+        },
+        {
+          file: 'fast-profile-flow.spec.ts',
+          specs: [{ tests: [{ results: [{ status: 'failed' }] }] }],
+        },
+      ],
+    });
+    const statusMap = parsePlaywrightJsonSpecStatus(samplePwJson, [
+      'tests/fast-cart-flow.spec.ts',
+      'tests/fast-profile-flow.spec.ts',
+    ]);
+    assert.equal(statusMap.get('tests/fast-cart-flow.spec.ts'), 'passed');
+    assert.equal(statusMap.get('tests/fast-profile-flow.spec.ts'), 'failed');
+
+    // 7. Direct parallel verify-fast on main REPO_ROOT (static checks with incremental tsc)
+    const fastRes = await runFastVerify({ rootDir: REPO_ROOT, fast: true, skipTests: true, quiet: true });
+    assert.equal(fastRes.ok, true, `runFastVerify failed: ${JSON.stringify(fastRes.failedStage)}`);
+    assert.equal(fastRes.stages.typecheck.status, 0);
+    assert.equal(fastRes.stages.domainGraph.status, 0);
+    assert.equal(fastRes.stages.auditSolid.status, 0);
+    assert.equal(fastRes.stages.validateTapes.status, 0);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});

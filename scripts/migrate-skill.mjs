@@ -77,6 +77,7 @@ const CORE_ENGINE_SCRIPTS = new Set([
   'scripts/dotnet-enterprise-analyzer.mjs',
   'scripts/migration-wave-factory.mjs',
   'scripts/orchestrate.mjs',
+  'scripts/verify-fast.mjs',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',
   'scripts/validate-tapes.mjs',

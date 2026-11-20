@@ -6,33 +6,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildDomainGraph } from './build-domain-graph.mjs';
 
-const ROOT = process.cwd();
 const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
-
-const args = process.argv.slice(2);
-let filterSquad = null;
-let forceSummary = false;
-let forceFull = false;
-let jsonOnly = false;
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--squad' && args[i + 1]) {
-    filterSquad = args[++i].trim().toLowerCase();
-  } else if (args[i].startsWith('--squad=')) {
-    filterSquad = args[i].slice('--squad='.length).trim().toLowerCase();
-  } else if (args[i] === '--summary') {
-    forceSummary = true;
-  } else if (args[i] === '--full') {
-    forceFull = true;
-  } else if (args[i] === '--json') {
-    jsonOnly = true;
-  }
-}
-if (filterSquad && !/^[a-z0-9-]+$/.test(filterSquad)) {
-  console.error(`❌ Invalid --squad value '${filterSquad}'. Must match ^[a-z0-9-]+$.`);
-  process.exit(1);
-}
 
 function walkFiles(dir, extFilter) {
   if (!fs.existsSync(dir)) return [];
@@ -57,14 +34,26 @@ function walkFiles(dir, extFilter) {
   return files;
 }
 
-// 0. Compile Federated Domain Graph (.agents/domain/domain-graph.json)
-const domainGraph = buildDomainGraph({ writeToDisk: true });
-const { appName, baseUrl } = domainGraph.targetApp;
-const needsTargetUrlConfig =
-  baseUrl.includes('localhost:3000') || baseUrl.includes('your-app-url');
-const savedAuthSessions = walkFiles(path.join(ROOT, '.auth'), '.json').map((f) =>
-  path.relative(ROOT, f)
-);
+export function analyzeCoverage(
+  rootDir = process.cwd(),
+  { squad = null, summary = false, full = false, writeGraph = true } = {}
+) {
+  const ROOT = rootDir;
+  const filterSquad = squad ? String(squad).trim().toLowerCase() : null;
+  if (filterSquad && !/^[a-z0-9-]+$/.test(filterSquad)) {
+    throw new Error(`Invalid --squad value '${filterSquad}'. Must match ^[a-z0-9-]+$.`);
+  }
+  const forceSummary = Boolean(summary);
+  const forceFull = Boolean(full);
+
+  // 0. Compile Federated Domain Graph (.agents/domain/domain-graph.json)
+  const domainGraph = buildDomainGraph({ rootDir: ROOT, writeToDisk: writeGraph });
+  const { appName, baseUrl } = domainGraph.targetApp;
+  const needsTargetUrlConfig =
+    baseUrl.includes('localhost:3000') || baseUrl.includes('your-app-url');
+  const savedAuthSessions = walkFiles(path.join(ROOT, '.auth'), '.json').map((f) =>
+    path.relative(ROOT, f)
+  );
 
 // 1. Automated Specs & Test Cases
 const specFiles = walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
@@ -510,8 +499,45 @@ const report = isCompact
       recommendedNextAction,
     };
 
-if (!jsonOnly) {
-  console.log('📊 Agentic-SOLID-QE Coverage & Federated Brain Snapshot:\n');
+  return report;
 }
-console.log(JSON.stringify(report, null, 2));
 
+const isMain =
+  Boolean(process.argv[1]) &&
+  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+if (isMain) {
+  const args = process.argv.slice(2);
+  let filterSquad = null;
+  let forceSummary = false;
+  let forceFull = false;
+  let jsonOnly = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--squad' && args[i + 1]) {
+      filterSquad = args[++i].trim().toLowerCase();
+    } else if (args[i].startsWith('--squad=')) {
+      filterSquad = args[i].slice('--squad='.length).trim().toLowerCase();
+    } else if (args[i] === '--summary') {
+      forceSummary = true;
+    } else if (args[i] === '--full') {
+      forceFull = true;
+    } else if (args[i] === '--json') {
+      jsonOnly = true;
+    }
+  }
+  let report;
+  try {
+    report = analyzeCoverage(process.cwd(), {
+      squad: filterSquad,
+      summary: forceSummary,
+      full: forceFull,
+      writeGraph: true,
+    });
+  } catch (err) {
+    console.error(`❌ ${err.message}`);
+    process.exit(1);
+  }
+  if (!jsonOnly) {
+    console.log('📊 Agentic-SOLID-QE Coverage & Federated Brain Snapshot:\n');
+  }
+  console.log(JSON.stringify(report, null, 2));
+}

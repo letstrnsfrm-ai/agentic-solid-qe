@@ -718,6 +718,33 @@ function runAgentBrowser(session, args, { allowFail = false } = {}) {
   return (res.stdout || '').trim();
 }
 
+export function runAgentBrowserAsync(session, args, { allowFail = false } = {}) {
+  const { command, prefixArgs } = resolveLocalBin('agent-browser');
+  const fullArgs = [...prefixArgs, '--session', session, ...args];
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, fullArgs, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', (err) => {
+      if (allowFail) resolve('');
+      else reject(err);
+    });
+    child.on('close', (code) => {
+      if (code !== 0 && !allowFail) {
+        reject(new Error(`agent-browser failed (${args.join(' ')}): ${(stderr || stdout || '').trim()}`));
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+  });
+}
+
 async function collectSinglePassCdpTelemetry(cdpPort) {
   if (!cdpPort) return null;
   try {
@@ -769,7 +796,7 @@ async function waitForLiveHandshake(timeoutMs = 60_000) {
         /* still writing */
       }
     }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`Timed out waiting for Point-A spec CDP handshake (${LIVE_SESSION_FILE}).`);
 }
@@ -944,8 +971,13 @@ async function cmdStart(args) {
     resolveConfinedPath(ROOT, authPath, '.auth/', '--auth');
   }
 
-  const snap = runAgentBrowser(session, ['snapshot', '-i'], { allowFail: true });
-  const liveUrl = runAgentBrowser(session, ['eval', 'location.href'], { allowFail: true }) || currentUrl;
+  const [snap, rawLiveUrl] = await Promise.all([
+    runAgentBrowserAsync(session, ['snapshot', '-i'], { allowFail: true }),
+    fromSpec && currentUrl
+      ? Promise.resolve(currentUrl)
+      : runAgentBrowserAsync(session, ['eval', 'location.href'], { allowFail: true }),
+  ]);
+  const liveUrl = rawLiveUrl || currentUrl;
   const draftTape = createDraftTape({
     scenarioId,
     title: scenarioId.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
@@ -1018,7 +1050,7 @@ export function validateExploreActionTuple(tuple, variables = {}) {
   return { action, interpolatedTarget, interpolatedVal };
 }
 
-async function executeActions(actionTuples, { stepTitle, scope = '', json = false }) {
+async function executeActions(actionTuples, { stepTitle, scope = '', json = false, skipNetwork = false }) {
   const state = readJsonOrNull(LIVE_STATE_FILE);
   const draftTape = readJsonOrNull(LIVE_DRAFT_TAPE_FILE);
   if (!state || !draftTape) {
@@ -1084,13 +1116,16 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
     if (rec) recorded.push(rec);
   }
 
-  const nextSnap = runAgentBrowser(session, ['snapshot', '-i'], { allowFail: true });
-  const cdpTelemetry = await collectSinglePassCdpTelemetry(state.cdpPort);
-  const nextUrl =
-    cdpTelemetry?.url ||
-    (runAgentBrowser(session, ['eval', 'location.href'], { allowFail: true }) || state.url).replace(/^"|"$/g, '');
-  const errorsOut = runAgentBrowser(session, ['errors'], { allowFail: true });
-  const netOut = runAgentBrowser(session, ['network', 'requests'], { allowFail: true });
+  // Parallel post-action telemetry via agent-browser daemon (avoids redundant Playwright connectOverCDP reconnects)
+  const [nextSnap, rawNextUrl, errorsOut, netOut] = await Promise.all([
+    runAgentBrowserAsync(session, ['snapshot', '-i'], { allowFail: true }),
+    runAgentBrowserAsync(session, ['eval', 'location.href'], { allowFail: true }),
+    runAgentBrowserAsync(session, ['errors'], { allowFail: true }),
+    skipNetwork
+      ? Promise.resolve('')
+      : runAgentBrowserAsync(session, ['network', 'requests'], { allowFail: true }),
+  ]);
+  const nextUrl = (rawNextUrl || state.url).replace(/^"|"$/g, '');
 
   const newContracts = parseNetworkContracts(netOut, draftTape.networkContracts || []);
   if (newContracts.length > 0) {
@@ -1305,46 +1340,41 @@ async function cmdFinish(args) {
     seederTip = `Detected ${mutatingContracts.length} mutating API call(s) (${mutatingContracts[0].method} ${mutatingContracts[0].urlPattern}); re-run with --emit-seeder to promote Point A to a <300ms StateSeederContract.`;
   }
 
-  const valRes = spawnSync(process.execPath, [path.join(__dirname, 'validate-tapes.mjs')], {
-    cwd: ROOT,
-    stdio: 'inherit',
-  });
-  if (valRes.status !== 0) {
-    process.exit(valRes.status ?? 1);
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const valErrors = validateTapeObject(finalized, `${scenarioId}.json`, { expectedScenarioId: scenarioId });
+  if (valErrors.length > 0) {
+    console.error(`❌ Tape validation failed:\n  - ${valErrors.join('\n  - ')}`);
+    process.exit(1);
   }
 
+  let compiledSpecRel = `tests/${scenarioId}.spec.ts`;
   if (shouldCompile) {
-    const compRes = spawnSync(
-      process.execPath,
-      [path.join(__dirname, 'compile-tape.mjs'), scenarioId, '--apply'],
-      { cwd: ROOT, stdio: 'inherit' }
-    );
-    if (compRes.status !== 0) {
-      process.exit(compRes.status ?? 1);
-    }
+    const { compileSessionTape } = await import('./compile-tape.mjs');
+    const report = compileSessionTape({
+      tapeInput: scenarioId,
+      apply: true,
+      rootDir: ROOT,
+      skipMap: true,
+    });
+    const specOp = (report.operations || []).find((op) => op.file && op.file.endsWith('.spec.ts'));
+    if (specOp?.file) compiledSpecRel = specOp.file;
   }
 
   let verified = false;
+  let verifyMs = null;
   if (shouldVerify) {
-    const tscBin = resolveLocalBin('tsc');
-    const tscRes = spawnSync(tscBin.command, [...tscBin.prefixArgs, '--noEmit'], { cwd: ROOT, stdio: 'inherit' });
-    if (tscRes.status !== 0) process.exit(tscRes.status ?? 1);
-
-    const auditRes = spawnSync(process.execPath, [path.join(__dirname, 'audit-solid.mjs')], {
-      cwd: ROOT,
-      stdio: 'inherit',
+    const { runFastVerify } = await import('./verify-fast.mjs');
+    const specsToRun = fs.existsSync(path.join(ROOT, compiledSpecRel)) ? [compiledSpecRel] : [];
+    const vRes = await runFastVerify({
+      rootDir: ROOT,
+      fast: true,
+      specs: specsToRun,
+      skipMap: true,
+      quiet: jsonOut,
     });
-    if (auditRes.status !== 0) process.exit(auditRes.status ?? 1);
-
-    const specRel = `tests/${scenarioId}.spec.ts`;
-    if (fs.existsSync(path.join(ROOT, specRel))) {
-      const pwBin = resolveLocalBin('playwright');
-      const pwRes = spawnSync(
-        pwBin.command,
-        [...pwBin.prefixArgs, 'test', specRel, '--project=chromium'],
-        { cwd: ROOT, stdio: 'inherit' }
-      );
-      if (pwRes.status !== 0) process.exit(pwRes.status ?? 1);
+    verifyMs = vRes.totalMs;
+    if (!vRes.ok) {
+      process.exit(1);
     }
     verified = true;
   }
@@ -1355,6 +1385,7 @@ async function cmdFinish(args) {
       tape: `.exploratory/tapes/${scenarioId}.json`,
       compiled: shouldCompile,
       verified,
+      ...(verifyMs !== null ? { verifyMs } : {}),
       ...(seederFile ? { seederFile } : {}),
       ...(seederTip ? { seederTip } : {}),
     },
@@ -1374,24 +1405,26 @@ async function main() {
     const stepTitle = getFlagValue(args, '--step');
     const scope = getFlagValue(args, '--scope', '');
     const json = args.includes('--json');
+    const skipNetwork = args.includes('--no-network');
     const clean = [];
     for (let i = 1; i < args.length; i++) {
       if (args[i] === '--step' || args[i] === '--scope') {
         i++;
         continue;
       }
-      if (args[i] === '--json') continue;
+      if (args[i] === '--json' || args[i] === '--no-network') continue;
       clean.push(args[i]);
     }
-    return executeActions([clean], { stepTitle, scope, json });
+    return executeActions([clean], { stepTitle, scope, json, skipNetwork });
   }
   if (cmd === 'batch') {
     const stepTitle = getFlagValue(args, '--step');
     const scope = getFlagValue(args, '--scope', '');
     const json = args.includes('--json');
+    const skipNetwork = args.includes('--no-network');
     const tuples = JSON.parse(args[1] || '[]');
     if (!Array.isArray(tuples)) throw new Error('batch expects a JSON array of action tuples.');
-    return executeActions(tuples, { stepTitle, scope, json });
+    return executeActions(tuples, { stepTitle, scope, json, skipNetwork });
   }
   if (cmd === 'actor') return cmdActor(args.slice(1));
   if (cmd === 'capture') return cmdCapture(args.slice(1));

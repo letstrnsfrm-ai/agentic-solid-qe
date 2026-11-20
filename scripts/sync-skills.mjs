@@ -37,7 +37,8 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help
 🧠 Cortex / ASQE — Agentic-SOLID-QE Unified CLI (cortex | asqe | agentic-solid-qe)
 
 Usage:
-  cortex orchestrate           Run Master Orchestrator Diagnostic & 5-Stage Coverage Maturity Snapshot (alias: cortex status)
+  cortex orchestrate [--loop]  Run Master Orchestrator Diagnostic or Smart Auto-Drain Loop (--loop) (alias: cortex status)
+  cortex verify [--fast]       Run parallel two-tier verification gate (incremental tsc + domain:graph + audit + tapes + tests)
   cortex upgrade               Resolve latest release tag and incrementally sync skills, contracts, and upgrade patches
   cortex report                Emit opt-in sanitized governance telemetry (schemaVersion: 1.0.0) to Cortex Cloud
   cortex compile [<tape>]      Compile Session Tape into SOLID Components, Pages, Builders, Fixtures & Spec (--apply)
@@ -59,6 +60,7 @@ Usage:
 const subcommandDelegateMap = {
   orchestrate: 'orchestrate.mjs',
   status: 'orchestrate.mjs',
+  verify: 'verify-fast.mjs',
   upgrade: 'upgrade-framework.mjs',
   report: 'report-cloud.mjs',
   compile: 'compile-tape.mjs',
@@ -739,7 +741,8 @@ function mergeConsumerPackageJson() {
     'audit:solid': 'node scripts/audit-solid.mjs',
     'validate:tapes': 'node scripts/validate-tapes.mjs',
     'audit:security': 'npm audit --audit-level=high',
-    verify: 'npm run typecheck && npm run domain:graph && npm run audit:solid && npm run validate:tapes && npm run test:smoke',
+    'verify:fast': 'node scripts/verify-fast.mjs --fast',
+    verify: 'node scripts/verify-fast.mjs',
     'init:app': 'node scripts/sync-skills.mjs init --reset',
     'sync:skills': 'node scripts/sync-skills.mjs',
     'upgrade:skills': 'node scripts/upgrade-framework.mjs',
@@ -918,11 +921,20 @@ function mergeConsumerTsConfig() {
     const raw = fs.readFileSync(tsconfigPath, 'utf8');
     const parsed = JSON.parse(stripJsonCommentsAndTrailingCommas(raw));
     parsed.compilerOptions = parsed.compilerOptions || {};
+    let modified = false;
     if (!parsed.compilerOptions.baseUrl) {
       parsed.compilerOptions.baseUrl = '.';
+      modified = true;
+    }
+    if (parsed.compilerOptions.incremental === undefined) {
+      parsed.compilerOptions.incremental = true;
+      modified = true;
+    }
+    if (!parsed.compilerOptions.tsBuildInfoFile) {
+      parsed.compilerOptions.tsBuildInfoFile = '.tsbuildinfo';
+      modified = true;
     }
     parsed.compilerOptions.paths = parsed.compilerOptions.paths || {};
-    let modified = false;
     for (const [alias, target] of Object.entries(requiredPaths)) {
       if (!parsed.compilerOptions.paths[alias]) {
         parsed.compilerOptions.paths[alias] = target;
@@ -934,7 +946,7 @@ function mergeConsumerTsConfig() {
         fs.writeFileSync(tsconfigPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
       }
       console.log(
-        `${dryRun ? '🔍 [DRY-RUN] Would merge' : '🔧 Merged'} @contracts/@components/@pages/@fixtures/@data/@domains/@shared aliases into: tsconfig.json`
+        `${dryRun ? '🔍 [DRY-RUN] Would merge' : '🔧 Merged'} @contracts/@components/@pages/@fixtures/@data/@domains/@shared aliases & incremental cache into: tsconfig.json`
       );
     }
   } catch {
@@ -983,6 +995,7 @@ const REQUIRED_GITIGNORE_ENTRIES = [
   '.env',
   '.env.*',
   '!.env.example',
+  '*.tsbuildinfo',
 ];
 
 /**
@@ -1116,6 +1129,7 @@ const coreEnginePaths = [
   'scripts/dotnet-enterprise-analyzer.mjs',
   'scripts/migration-wave-factory.mjs',
   'scripts/orchestrate.mjs',
+  'scripts/verify-fast.mjs',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',
   'scripts/validate-tapes.mjs',

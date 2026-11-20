@@ -18,3 +18,4 @@ playwright/.cache/
 *.log
 .release-notes.md
 .release-meta.json
+*.tsbuildinfo
