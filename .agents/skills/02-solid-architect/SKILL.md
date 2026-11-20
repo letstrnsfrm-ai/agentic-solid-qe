@@ -5,29 +5,25 @@ description: Compiles JSON Session Tapes 1 test at a time into a deterministic S
 
 # Skill 02: SOLID Playwright Architect
 
-## 0. 1-Test-at-a-Time Auto-Start (`/02-solid-architect [<scenario-id>]`)
-Run `npm run coverage:gaps`, select `<scenario-id>` (or `nextSingleScenarioToAutomate`), and compile & verify **1 Session Tape at a time**.
+## 1. Single-Call Context & Compilation (FR-3.1)
+1. Run `npx cortex context --tape <scenario-id>` (`≤ 400` tok) to view tape DSL and reusable `src/` symbols.
+2. Compile **1 Session Tape at a time**:
+   ```bash
+   npx cortex compile <scenario-id> --compact         # compact dry-run
+   npx cortex compile <scenario-id> --apply --compact # scaffold SOLID TS & sync shard
+   ```
+3. Run `npm run verify:fast -- --specs tests/<spec>.spec.ts` (inner loop), then `npm run verify` once green.
 
-## 1. Deterministic Compilation & Reuse (FR-3.1)
-1. Run `npm run validate:tapes` to verify `.exploratory/tapes/*.json`.
-2. Run `npx cortex compile <scenario-id>` (dry-run) and `npx cortex compile <scenario-id> --apply` (`npm run compile:tape`) to reuse existing classes, scaffold missing SOLID files, and sync shard capabilities.
-3. Follow `references/solid-patterns.md` and `references/complex-orchestration-guide.md`.
+## 2. Non-Negotiable SOLID Rules (FR-3.2, FR-3.3)
+- **SRP (`components/`, `pages/`, `api/`, `seeders/`):** Cap components/steps/seeders at **150 lines**. **Ban `expect()`** outside `tests/*.spec.ts`.
+- **OCP/ISP (`fixtures/`):** Wire Pages, API Clients, Seeders & Multi-Portal `BrowserContext`s via `test.extend<>()`.
+- **LSP/DIP (`contracts/`, `data/`):** Implement contracts; store personas, copy & `RelativeDateHelper` dates in `*.builder.ts`.
+- **Specs (`tests/*.spec.ts`):** Group actions & web-first assertions into business-domain `test.step()` blocks (never UI mechanics) with `@p0`/`@smoke`/`@regression` tags.
 
-## 2. SOLID, Wizard, API & Multi-Portal Rules (FR-3.2)
-- **SRP (`components/`, `pages/`, `api/`):**
-  - Cap `*.component.ts` at **150 lines**. Model conditional steps via `WizardStepContract<TRiskProfile>`.
-  - **Ban `expect()`** in `components/`, `pages/`, and `api/*.client.ts`.
-  - Use `waitForUrl` / `waitForNetwork`, `ApiClientContract`, and `AuthTokenBridge`.
-- **OCP & ISP (`fixtures/`):**
-  - Wire Pages, API Clients, and Multi-Portal contexts (`browser.newContext({ storageState })`) into `test.extend<>()`.
-- **LSP (`contracts/`) & DIP (`data/`):**
-  - Centralize risk profiles, relative dates (`RelativeDateHelper`), and constants in `*.builder.ts`.
-- **Business-Domain `test.step()`, CI Tags & Cross-Portal State (`tests/*.spec.ts`):**
-  - Wrap actions & assertions in business-behaviour `test.step()` blocks (never UI mechanics).
-  - Apply `tags` (`@p0`, `@smoke`, `@regression`) and assert `capturedVariables` across portals/APIs.
-
-## 3. Self-Healing Verification Gate (FR-3.3)
-Heal autonomously until green, then report via `00-master-orchestrator`:
-```bash
-npm run verify
-```
+## 3. Lazy References (Read ONLY When Needed)
+- `references/solid-patterns.md` — Core Component, Page, Builder, Fixture & `test.step()` templates.
+- `references/ui-resilience-and-scale.md` — Overlays, iframes, portals, Shadow DOM & worker-scoped fixtures.
+- `references/complex-orchestration-guide.md` — Pattern A/B/C/D decision matrix.
+- `references/pattern-wizard-steps.md` — Pattern A: `WizardStepContract<T>`.
+- `references/pattern-api-and-seeders.md` — Pattern B/D: `ApiClientContract`, `resumesFrom`, `StateSeederContract`.
+- `references/pattern-cross-portal.md` — Pattern C: Multi-actor isolated `BrowserContext`s.

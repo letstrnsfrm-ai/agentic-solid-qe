@@ -51,6 +51,8 @@ Usage:
   cortex wave [options]        2,000-test Squad Wave Factory, Wave-0 Seeders/Flows & HTML Parity Dashboard
   cortex graph                 Compile 3-Tier Federated Brain (.agents/domain/domain-graph.json)
   cortex map [--out <path>]    Generate interactive HTML System & Business Flow Map (reports/system-map.html)
+  cortex context [options]     Build single-call <=400-token Context Pack (--route/--squad/--tape/--spec)
+  cortex tape <cmd> [args]     Compact Session Tape CLI (list | show | clone | patch) with v1 validation
   cortex gaps                  Run Coverage, Staleness & Traceability Analyzer
   cortex audit                 Run SOLID, Token Budget & Domain Shard Gate
 `);
@@ -60,6 +62,8 @@ Usage:
 const subcommandDelegateMap = {
   orchestrate: 'orchestrate.mjs',
   status: 'orchestrate.mjs',
+  context: 'context-pack.mjs',
+  tape: 'tape-cli.mjs',
   verify: 'verify-fast.mjs',
   upgrade: 'upgrade-framework.mjs',
   report: 'report-cloud.mjs',
@@ -734,6 +738,8 @@ function mergeConsumerPackageJson() {
     'domain:graph': 'node scripts/build-domain-graph.mjs',
     map: 'node scripts/build-system-map.mjs',
     'compile:tape': 'node scripts/compile-tape.mjs',
+    context: 'node scripts/context-pack.mjs',
+    tape: 'node scripts/tape-cli.mjs',
     'migrate:skill': 'node scripts/migrate-skill.mjs',
     'migrate:wave': 'node scripts/migration-wave-factory.mjs',
     'coverage:gaps': 'node scripts/analyze-coverage.mjs',
@@ -1119,6 +1125,9 @@ const coreEnginePaths = [
   '.github/prompts',
   '.claude/commands',
   'CHANGELOG.json',
+  'scripts/lib/cli-output.mjs',
+  'scripts/context-pack.mjs',
+  'scripts/tape-cli.mjs',
   'scripts/build-domain-graph.mjs',
   'scripts/build-system-map.mjs',
   'scripts/compile-tape.mjs',

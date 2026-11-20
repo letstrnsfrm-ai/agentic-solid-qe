@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDomainGraph, seedShardsFromTapes } from './build-domain-graph.mjs';
 import { buildSystemMap } from './build-system-map.mjs';
+import { isCompactMode } from './lib/cli-output.mjs';
 import {
   FORBIDDEN_IDENTIFIERS,
   isSafeClassName,
@@ -1849,6 +1850,26 @@ export function finalizeBatchDomainRefresh(rootDir = process.cwd(), { skipMap = 
   return graph;
 }
 
+export function formatCompactCompileReport(report) {
+  const ops = Array.isArray(report.operations) ? report.operations : [];
+  const created = ops.filter((f) => f.action === 'create').map((f) => f.file || f.path);
+  const updated = ops.filter((f) => f.action === 'update').map((f) => f.file || f.path);
+  const reused = ops.filter((f) => f.action === 'reuse' || f.action === 'skip').map((f) => f.file || f.path);
+  const lines = [
+    `COMPILE | ${String(report.mode || 'dry-run').toUpperCase()} | scenario=${report.scenarioId} | layout=${report.targetLayout || 'global-flat'}`,
+    `FILES   | create=${created.length} update=${updated.length} reuse=${reused.length}${report.warnings?.length ? ` warnings=${report.warnings.length}` : ''}`,
+  ];
+  if (created.length) lines.push(`CREATE  | ${created.join(', ')}`);
+  if (updated.length) lines.push(`UPDATE  | ${updated.join(', ')}`);
+  if (reused.length) lines.push(`REUSE   | ${reused.slice(0, 6).join(', ')}${reused.length > 6 ? ` (+${reused.length - 6})` : ''}`);
+  lines.push(
+    report.mode === 'applied'
+      ? `NEXT    | npm run verify:fast`
+      : `NEXT    | npx cortex compile ${report.scenarioId} --apply --compact`
+  );
+  return lines.join('\n');
+}
+
 const isMain =
   Boolean(process.argv[1]) &&
   fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
@@ -1859,7 +1880,7 @@ if (isMain) {
 ⚙️  Cortex Deterministic Session-Tape-to-SOLID Compiler (compile-tape.mjs)
 
 Usage:
-  npx cortex compile [<scenario-id-or-tape-path>] [--squad <squad>] [--apply] [--force-spec] [--skip-map]
+  npx cortex compile [<scenario-id-or-tape-path>] [--squad <squad>] [--apply] [--force-spec] [--skip-map] [--compact|--verbose|--json]
   npm run compile:tape -- [<scenario-id-or-tape-path>] [--squad <squad>] [--apply] [--skip-map]
 `);
     process.exit(0);
@@ -1870,6 +1891,7 @@ Usage:
   let apply = false;
   let forceSpec = false;
   let skipMap = false;
+  let jsonOut = false;
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -1879,6 +1901,10 @@ Usage:
       forceSpec = true;
     } else if (a === '--skip-map') {
       skipMap = true;
+    } else if (a === '--json') {
+      jsonOut = true;
+    } else if (a === '--compact' || a === '--verbose' || a === '--full') {
+      /* handled by isCompactMode */
     } else if (a === '--squad' && args[i + 1]) {
       squadOverride = args[++i];
     } else if (a.startsWith('--squad=')) {
@@ -1896,21 +1922,28 @@ Usage:
       forceSpec,
       skipMap,
     });
-    console.log(
-      `\n⚙️  Agentic-SOLID-QE Tape Compiler (${report.mode.toUpperCase()}) — Scenario: ${report.scenarioId}\n`
-    );
-    console.log(JSON.stringify(report, null, 2));
-    if (!apply) {
-      console.log(
-        `\n💡 Dry-run complete. Re-run with '--apply' (e.g., 'npx cortex compile ${report.scenarioId} --apply') to write SOLID TypeScript files.\n`
-      );
+    const compact = !jsonOut && isCompactMode(args, { autoNonTty: false });
+    if (jsonOut) {
+      console.log(JSON.stringify(report, null, 2));
+    } else if (compact) {
+      console.log(formatCompactCompileReport(report));
     } else {
       console.log(
-        `\n✅ Compiled '${report.scenarioId}' into SOLID TypeScript! Run 'npm run verify:fast' (or 'npm run verify') to validate typecheck, domain:graph, audit:solid, and tests.\n`
+        `\n⚙️  Agentic-SOLID-QE Tape Compiler (${report.mode.toUpperCase()}) — Scenario: ${report.scenarioId}\n`
       );
+      console.log(JSON.stringify(report, null, 2));
+      if (!apply) {
+        console.log(
+          `\n💡 Dry-run complete. Re-run with '--apply' (e.g., 'npx cortex compile ${report.scenarioId} --apply') to write SOLID TypeScript files.\n`
+        );
+      } else {
+        console.log(
+          `\n✅ Compiled '${report.scenarioId}' into SOLID TypeScript! Run 'npm run verify:fast' (or 'npm run verify') to validate typecheck, domain:graph, audit:solid, and tests.\n`
+        );
+      }
     }
   } catch (err) {
-    console.error(`\n❌ Tape Compilation Error: ${err.message}\n`);
+    console.error(`❌ Tape Compilation Error: ${err.message}`);
     process.exit(1);
   }
 }
