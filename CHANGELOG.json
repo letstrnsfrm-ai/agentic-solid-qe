@@ -1,7 +1,23 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.25.0",
+  "latestVersion": "0.44.0",
   "releases": [
+    {
+      "version": "0.44.0",
+      "date": "2026-11-20",
+      "highlights": [
+        "5-Pillar Token-Efficiency Architecture (v0.43.3 -> v0.44.0): Compressed `AGENTS.md` (-78.5%, 533 tok) & `.github/copilot-instructions.md` (-52.8%, 435 tok), split all monolithic skill references into 23 `<= 800`-tok topic chunks, added unified `--compact`/non-TTY CLI & failure-only test reporting (`scripts/lib/cli-output.mjs`), added single-call `<= 400`-tok Context Packs (`npx cortex context`) + optional subagent isolation, added zero-raw-JSON Tape CLI (`npx cortex tape list|show|clone|patch`), and enforced hard static token budgets in `audit:solid` + sanitized `tokenFootprint` telemetry in `cortex report`.",
+        "Smart Auto-Drain Orchestrator Loop & Parallel `verify:fast` (v0.43.2): Added `npx cortex orchestrate --loop --compact`, concurrent static gate execution (`tsc` incremental + `domain:graph` + `audit:solid` + `validate:tapes`), in-process batch tape compilation, and parallel `cortex explore` telemetry.",
+        "Enterprise Security Remediation (v0.43.1): Hardened manifest pruning bounds, code-injection/ReDoS defenses, strict Playwright locator allowlists, IPv6/SSRF blocking, exact dependency pinning, and `npx --no-install` CI execution.",
+        "2,000-Test Enterprise C#/.NET & Java Squad Wave Factory (v0.43.0): Added `npx cortex wave` (`migration-wave-factory.mjs` + `dotnet-enterprise-analyzer.mjs`) with multi-`.csproj` squad partitioning, BaseTest inheritance, SpecFlow/Reqnroll BDD, Wave-0 `StateSeederContract`/`FlowContract` scaffolding, autonomous `--run --verify`, and XSS-safe HTML N:1 Parity Dashboard.",
+        "High-Speed `cortex explore` & `agent-browser` Native Runtime (v0.42.1): Retired deprecated `@playwright/cli` in favor of Rust-backed `agent-browser` and `npx cortex explore` (direct local bin, CDP handshake/checkpoints, pruned `-i` snapshot deltas, batched DSL, inline assertions, `StateSeederContract` & `FlowContract` compilation, and `--emit-seeder` promotion).",
+        "Documentation & Version Alignment (v0.44.0): Modernized `README.md` for all v0.44 capabilities, aligned `package.json`, `CHANGELOG.json`, and skill install pins to `v0.44.0`, and added a framework `package.json` <-> `CHANGELOG.json` version-sync gate in `audit:solid`."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.44.0 skills, `npx cortex context`, `npx cortex tape`, `verify:fast`, and hard token budgets.",
+        "Start any QE task with `npx cortex orchestrate --loop --compact` and use `npx cortex context --route/--squad/--tape/--spec` before raw file reads."
+      ]
+    },
     {
       "version": "0.25.0",
       "date": "2026-11-18",

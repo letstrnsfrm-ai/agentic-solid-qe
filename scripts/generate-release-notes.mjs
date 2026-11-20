@@ -528,7 +528,10 @@ function main() {
   }
 
   const bumpType = determineBumpType(commits);
-  const nextSemver = bumpSemver(baseSemver, bumpType);
+  const nextSemver =
+    latestTagSemver && compareSemver(pkgSemver, latestTagSemver) > 0
+      ? pkgSemver
+      : bumpSemver(baseSemver, bumpType);
   const nextTag = formatSemver(nextSemver);
   const repoSlug = detectRepoSlug();
   const diff = getDiffBreakdown(compareBaseRef, 'HEAD');
