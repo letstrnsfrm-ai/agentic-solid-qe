@@ -1,11 +1,11 @@
 # AGENTS.md — Universal Agent Instructions (`agentic-solid-qe`)
 
-This repository uses a seven-skill, token-efficient Quality Engineering workflow powered by `@playwright/cli` and `@playwright/test`, led by **`00-master-orchestrator`** as the single user-facing entry point.
+This repository uses an eight-skill, token-efficient Quality Engineering workflow powered by `agent-browser`, `cortex explore`, and `@playwright/test`, led by **`00-master-orchestrator`** as the single user-facing entry point.
 
 ## Human-vs-Agent Operating Model (Direction & Review vs. Autonomous Execution)
 
 - **Human = Director & Reviewer:** Invokes `/00-master-orchestrator` (or states any QE goal in plain language), sets priorities, completes interactive MFA/CAPTCHA when gated, and reviews plans, defects, or PRs. **Never ask the human to manually edit generated SOLID files, Session Tapes, or run routine CLI/test/healing commands.**
-- **Agent = Autonomous Executor:** Routes all plain-language QE requests through `00-master-orchestrator` by default, executes diagnostics, test runs, `@playwright/cli` exploration, `compile:tape`, drift healing, and `npm run verify` end-to-end, and pauses only at explicit human decision/review gates.
+- **Agent = Autonomous Executor:** Routes all plain-language QE requests through `00-master-orchestrator` by default, executes diagnostics, test runs, `agent-browser` / `cortex explore` exploration, `compile:tape`, drift healing, and `npm run verify` end-to-end, and pauses only at explicit human decision/review gates.
 
 ## Skill Routing Table
 
@@ -19,7 +19,6 @@ This repository uses a seven-skill, token-efficient Quality Engineering workflow
 | *(Internal / Shortcut)* Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and configure sharded CI/CD pipelines | `04-ci-pipeline` | `.agents/skills/04-ci-pipeline/SKILL.md` |
 | *(Internal / Shortcut)* Onboard legacy/unorganized team skills, prompts, Java/C# tests, and helper scripts into `<500`-token bundles & Session Tapes | `05-skill-migrator` | `.agents/skills/05-skill-migrator/SKILL.md` |
 | Live browser CLI syntax (`open`, `--cdp 9222`, `snapshot -i`, `click`, `fill`, `network`, `a11y`) without `--help` round trips | `agent-browser` | `.agents/skills/agent-browser/SKILL.md` |
-| *(Legacy / Fallback)* `@playwright/cli` syntax (`attach`, `pause-at`, `state-save`) | `playwright-cli` | `.agents/skills/playwright-cli/SKILL.md` |
 
 ## AI-Guided Project Installation, Consumer Upgrade & Legacy Skill Migration Protocol
 
@@ -37,14 +36,14 @@ When a user asks how to install, upgrade, or adopt `agentic-solid-qe` in an exis
 
 0. **Master Orchestrator & Incremental Coverage Advisor (`00-master-orchestrator`):** Entry point (`npx cortex orchestrate` / `/00-master-orchestrator`) that runs live diagnostics (`npm run coverage:gaps` + `npm run migrate:skill -- --discover`), classifies the repository into **Stage 0–4** of the [5-Stage Incremental Coverage Ladder](./.agents/skills/00-master-orchestrator/references/master-orchestration-playbook.md), and recommends the single next action.
 1. **Environment & Auth Bootstrap (`00-env-bootstrap`):** Configures `baseUrl`, captures reusable `.auth/<persona>.json` sessions for apps behind SSO/MFA, and seeds top-level feature shards in `.agents/domain/domain-memory.md`.
-2. **Feature-Scoped Recon & Multi-Oracle Exploration (`01-cli-explorer`):** Runs `npm run coverage:gaps`, explores unfamiliar multi-page/multi-portal flows and backend APIs via `@playwright/cli --headed` (or resumes from an existing Point-A `.spec.ts` via `npm run test:explore` / `--debug=cli` + `playwright-cli attach` to explore `B ➔ C`), logs defects to `defects/`, and presents a **Session Debrief & Coverage Selection Matrix** so the QE selects **1 critical scenario at a time** to emit or extend as a Session Tape (`.exploratory/tapes/<scenario>.json`).
+2. **Feature-Scoped Recon & Multi-Oracle Exploration (`01-cli-explorer`):** Runs `npm run coverage:gaps`, explores unfamiliar multi-page/multi-portal flows and backend APIs via `npx cortex explore` / `agent-browser` (resuming from existing Point-A specs via `--from-spec [--until-step]`, `--from-seed`, or `<1s` `--checkpoint`), logs defects to `defects/`, and presents a **Session Debrief & Coverage Selection Matrix** so the QE selects **1 critical scenario at a time** to emit or extend as a Session Tape (`.exploratory/tapes/<scenario>.json`).
 3. **Human-Confirmed SOLID Automation (`02-solid-architect`):** Deterministically compiles the selected Session Tape 1 test at a time (`npx cortex compile <scenario> --apply` / `npm run compile:tape`) into reusable SOLID Components (`WizardStepContract`), Pages, Backend API Clients (`ApiClientContract` + `AuthTokenBridge`), Fixtures, and Data Builders (`RelativeDateHelper`), and runs `npm run verify`.
 4. **Day-2 Drift Healing & CI/CD Readiness (`03-drift-healer` & `04-ci-pipeline`):** Triages live test failures into genuine app defects vs. healed locator drift, tags specs (`@p0`, `@smoke`, `@regression`), and wires sharded CI/CD pipelines.
 
 ## Non-Negotiable Repository Guardrails
 
 1. **Always read `.agents/domain/domain-memory.md` first** before opening a browser or generating test code.
-2. **Use `agent-browser` (`npx agent-browser --session <name>`) for exploration and healing** (with `@playwright/cli` as fallback) and inspect compact `-i` / `.agent-browser/page-*.yml` snapshots instead of streaming raw HTML.
+2. **Use `agent-browser` / `npx cortex explore` for exploration and healing** and inspect compact `-i` / `.agent-browser/page-*.yml` snapshots instead of streaming raw HTML.
 3. **Never place `expect()` inside `src/components/`, `src/pages/`, or `src/domains/**/api/*.client.ts`**. Components, Pages, and API Clients expose action methods, `readonly` semantic `Locator` properties, or typed `ApiResponseEnvelope<T>` responses; web-first assertions (`await expect(...).toBeVisible()`) belong strictly in `tests/*.spec.ts`.
 4. **Cap every file in `src/components/` (and `src/domains/**/components/`) at 150 lines** (Single Responsibility Principle).
 5. **Never hardcode credentials or magic strings in `tests/*.spec.ts`**; always consume builders from `src/data/` (or `src/domains/<squad>/data/`) and fixtures from `src/fixtures/app.fixture.ts`.

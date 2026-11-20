@@ -1,9 +1,9 @@
 # Agentic-SOLID-QE (`agentic-solid-qe` · CLI: `cortex` / `asqe`)
 
-> **Zero-API-key, open-source agent skill framework bridging Autonomous Exploratory Testing (`@playwright/cli`), an Enterprise 3-Tier Organizational Domain Brain (`cortex`), and SOLID Playwright TypeScript Architecture (`@playwright/test`).**
+> **Zero-API-key, open-source agent skill framework bridging Autonomous Exploratory Testing (`agent-browser`), an Enterprise 3-Tier Organizational Domain Brain (`cortex`), and SOLID Playwright TypeScript Architecture (`@playwright/test`).**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Playwright CLI](https://img.shields.io/badge/Engine-%40playwright%2Fcli-2EAD33)](https://www.npmjs.com/package/@playwright/cli)
+[![Playwright CLI](https://img.shields.io/badge/Engine-%40playwright%2Fcli-2EAD33)](https://www.npmjs.com/package/agent-browser)
 [![Playwright Test](https://img.shields.io/badge/Runner-%40playwright%2Ftest-45ba4b)](https://playwright.dev)
 
 ---
@@ -16,7 +16,7 @@ Current AI browser testing setups break down as soon as you move beyond a toy de
 3. **Unstructured team prompts & scripts** trap institutional domain knowledge inside 3,000-token `.cursorrules` files or fragile relative scripts (`../helpers/seed.sh`) that cannot scale across 100+ engineers.
 
 **`agentic-solid-qe`** solves all three using your existing IDE agent (**Google Antigravity, Claude Code, GitHub Copilot, or Cursor**) with **zero external OpenAI/Anthropic API keys**:
-- **4–5x Lower Token Cost via `@playwright/cli`:** `01-cli-explorer` and `03-drift-healer` drive named browser sessions via `playwright-cli` and inspect compact `.playwright-cli/page-*.yml` disk snapshots instead of flooding LLM context.
+- **4–5x Lower Token Cost via `agent-browser`:** `01-cli-explorer` and `03-drift-healer` drive named browser sessions via `agent-browser` and inspect compact `.agent-browser/page-*.yml` disk snapshots instead of flooding LLM context.
 - **3-Tier Federated Organizational Brain (`domain-graph.json`):** Domain knowledge is organized into **Tier 0 Org Global Context**, **Tier 1 Squad Sub-Hubs**, and **Tier 2 Feature Shards** (each capped at `≤ 150` lines) with an O(1) machine-readable router so 100+ engineers can build a shared institutional brain without git merge conflicts or context overflow.
 - **Deterministic SOLID Compilation & Audit Gate (`npm run verify`):** `02-solid-architect` compiles verified JSON **Session Tapes** (`.exploratory/tapes/*.json`) into atomic UI Components (`≤ 150` lines, zero `expect()`), composed Pages, Liskov Contracts, `mergeTests()` Fixtures, and Typed Data Builders.
 - **Turnkey Legacy Skill & Script Onboarding (`05-skill-migrator`):** Teams with existing prompts and helper scripts can run one command (`npm run migrate:skill`) to decompose them into `< 500`-token `SKILL.md` bundles, sanitized `scripts/`, `references/`, and 3-Tier Domain Shards.
@@ -49,9 +49,9 @@ flowchart LR
 | :--- | :--- | :--- |
 | **`/00-master-orchestrator`** (`/master-orchestrator`) | `npx cortex orchestrate` / `npm run orchestrate` | **Start Here (Entry Point):** Understand all framework skills/features, diagnose repo maturity (`Stage 0`–`Stage 4`), select an Onboarding Track, and get the exact next step to incrementally increase automation coverage. |
 | **`/00-env-bootstrap`** | `npm run init:app` | Configure target `baseUrl`, capture reusable `.auth/<persona>.json` (`storageState`) for SSO/MFA apps, and seed initial route shards. |
-| **`/01-cli-explorer`** | `npm run coverage:gaps` | Explore unfamiliar multi-page flows via `@playwright/cli --headed`, audit API/console/state/a11y, log bugs to `defects/`, and curate `.exploratory/tapes/*.json`. |
+| **`/01-cli-explorer`** | `npm run coverage:gaps` | Explore unfamiliar multi-page flows via `agent-browser --headed`, audit API/console/state/a11y, log bugs to `defects/`, and curate `.exploratory/tapes/*.json`. |
 | **`/02-solid-architect`** | `npm run verify` | Compile Session Tapes into SOLID Components, Pages, Contracts, Fixtures, Data Builders, and tagged `.spec.ts` files. |
-| **`/03-drift-healer`** | `npx playwright test` | Diagnose failing tests against live environments via `@playwright/cli` to separate real app defects from harmless locator/flow drift. |
+| **`/03-drift-healer`** | `npx playwright test` | Diagnose failing tests against live environments via `agent-browser` to separate real app defects from harmless locator/flow drift. |
 | **`/04-ci-pipeline`** | `npm run audit:solid` | Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and scaffold sharded GitHub Actions / Azure DevOps pipelines. |
 | **`/05-skill-migrator`** | `npm run migrate:skill` | Decompose unorganized team skills, `.cursorrules`, and helper scripts (`.sh`, `.js`, `.mjs`, `.ts`, `.py`) into `< 500`-token `SKILL.md` bundles and Domain Shards. |
 
@@ -212,7 +212,7 @@ Open your IDE agent (**Antigravity, Claude Code, GitHub Copilot, or Cursor**) an
    - Runs `npm run coverage:gaps` (`npx cortex orchestrate`) + `npm run migrate:skill -- --discover`, reports your current **Coverage Maturity Stage (`Stage 0`–`Stage 4`)**, and recommends the exact next skill to invoke.
 1. **Bootstrap Environment & SSO/MFA Session (`/00-env-bootstrap`):**
    > **Prompt:** `"/00-env-bootstrap"`
-   - Launches `@playwright/cli --headed`, captures authenticated `.auth/<persona>.json` (`storageState`), and maps top-level routes into `.agents/domain/shards/*.md`.
+   - Launches `agent-browser --headed`, captures authenticated `.auth/<persona>.json` (`storageState`), and maps top-level routes into `.agents/domain/shards/*.md`.
 2. **Explore & Curate Session Tapes (`/01-cli-explorer`):**
    > **Prompt:** `"/01-cli-explorer"`
    - Runs `npm run coverage:gaps`, recommends the **Top 3 Uncovered High-Risk Scenarios** (P0 `happy-path-baseline` ➔ P1 `multi-persona-auth` / `boundary-analysis` ➔ P2 `state-interruption`), explores the flow live, logs any bugs to `defects/`, and outputs QE-approved `.exploratory/tapes/<scenario>.json`.

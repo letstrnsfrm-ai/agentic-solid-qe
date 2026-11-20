@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/letstrnsfrm-ai/agentic-solid-qe/schemas/session-tape.schema.json",
   "title": "Agentic-SOLID-QE Session Tape",
-  "description": "Strict contract bridging Skill 01 (CLI Explorer) and Skill 02 (SOLID Architect). Translates ephemeral @playwright/cli YAML refs into hierarchical, strict-mode-safe Playwright semantic locators.",
+  "description": "Strict contract bridging Skill 01 (CLI Explorer) and Skill 02 (SOLID Architect). Translates ephemeral agent-browser YAML refs into hierarchical, strict-mode-safe Playwright semantic locators.",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -117,7 +117,7 @@
     },
     "resumesFrom": {
       "type": "object",
-      "description": "Optional Point-A prerequisite spec or parent Session Tape from which this scenario resumed exploration via playwright-cli attach or API/checkpoint handoff.",
+      "description": "Optional Point-A prerequisite spec or parent Session Tape from which this scenario resumed exploration via cortex explore start --from-spec or API/checkpoint handoff.",
       "additionalProperties": false,
       "properties": {
         "scenarioId": { "type": "string", "pattern": "^[a-z0-9-]+$" },
@@ -211,7 +211,7 @@
           },
           "cliRefSource": {
             "type": "string",
-            "description": "Original ephemeral ref from .playwright-cli/page-*.yml (e.g., e14) for audit traceability."
+            "description": "Original ephemeral ref from .agent-browser/page-*.yml (e.g., e14) for audit traceability."
           },
           "action": {
             "type": "string",

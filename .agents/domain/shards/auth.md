@@ -24,5 +24,5 @@
 ## 3. Discovered Behaviours & Locator Quirks
 
 - **[2026-10-25 | 01-cli-explorer]:** Login inputs expose both `placeholder` (`Username`, `Password`) and `data-test` (`username`, `password`) inside `#login_button_container`.
-- **[2026-10-25 | 01-cli-explorer]:** The submit control `<input type="submit" value="Login">` maps to `getByRole('button', { name: 'Login', exact: true })` in `.playwright-cli/page-*.yml`.
+- **[2026-10-25 | 01-cli-explorer]:** The submit control `<input type="submit" value="Login">` maps to `getByRole('button', { name: 'Login', exact: true })` in `.agent-browser/page-*.yml`.
 - **[2026-10-25 | 01-cli-explorer]:** Validation banners render in `[data-test="error"]` with dismiss button `[data-test="error-button"]`.

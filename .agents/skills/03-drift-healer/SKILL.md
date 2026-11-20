@@ -1,6 +1,6 @@
 ---
 name: 03-drift-healer
-description: Diagnoses failing Playwright .spec.ts tests against live deployed environments via agent-browser (or @playwright/cli fallback) to separate genuine application regressions from UI, wizard, API contract, or auth session drift. Invoke /03-drift-healer when CI or local specs fail.
+description: Diagnoses failing Playwright .spec.ts tests against live deployed environments via agent-browser (or agent-browser fallback) to separate genuine application regressions from UI, wizard, API contract, or auth session drift. Invoke /03-drift-healer when CI or local specs fail.
 ---
 
 # Skill 03: Live Drift Healer & Failure Triage

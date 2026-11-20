@@ -6,9 +6,9 @@ Use this playbook when `03-drift-healer` investigates a failing Playwright `.spe
 
 ## 1. 7-Way Differential Diagnosis Matrix (Bug vs. Drift vs. Environment)
 
-Never blindly overwrite a failing test selector or API payload without inspecting the live application via `@playwright/cli`. Use this matrix to classify the root cause:
+Never blindly overwrite a failing test selector or API payload without inspecting the live application via `agent-browser`. Use this matrix to classify the root cause:
 
-| # | Failure Symptom | `.playwright-cli/page-*.yml` Observation | Console / Network Observation | Root Cause Classification | Required Action |
+| # | Failure Symptom | `.agent-browser/page-*.yml` Observation | Console / Network Observation | Root Cause Classification | Required Action |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **1** | `TimeoutError` waiting for locator | Control is visible under a renamed label, updated ARIA role, or new parent container | `0` console errors; `2xx` API status | **UI / Locator Drift** | Update Session Tape + `src/components/*.component.ts` + Domain Shard |
 | **2** | `TimeoutError` on multi-step wizard | Questionnaire added/reordered a conditional step or changed when a sub-form appears | `0` console errors; `2xx` API status | **Conditional Wizard Flow Drift** | Update `conditionRef` in Session Tape + `WizardStepContract.isApplicable()` in step component |

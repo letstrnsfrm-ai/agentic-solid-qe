@@ -31,7 +31,7 @@ Never batch-generate 10 unverified specs at once on complex applications. Execut
    ```
    - Read `nextSingleScenarioToAutomate` from the JSON output and inspect `.agents/domain/domain-memory.md` + the target squad hub (`.agents/domain/domains/<squad>/index.md`).
 2. **Step 2 — Explore 1 Scenario & Its Backend APIs (`/01-cli-explorer`):**
-   - Traverse the flow via `npx playwright-cli -s=<session> open <baseUrl> --headed`.
+   - Traverse the flow via `npx agent-browser --session <session> open <baseUrl> --headed`.
    - Record every wizard step (`componentCandidate`, `conditionRef`), runtime identifier (`capturedVariables`), and backend API call (`networkContracts` with `clientCandidate` and `responseSchemaSummary`).
    - Emit **1 Session Tape** (`.exploratory/tapes/<scenario-id>.json`) and validate it:
      ```bash
@@ -273,7 +273,7 @@ When `npm run coverage:gaps` flags a tape in `handoffRecommendations[]`, split i
 `compile-tape.mjs` compiles `resumesFrom` into a Playwright `test.info().annotations` lineage marker plus a `test.step(...)` fast-forward preamble:
 - `api-seed`: invokes `seedClientRef` via the injected `ApiClientContract` fixture.
 - `checkpoint-state`: restores cookies & variables from `.exploratory/checkpoints/<scenarioId>.json` (gitignored).
-- `ui-prereq`: records Point-A ➔ Point-B lineage and `resumeStep` for `npm run test:explore` / `playwright-cli attach`.
+- `ui-prereq`: records Point-A ➔ Point-B lineage and `resumeStep` for `npm run test:explore` / `cortex explore start --from-spec`.
 
 
 ---

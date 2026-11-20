@@ -24,7 +24,7 @@ When `01-cli-explorer` detects an unhandled console error, network 5xx failure, 
 - **Actual:** <Actual observed UI/network/console behaviour>
 
 ## 4. Evidence & Diagnostics
-- **Console Errors:** `<output of playwright-cli console error>`
-- **Snapshot Pointer:** `.playwright-cli/page-<timestamp>.yml`
+- **Console Errors:** `<output of agent-browser console error>`
+- **Snapshot Pointer:** `.agent-browser/page-<timestamp>.yml`
 - **Screenshot:** `defects/screenshots/<slug>.png`
 ```
