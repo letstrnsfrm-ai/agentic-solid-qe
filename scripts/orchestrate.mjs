@@ -60,7 +60,7 @@ function walkFiles(dir, predicate) {
     if (entry.isSymbolicLink()) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (['node_modules', '.git', '.playwright-cli'].includes(entry.name)) continue;
+      if (['node_modules', '.git', '.agent-browser', '.playwright-cli'].includes(entry.name)) continue;
       out.push(...walkFiles(full, predicate));
     } else if (predicate(entry.name, full)) {
       out.push(full);

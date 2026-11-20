@@ -4122,6 +4122,17 @@ test('38. Token-Efficiency 5-Pillar Suite: static budgets, compact CLI/failure s
     const bloatRefRes = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
     assert.notEqual(bloatRefRes.status, 0, 'Expected audit-solid to fail when reference exceeds 800 tokens');
     assert.match(bloatRefRes.stdout + bloatRefRes.stderr, /NFR Reference Token Budget/);
+    fs.writeFileSync(refPath, origRef, 'utf8');
+
+    // Release manifest consistency: audit-solid fails if CHANGELOG.json latestVersion !== releases[0].version
+    const clPath = path.join(tmpRoot, 'CHANGELOG.json');
+    const origCl = fs.readFileSync(clPath, 'utf8');
+    const driftedCl = JSON.parse(origCl);
+    driftedCl.latestVersion = '0.99.0';
+    fs.writeFileSync(clPath, JSON.stringify(driftedCl, null, 2), 'utf8');
+    const driftRes = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.notEqual(driftRes.status, 0, 'Expected audit-solid to fail on CHANGELOG version drift');
+    assert.match(driftRes.stdout + driftRes.stderr, /Release Version Drift/);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }

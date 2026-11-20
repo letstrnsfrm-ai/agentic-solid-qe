@@ -4,7 +4,7 @@
  *
  * Capabilities:
  *   1. Parses Playwright failure artifacts (`test-results/<run>/error-context.md`, `playwright-report/results.json`)
- *      or explicit `--spec` / `--error` inputs alongside `.playwright-cli/page-*.yml` snapshots.
+ *      or explicit `--spec` / `--error` inputs alongside `.agent-browser/page-*.yml` (or legacy `.playwright-cli/`) snapshots.
  *   2. Classifies failures into Auth Drift, Genuine App Regression (never weakening `expect()`),
  *      or UI/Locator Drift.
  *   3. Scores YAML snapshot candidates against the broken locator & Component property.

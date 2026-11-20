@@ -3,8 +3,8 @@
  * CLI Installer, Onboarding Initializer & Upgrader for Agentic-SOLID-QE.
  *
  * Usage:
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.25.0 init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.25.0 sync [target-dir]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.44.0 init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.44.0 sync [target-dir]
  *   npm run init:app -- --url https://your-app.com --name "Your App"
  */
 import crypto from 'node:crypto';

@@ -1,83 +1,170 @@
 # Agentic-SOLID-QE (`agentic-solid-qe` · CLI: `cortex` / `asqe`)
 
-> **Zero-API-key, open-source agent skill framework bridging Autonomous Exploratory Testing (`agent-browser`), an Enterprise 3-Tier Organizational Domain Brain (`cortex`), and SOLID Playwright TypeScript Architecture (`@playwright/test`).**
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Playwright CLI](https://img.shields.io/badge/Engine-%40playwright%2Fcli-2EAD33)](https://www.npmjs.com/package/agent-browser)
-[![Playwright Test](https://img.shields.io/badge/Runner-%40playwright%2Ftest-45ba4b)](https://playwright.dev)
+> **Zero-API-key, token-efficient agent skill framework** bridging **Autonomous Live Exploration** (`agent-browser` + `cortex explore`), **Deterministic SOLID Playwright TypeScript Compilation** (`cortex compile`), **Live Drift Healing** (`cortex heal`), and **2,000-Test Enterprise Java/C# Legacy Migration** (`cortex wave`).
+>
+> Works natively across **Antigravity, Claude Code, GitHub Copilot, Cursor, and Windsurf** · **MIT Licensed** · **Current Release: `v0.44.0`**
 
 ---
 
 ## Why `agentic-solid-qe`?
 
-Current AI browser testing setups break down as soon as you move beyond a toy demo:
-1. **MCP-based browser agents** stream heavy accessibility trees and base64 screenshots into the LLM context window on every click, burning token budgets in minutes.
-2. **Flat test generators (`codegen`)** output brittle, monolithic `.spec.ts` files with hardcoded strings and inline assertions that fail enterprise PR reviews.
-3. **Unstructured team prompts & scripts** trap institutional domain knowledge inside 3,000-token `.cursorrules` files or fragile relative scripts (`../helpers/seed.sh`) that cannot scale across 100+ engineers.
-
-**`agentic-solid-qe`** solves all three using your existing IDE agent (**Google Antigravity, Claude Code, GitHub Copilot, or Cursor**) with **zero external OpenAI/Anthropic API keys**:
-- **4–5x Lower Token Cost via `agent-browser`:** `01-cli-explorer` and `03-drift-healer` drive named browser sessions via `agent-browser` and inspect compact `.agent-browser/page-*.yml` disk snapshots instead of flooding LLM context.
-- **3-Tier Federated Organizational Brain (`domain-graph.json`):** Domain knowledge is organized into **Tier 0 Org Global Context**, **Tier 1 Squad Sub-Hubs**, and **Tier 2 Feature Shards** (each capped at `≤ 150` lines) with an O(1) machine-readable router so 100+ engineers can build a shared institutional brain without git merge conflicts or context overflow.
-- **Deterministic SOLID Compilation & Audit Gate (`npm run verify`):** `02-solid-architect` compiles verified JSON **Session Tapes** (`.exploratory/tapes/*.json`) into atomic UI Components (`≤ 150` lines, zero `expect()`), composed Pages, Liskov Contracts, `mergeTests()` Fixtures, and Typed Data Builders.
-- **Turnkey Legacy Skill & Script Onboarding (`05-skill-migrator`):** Teams with existing prompts and helper scripts can run one command (`npm run migrate:skill`) to decompose them into `< 500`-token `SKILL.md` bundles, sanitized `scripts/`, `references/`, and 3-Tier Domain Shards.
+| Problem in Ad-Hoc AI Test Automation | `agentic-solid-qe` (`v0.44.0`) Solution |
+| :--- | :--- |
+| **Token Burn & Context Rot** (monolithic prompts, noisy DOM dumps, 10+ file-read turns) | **5-Pillar Token Efficiency:** `AGENTS.md` (533 tok), `≤ 500`-tok `SKILL.md`, `≤ 800`-tok topic references, `≤ 400`-tok single-call `cortex context` packs, `cortex tape` CLI, pruned `-i` browser deltas, and failure-only `verify:fast` reporting. |
+| **Brittle, Unmaintainable Generated Specs** (inline selectors, `waitForTimeout`, `expect()` everywhere) | **Deterministic SOLID Compiler (`cortex compile`):** Enforces `≤ 150`-line SRP Components (`IdentifiableComponent`, `WizardStepContract`, `StateSeederContract`, `FlowContract`), zero `expect()` in `src/`, Data Builders (DIP), and business-domain `test.step()`. |
+| **Slow Re-Exploration of Deep Flows** | **Resume-First `cortex explore`:** Reuses existing specs (`--from-spec`), `<1s` browser checkpoints (`--checkpoint`), or API seeders (`--from-seed`) with batched actions and `--compile --verify --emit-seeder`. |
+| **Flaky CI vs. Real Bugs** | **Differential `cortex heal`:** Replays failing routes live to distinguish **Genuine Regressions** (drafting secret-redacted `defects/DEFECT-*.md` without weakening assertions) from **Safe Locator/Auth Drift**. |
+| **2,000+ Legacy Selenium / RestAssured / .NET Tests** | **Squad Wave Factory (`cortex wave`):** Multi-`.csproj`/Maven squad analyzer, Wave-0 Seeder/Flow rationalization, autonomous `--run --verify` micro-batches, and HTML N:1 Parity Dashboard. |
 
 ---
 
-## Master Orchestrator & Closed-Loop QE Lifecycle
+## Measured Token-Efficiency Benchmarks (`v0.44.0`)
+
+Measured with the deterministic token estimator shared by [`audit:solid`](scripts/audit-solid.mjs) and [`scripts/lib/cli-output.mjs`](scripts/lib/cli-output.mjs):
+
+| Surface | Before | `v0.44.0` | Reduction |
+| :--- | ---: | ---: | ---: |
+| `AGENTS.md` *(injected on every turn)* | 2,477 tok | **533 tok** | **-78.5%** |
+| `.github/copilot-instructions.md` *(zero eager reference preloads)* | 922 tok | **435 tok** | **-52.8%** |
+| Worst-case `references/*.md` topic load | 4,019 tok | **774 tok** *(avg 602 tok across 23 chunks)* | **-80.7%** |
+| `cortex orchestrate` *(auto-compact in agent shells)* | 249 tok (17L) | **107 tok (5L)** | **-57.0%** |
+| `cortex gaps --compact` | 1,883 tok (242L) | **97 tok (4L)** | **-94.8%** |
+| `cortex compile --compact` *(dry-run)* | 773 tok (118L) | **47 tok (3L)** | **-93.9%** |
+| `cortex heal` *(auto-compact triage card)* | 158 tok (25L) | **22 tok (2L)** | **-86.1%** |
+| Multi-file context read (`domain-memory` + `graph` + shard + tape + `src/`) | ~5,900 tok (5–8 turns) | **286–398 tok in 1 call** (`cortex context`) | **-93% to -95%** |
+| Session Tape inspection & variant cloning (raw JSON + schema) | ~6,206 tok | **42 tok (`list`) / 454 tok (`show`)** + 1-call `clone`/`patch` | **-92.7%** |
+| `npm run verify:fast` *(pass)* | verbose stream | **27 tok (1L)** *(zero-ANSI failure excerpts on fail)* | **~90%+** |
+
+---
+
+## Autonomous Closed-Loop QE Lifecycle
+
+**Operating Model:** **Human = Direction & Review** (states QE goals, approves scenario/triage/PR gates, completes interactive MFA/CAPTCHA). **Agent = Autonomous Executor** (runs `npx cortex orchestrate --loop --compact`, explores, compiles, heals, and verifies autonomously).
 
 ```mermaid
 flowchart LR
-  MO(["/00-master-orchestrator\n(Master Entry Point & Coverage Advisor)"]) --> S00
-  MO --> S01
-  MO --> S02
-  MO --> S05
-  S05["/05-skill-migrator\n(Onboard Legacy Skills & Scripts)"] -.-> Brain
-  S00["/00-env-bootstrap\n(Base URL, SSO Auth & Route Map)"] --> S01["/01-cli-explorer\n(Multi-Oracle Recon & Session Tapes)"]
-  S01 --> S02["/02-solid-architect\n(Compile Tapes -> SOLID TS Suite)"]
-  S02 --> S04["/04-ci-pipeline\n(@p0/@smoke Tags & Sharded CI)"]
-  S04 --> S03["/03-drift-healer\n(Live Triage: Bug vs. UI Drift)"]
-  S03 --> S02
-  Brain[("3-Tier Federated Brain\n(.agents/domain/ + domain-graph.json)")] <--> S00
-  Brain <--> S01
-  Brain <--> S02
-  Brain <--> S03
+  H["Human QE Goal"] --> M["/00-master-orchestrator<br/>cortex orchestrate --loop --compact"]
+  M --> CTX["cortex context<br/>(<=400 tok pack)"]
+  CTX --> E["01-cli-explorer<br/>cortex explore / agent-browser"]
+  E --> T["Session Tape v1<br/>(.exploratory/tapes/*.json)<br/>or cortex tape clone|patch"]
+  T --> C["02-solid-architect<br/>cortex compile --apply"]
+  C --> V["verify:fast -> verify<br/>(tsc + graph + audit + tests)"]
+  V -- "Fail" --> D["03-drift-healer<br/>cortex heal (--apply)"]
+  D -- "Real Bug" --> B["defects/DEFECT-*.md"]
+  D -- "UI/Auth Drift" --> V
+  V -- "Pass" --> CI["04-ci-pipeline<br/>Sharded CI + cortex report"]
 ```
-
-### Slash Command & CLI Cheat Sheet
-
-| Slash Command (IDE) | Backing CLI / Gate | When to Use |
-| :--- | :--- | :--- |
-| **`/00-master-orchestrator`** (`/master-orchestrator`) | `npx cortex orchestrate` / `npm run orchestrate` | **Start Here (Entry Point):** Understand all framework skills/features, diagnose repo maturity (`Stage 0`–`Stage 4`), select an Onboarding Track, and get the exact next step to incrementally increase automation coverage. |
-| **`/00-env-bootstrap`** | `npm run init:app` | Configure target `baseUrl`, capture reusable `.auth/<persona>.json` (`storageState`) for SSO/MFA apps, and seed initial route shards. |
-| **`/01-cli-explorer`** | `npm run coverage:gaps` | Explore unfamiliar multi-page flows via `agent-browser --headed`, audit API/console/state/a11y, log bugs to `defects/`, and curate `.exploratory/tapes/*.json`. |
-| **`/02-solid-architect`** | `npm run verify` | Compile Session Tapes into SOLID Components, Pages, Contracts, Fixtures, Data Builders, and tagged `.spec.ts` files. |
-| **`/03-drift-healer`** | `npx playwright test` | Diagnose failing tests against live environments via `agent-browser` to separate real app defects from harmless locator/flow drift. |
-| **`/04-ci-pipeline`** | `npm run audit:solid` | Curate `@p0`/`@smoke`/`@regression` tags, harden `playwright.config.ts`, and scaffold sharded GitHub Actions / Azure DevOps pipelines. |
-| **`/05-skill-migrator`** | `npm run migrate:skill` | Decompose unorganized team skills, `.cursorrules`, and helper scripts (`.sh`, `.js`, `.mjs`, `.ts`, `.py`) into `< 500`-token `SKILL.md` bundles and Domain Shards. |
 
 ---
 
-## Master Orchestrator Entry Point (`/00-master-orchestrator`) & 5-Stage Incremental Coverage Progression
+## 5-Minute Quick Start
 
-> **Operating Model — Human = Direction & Review; Agent = Autonomous Execution:**  
-> Humans should **never** need to manually edit generated `src/` SOLID files, Session Tapes, or run routine test/healing commands. Simply invoke **`/00-master-orchestrator`** (or state your QE goal in plain language) to steer priorities and review results — your AI agent executes everything end-to-end via the underlying skills.
+### 1. Install Into Any Existing or New Repository (Non-Destructive)
 
-### What `/00-master-orchestrator` Does Automatically
-1. **Runs Live Project Diagnostics:** Executes `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`, and reads `.agents/domain/domain-memory.md` + the [Master Orchestration Playbook](./.agents/skills/00-master-orchestrator/references/master-orchestration-playbook.md).
-2. **Autonomously Executes the Right Skill Chain:** Routes your intent (`Grow Coverage`, `Run & Fix Tests`, `Migrate Legacy`, `Setup/Auth`, `CI/Release`) through `00-env-bootstrap` → `01-cli-explorer` → `02-solid-architect` → `03-drift-healer` → `04-ci-pipeline` → `05-skill-migrator` and runs `npm run verify`.
-3. **Pauses Only at Human Review Gates:** Stops only when you need to pick 1 scenario from the Debrief Matrix, confirm ambiguous app bugs vs. UI drift, approve a legacy migration wave, or complete interactive MFA/CAPTCHA.
+```bash
+# Requires Node.js >= 20.12.0
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.44.0 init . \
+  --url https://your-app-url.com \
+  --name "Your App"
 
-### The 5-Stage Incremental Coverage Ladder (`1 Test at a Time`)
+npm install
+npx playwright install chromium
+npm run verify:fast
+```
 
-Instead of generating dozens of brittle tests in one unverified batch, `/00-master-orchestrator` guides users and AI agents to grow automation coverage incrementally across five deterministic stages:
+- **Non-destructive:** Merges `package.json` scripts, `tsconfig.json` path aliases (`@contracts/*`, `@components/*`, `@pages/*`, `@data/*`, `@fixtures/*`, `@domains/*`, `@shared/*`), and `.gitignore` without overwriting existing `src/` or `tests/`.
+- **Legacy-safe:** Backs up pre-existing `AGENTS.md` / `.github/copilot-instructions.md` to `.agents/legacy-backups/`. Inside Java (`pom.xml`/`build.gradle`) or C# (`*.sln`/`*.csproj`) repos, auto-installs side-by-side in `e2e-playwright/`.
+- **Want the SauceDemo sandbox demo?** Pass `--demo` to `init`.
 
-| Maturity Stage | Focus & Session Tape Charters | Skills & Contracts Used | Exit Gate (`npm run verify`) |
-| :--- | :--- | :--- | :--- |
-| **Stage 0: Foundation, Auth & Legacy Onboarding** | Initialize or `sync` framework, migrate legacy `.cursorrules`/`CLAUDE.md`/scripts, capture SSO/MFA `.auth/<persona>.json`, and seed top-level route shards. | `/00-master-orchestrator` ➔ `/05-skill-migrator` ➔ `/00-env-bootstrap` | Valid `Base URL` in `domain-memory.md`, `.auth/*.json` captured, initial shards indexed (`npm run domain:graph`). |
-| **Stage 1: P0 Golden-Path Baseline (`@p0`)** | Automate **1 `@p0` happy-path vertical slice per uncovered shard** (`charter: "happy-path-baseline"`) before writing edge cases. | `/01-cli-explorer` ➔ `/02-solid-architect <scenario>` (`IdentifiableComponent`) | `uncoveredShards.length === 0`, `uncompiledTapes.length === 0`, and `npm run test:p0` passes. |
-| **Stage 2: Persona, Boundary & Resilience Expansion (`@smoke` / `@regression`)** | Layer `multi-persona-auth`, `boundary-analysis`, `state-interruption`, and `accessibility-audit` scenarios reusing Stage 1 Components and Data Builders. | `/01-cli-explorer` ➔ `/02-solid-architect <scenario>` (`ErrorBannerContract`, `UserBuilder`) | Positive + negative/boundary/persona specs pass `npm run test:smoke` with zero duplicated page objects. |
-| **Stage 3: Complex Wizards, Backend APIs & Cross-Portal Handoffs** | Scale to 5–12 step conditional wizards, fast API precondition seeding, `@api-contract` tests, and multi-actor Customer ➔ Back-Office Agent flows. | `/01-cli-explorer` ➔ `/02-solid-architect` (`WizardStepContract`, `ApiClientContract`, `AuthTokenBridge`, `RelativeDateHelper`) | `unimplementedApiClients.length === 0` and all wizard/API/multi-portal specs pass `npm run verify`. |
-| **Stage 4: Sharded CI/CD & Continuous Drift Healing** | Enforce `@p0`/`@smoke`/`@regression` tags in sharded CI pipelines and triage live test failures into real defects (`defects/DEFECT-*.md`) vs. healed UI/API drift. | `/04-ci-pipeline` & `/03-drift-healer` | `staleShards.length === 0`, sharded CI green, and `npm run audit:solid` passes. |
+### 2. Copy-Paste Prompt for Your AI Coding Agent
+
+> *"Read `AGENTS.md` and invoke `/00-master-orchestrator`. Run `npx cortex orchestrate --loop --compact` to diagnose our repository maturity stage, auto-drain safe steps, and propose the single highest-value next scenario to automate."*
+
+### 3. Day-2 Non-Destructive Upgrades
+
+```bash
+npx cortex upgrade --check           # Check against latest GitHub Release tag
+npx cortex upgrade --diff            # Preview config drift patches (.agents/upgrade-patches/)
+npx cortex upgrade                   # Sync skills, scripts & schemas (100% preserves domain shards, src/, tests/ & local-overrides.md)
+npx cortex upgrade --apply-patches   # Opt-in config patch apply
+```
+
+---
+
+## Complete `cortex` CLI & Skill Reference
+
+### Core `cortex` CLI Commands (`npx cortex <cmd>`)
+
+| Command | Purpose |
+| :--- | :--- |
+| `npx cortex orchestrate --loop --compact` | **Primary Entry Point:** Smart Auto-Drain loop (diagnostics, high-confidence drift heals, batch compile, wave micro-batches) stopping only at human gates. |
+| `npx cortex context [--route\|--squad\|--tape\|--spec]` | Builds a single `≤ 400`-token scoped Context Pack (matching shards, `src/` signatures, compact tape DSL, spec metadata). |
+| `npx cortex tape list\|show\|clone\|patch` | Inspects and mutates v1 Session Tapes without reading the 4.5k-tok JSON schema or hand-editing 240-line JSON; auto-validates before writing. |
+| `npx cortex explore start\|act\|batch\|capture\|checkpoint\|actor\|finish` | High-speed headless/headed `agent-browser` runner with CDP resume (`--from-spec`, `--checkpoint`, `--from-seed`), pruned `-i` deltas, secret redaction, inline assertions, and `--compile --verify --emit-seeder`. |
+| `npx cortex compile <id> [--squad <sq>] [--apply] [--compact]` | Deterministic Session-Tape-to-SOLID TypeScript compiler (Components, Wizard Steps, API Clients, Seeders, Flows, Builders, Fixtures, Specs, Shard capabilities). |
+| `npx cortex heal [--spec <path>] [--apply] [--compact]` | Differential failure triage: classifies Auth Drift vs. Genuine App Regression (`defects/DEFECT-*.md`) vs. high-confidence Locator Drift (`--apply` safe allowlisted patch). |
+| `npx cortex verify [--fast] [--specs <list>] [--with-engine]` | Parallel two-tier gate (`tsc` incremental + `domain:graph` + `audit:solid` + `validate:tapes` + targeted/smoke tests) with failure-only zero-ANSI output. |
+| `npx cortex wave [--scan <dir>] [--scaffold-wave0] [--run --verify] [--dashboard]` | 2,000-test enterprise Java/C#/.NET Squad Wave Factory with resume-safe ledger, Wave-0 Seeders/Flows, and HTML N:1 Parity Dashboard. |
+| `npx cortex migrate --discover \| <path> --name <id> [--apply]` | Discovers & decomposes `.cursorrules`, `CLAUDE.md`, custom prompts, helper scripts, and individual legacy Java/C# tests. |
+| `npx cortex graph` / `npx cortex map` | Compiles `.agents/domain/domain-graph.json` and renders interactive `reports/system-map.html` (including `StateSeederContract` nodes & KPI cards). |
+| `npx cortex gaps [--compact\|--summary\|--squad <sq>]` | Coverage, staleness, traceability, and `handoffRecommendations` analyzer. |
+| `npx cortex audit [--squad <sq>]` | Runs SOLID, Federated Brain, Token Budget, Release Version Sync, and Secret/Security gates. |
+| `npx cortex upgrade [--check\|--diff\|--apply-patches\|--to <tag>]` | Manifest-tracked incremental upgrader with stale-file pruning and `.agents/upgrade-patches/`. |
+| `npx cortex report [--dry-run\|--out <file>]` | Opt-in sanitized governance & `tokenFootprint` telemetry emitter for Cortex Cloud (zero telemetry by default). |
+
+### The 8 Progressive-Disclosure Skills (`.agents/skills/`)
+
+| Skill ID | Slash Command | Responsibility |
+| :--- | :--- | :--- |
+| `00-master-orchestrator` | `/00-master-orchestrator` | Single entry point, Smart Auto-Drain loop, 5-Stage Coverage Ladder, onboarding/upgrades & optional subagent isolation. |
+| `00-env-bootstrap` | `/00-env-bootstrap` | Configures `baseUrl`, captures reusable `.auth/<persona>.json` (`storageState`) for SSO/MFA apps, and seeds route shards. |
+| `01-cli-explorer` | `/01-cli-explorer` | Live `cortex explore` / `agent-browser` recon, multi-oracle checks (functional, API, boundary, a11y, visual), defects & Session Tapes. |
+| `02-solid-architect` | `/02-solid-architect` | Compiles 1 Session Tape at a time into SOLID TypeScript (`src/` + `tests/`) and heals until `verify:fast` / `verify` is green. |
+| `03-drift-healer` | `/03-drift-healer` | 8-way live root-cause triage (app bug ➔ `defects/DEFECT-*.md` vs. safe UI/wizard/API/auth drift healing). |
+| `04-ci-pipeline` | `/04-ci-pipeline` | Curates `@p0`/`@smoke`/`@regression`/`@api-contract` tags and sharded GitHub Actions / Azure DevOps CI pipelines. |
+| `05-skill-migrator` | `/05-skill-migrator` | Migrates legacy rules, prompts, helper scripts, and Java/C#/.NET test suites into `<500`-tok skills, tapes, and SOLID suites. |
+| `agent-browser` | `/agent-browser` | Compact Rust-backed browser CLI syntax (`open`, `--cdp`, `snapshot -i`, `a11y`, `state save`, network mocking). |
+
+---
+
+## 4 Onboarding Tracks
+
+### Track 1: Greenfield / Single-App Coverage (5-Stage Ladder)
+Advance coverage **1 test at a time** via `/00-master-orchestrator`:
+- **Stage 0 (Foundation):** `init` + `00-env-bootstrap` (`baseUrl`, `.auth/<persona>.json`, route shards).
+- **Stage 1 (`@p0` Baseline):** 1 `happy-path-baseline` vertical slice per uncovered shard (`cortex explore` ➔ `cortex compile --apply` ➔ `verify:fast`).
+- **Stage 2 (`@smoke`/`@regression`):** Reuse existing Pages/Components/Builders for `multi-persona-auth`, `boundary-analysis`, `state-interruption`, and `accessibility` via `cortex tape clone|patch`.
+- **Stage 3 (Complex Enterprise):** Conditional wizards (`WizardStepContract`), backend APIs (`ApiClientContract` + `AuthTokenBridge`), cross-portal handoffs, and composable `StateSeederContract`s.
+- **Stage 4 (CI & Day-2 Healing):** Sharded CI pipelines (`04-ci-pipeline`) + continuous `cortex heal`.
+
+### Track 2: Existing Team Prompts, Rules & Helper Scripts (`/05-skill-migrator`)
+```bash
+npm run migrate:skill -- --discover
+npm run migrate:skill -- ./path/to/legacy-prompt-or-script --name 06-billing-seeder --squad billing --apply
+npm run verify
+```
+Decomposes oversized `.cursorrules`, `CLAUDE.md`, prompts, and `.sh`/`.js`/`.ts`/`.py` helpers into `<500`-tok `SKILL.md` bundles, secret-redacted `references/` & `scripts/`, Session Tapes, and `≤150`-line Domain Shards.
+
+### Track 3: 2,000-Test Enterprise Java & C#/.NET Legacy Migration (`cortex wave`)
+```bash
+npx cortex wave --scan ../legacy-dotnet-suite [--squad motor-b2c]   # multi-.csproj / Maven squad discovery + ledger
+npx cortex wave --scaffold-wave0 --apply                           # scaffold shared Wave-0 StateSeeders & Flows
+npx cortex wave --run --verify --batch-size 5 --workers 4          # autonomous resilient micro-batch compile + verify
+npx cortex wave --dashboard                                        # render reports/migration-dashboard.html
+```
+Handles Selenium `@FindBy`/`[FindsBy]`, God Page Object auto-splitting, `[OneTimeSetUp]` / `BaseTest` inheritance, SpecFlow/Reqnroll BDD, RestAssured/RestSharp/HttpClient API tests, and `@DataProvider`/`[TestCase]` builder extraction.
+
+### Track 4: Multi-Squad Federated Brain (100+ Engineers) & Patterns A–D
+Partition squads without merge conflicts or context bloat:
+```bash
+npx cortex sync --squad motor-b2c
+npx cortex sync --squad agent-portal
+```
+Each squad owns isolated `.agents/domain/domains/<squad>/` hubs/shards and `src/domains/<squad>/{api,components,pages,steps,seeders,flows,data,fixtures}/`, supporting:
+- **Pattern A:** Conditional multi-step wizards (`WizardStepContract<TRiskProfile>` + `RelativeDateHelper`).
+- **Pattern B:** Typed backend API clients (`ApiClientContract` + `AuthTokenBridge`) for `@api-contract` tests and `<300ms` precondition seeding.
+- **Pattern C:** Cross-portal multi-actor handoffs (`actors[]` + isolated `BrowserContext`s + `capturedVariables`).
+- **Pattern D:** Executable `resumesFrom` (`api-seed`, `checkpoint-state`, `ui-prereq`) + `StateSeederContract` fixture auto-teardown.
 
 ---
 
@@ -85,305 +172,71 @@ Instead of generating dozens of brittle tests in one unverified batch, `/00-mast
 
 ```text
 agentic-solid-qe/
+├── AGENTS.md                           # Universal lean agent router (<= 600 tok)
+├── .github/copilot-instructions.md     # Lean Copilot router (<= 600 tok, zero eager preloads)
 ├── .agents/
 │   ├── domain/
-│   │   ├── domain-memory.md           # Tier 0 Org Root Index: Global env, personas & Squad Router (<=150 lines)
-│   │   ├── domain-graph.json          # Auto-compiled O(1) Route -> Shard, Owner Squad & Capability Router
-│   │   ├── domains/<squad>/           # Tier 1 Squad Sub-Hubs (index.md) & Tier 2 Squad Shards (shards/*.md)
-│   │   ├── shards/                    # Global / Single-Team Feature Shards (<=150 lines each)
-│   │   └── session-tape.schema.json   # Strict JSON contract between Skill 01 & Skill 02
-│   └── skills/
-│       ├── 00-master-orchestrator/    # Master Orchestrator: Entry Point, Diagnostics & 5-Stage Coverage Advisor
-│       ├── 00-env-bootstrap/          # Skill 00: Auth (storageState) & Unfamiliar App Route Discovery
-│       ├── 01-cli-explorer/           # Skill 01: Multi-Page Explorer, Triage & Coverage Curator
-│       ├── 02-solid-architect/        # Skill 02: SOLID Playwright TypeScript Architect
-│       ├── 03-drift-healer/           # Skill 03: Live Failure Triage & Self-Healing
-│       ├── 04-ci-pipeline/            # Skill 04: Regression Tagging & Sharded CI/CD Architect
-│       └── 05-skill-migrator/         # Skill 05: Legacy Skill & Script Onboarding Migrator + Starter Guide
-├── .github/
-│   ├── copilot-instructions.md        # Auto-bridges Master Orchestrator + all lifecycle skills for Copilot
-│   ├── prompts/                       # Slash prompt triggers (/00-master-orchestrator, /00..05) for Copilot
-│   └── workflows/playwright-ci.yml    # Sharded GitHub Actions pipeline with SOLID gate
-├── .claude/commands/                  # Slash commands (/00-master-orchestrator, /00..05) for Claude Code
-├── .azure-pipelines/playwright-ci.yml # Sharded Azure DevOps pipeline template
-├── defects/                           # Structured Markdown bug reports + evidence pointers
-├── .exploratory/tapes/                # Validated JSON Session Tapes
-├── src/                               # Reference SOLID Playwright Framework
-│   ├── contracts/                     # Shared Liskov Substitution interfaces (LSP)
-│   ├── shared/components/             # Org-wide Design System components <= 150 lines
-│   ├── domains/<squad>/               # Squad-scoped {api, components, steps, pages, data, fixtures} modules
-│   ├── components/                    # Atomic UI components <= 150 lines, zero expect() (SRP)
-│   ├── pages/                         # Composed page workflows, zero expect() (SRP)
-│   ├── fixtures/                      # Composable test.extend<>() / mergeTests() injection (OCP/ISP)
-│   └── data/                          # Typed Data Builders — no magic strings in specs (DIP)
-├── tests/                             # Declarative web-first .spec.ts suites (@p0, @smoke, @regression)
-├── scripts/
-│   ├── build-domain-graph.mjs         # Compiles 3-Tier Brain into .agents/domain/domain-graph.json
-│   ├── migrate-skill.mjs              # Analyzer & scaffolder for onboarding legacy team skills & scripts
-│   ├── analyze-coverage.mjs           # Master Orchestrator diagnostic, coverage maturity & gap analyzer
-│   ├── audit-solid.mjs                # Deterministic gate enforcing <500-token skills, <=150-line shards & SOLID
-│   ├── validate-tapes.mjs             # Session Tape JSON schema validator
-│   └── sync-skills.mjs                # Installer, --squad scaffolder & --org-brain federated sync CLI
-├── AGENTS.md                          # Universal entrypoint for Antigravity / Claude / Cursor
-└── playwright.config.ts               # Production config (parallelism, retries, traces)
+│   │   ├── domain-memory.md            # Tier 0 Root Domain Hub (<= 150 lines)
+│   │   ├── domain-graph.json           # Compiled route/capability index
+│   │   ├── session-tape.schema.json    # v1 Session Tape JSON Schema (managed via cortex tape/explore)
+│   │   ├── shards/*.md                 # Feature shards (<= 150 lines)
+│   │   └── domains/<squad>/            # Optional Tier 1/2 Federated Squad Hubs & Shards
+│   └── skills/<id>/
+│       ├── SKILL.md                    # Progressive-disclosure workflow (<= 500 tok)
+│       └── references/*.md             # Focused lazy-loaded topic chunks (<= 800 tok each)
+├── .exploratory/tapes/*.json           # Schema-validated v1 Session Tapes
+├── defects/DEFECT-*.md                 # Secret-redacted regression reports
+├── src/
+│   ├── contracts/                      # IdentifiableComponent, ErrorBanner, WizardStep, ApiClient, StateSeeder, Flow
+│   ├── components/                     # SRP UI components (<= 150 lines, zero expect())
+│   ├── pages/                          # Page orchestrators (<= 250 lines, zero expect())
+│   ├── data/                           # Typed Data Builders (DIP, zero hardcoded secrets)
+│   ├── fixtures/app.fixture.ts         # OCP/ISP fixtures + overlay handlers + explorePause CDP hook
+│   └── shared/                         # AuthTokenBridge, RelativeDateHelper, explore-handshake, overlay-handler
+├── tests/*.spec.ts                     # Declarative specs with business-domain test.step() & CI tags
+└── scripts/
+    ├── lib/cli-output.mjs              # Shared token estimator, compact mode, ANSI strip & failure summaries
+    ├── context-pack.mjs                # `cortex context` (<= 400 tok single-call packs)
+    ├── tape-cli.mjs                    # `cortex tape` (list/show/clone/patch)
+    ├── orchestrate.mjs                 # `cortex orchestrate --loop --compact`
+    ├── explore-session.mjs             # `cortex explore` (CDP resume, batch DSL, pruned -i deltas)
+    ├── compile-tape.mjs                # `cortex compile`
+    ├── heal-drift.mjs                  # `cortex heal`
+    ├── verify-fast.mjs                 # `verify:fast` & `verify` (parallel static + failure-only test runner)
+    ├── audit-solid.mjs                 # SOLID, token budget, version-sync & security gate
+    ├── validate-tapes.mjs              # Session Tape schema & security validator
+    ├── migration-wave-factory.mjs      # `cortex wave` + dotnet-enterprise-analyzer.mjs + legacy-test-migrator.mjs
+    ├── build-domain-graph.mjs          # `cortex graph` + build-system-map.mjs (`cortex map`)
+    ├── sync-skills.mjs                 # `cortex init|sync` & CLI dispatcher
+    ├── upgrade-framework.mjs           # `cortex upgrade`
+    ├── report-cloud.mjs                # `cortex report` (opt-in sanitized governance telemetry)
+    └── self-test.mjs                   # 38-suite deterministic engine self-test harness
 ```
 
 ---
 
-## AI-Guided Installation & Skill Migration Playbook (Ask Your Agent)
+## Enforced Quality, Token & Security Guardrails
 
-Any IDE AI agent (**Google Antigravity, Claude Code, GitHub Copilot, Cursor, or Windsurf**) can read this `README.md` (and [`AGENTS.md`](./AGENTS.md)) to interactively install `agentic-solid-qe` into an existing project and migrate your existing skills, prompts, and scripts under the repository's SOLID and `< 500`-token guardrails.
-
-### Copy-Paste Prompts for Users
-
-- **Prompt 0 — Start Here: Ask the Master Orchestrator to Diagnose & Guide Your Next Step (`/00-master-orchestrator`):**
-  > *"Invoke `/00-master-orchestrator` (read `.agents/skills/00-master-orchestrator/SKILL.md` and `references/master-orchestration-playbook.md`). Run `npm run coverage:gaps` (`npx cortex orchestrate`) and `npm run migrate:skill -- --discover`, explain how all the skills and features in `agentic-solid-qe` apply to our project, show our current Coverage Maturity Stage (Stage 0–4), and recommend the single next step to incrementally increase our automation coverage."*
-- **Prompt 1 — Install into an Existing Project & Discover Legacy Skills:**
-  > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md` and `AGENTS.md`). Inspect my current repository, explain how `agentic-solid-qe` fits my setup, run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 init .` non-destructively, and run `npm run migrate:skill -- --discover` to inventory my existing skills, prompts, scripts, and Playwright tests."*
-- **Prompt 2 — Migrate Existing Skills & Scripts with Full Guardrails (`/05-skill-migrator`):**
-  > *"Run `/05-skill-migrator` (`npm run migrate:skill -- --discover`), walk me through the 4-Part Migration Triage Matrix for each of my existing skills/rules/scripts, migrate them with `--apply`, and verify all guardrails pass with `npm run verify`."*
-- **Prompt 3 — Upgrade an Existing `agentic-solid-qe` Consumer Repository Non-Destructively (`sync`):**
-  > *"Read `https://github.com/letstrnsfrm-ai/agentic-solid-qe` (`README.md`, `AGENTS.md`, and `.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`). Run `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync` (`npm run upgrade:skills`) to non-destructively update our skills, `session-tape.schema.json`, scripts, and foundational contracts/shared helpers (`WizardStepContract`, `ApiClientContract`, `AuthTokenBridge`, `RelativeDateHelper`) without modifying our existing domain shards or tests, then run `npm run verify`."*
-- **Prompt 4 — Orchestrate Complex Multi-Step Wizards, Cross-Portal Handoffs & Backend APIs (1 Test at a Time):**
-  > *"Read `.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`. Scaffold our application domains (`npx cortex sync --squad <domain>`), explore 1 critical business flow and its backend API contracts via `/01-cli-explorer`, and compile/verify 1 test at a time via `/02-solid-architect <scenario-id>`."*
-
-### 4-Step Execution Protocol for AI Agents Reading This File
-
-When a user asks you (the AI Agent) to help them understand, install, upgrade, or migrate skills into `agentic-solid-qe`, execute these four steps interactively:
-
-1. **Step 1 — Assess the Existing Project & Recommend an Onboarding Track:**
-   - Inspect `package.json`, `playwright.config.ts`, `tsconfig.json`, and existing test folders (`tests/`, `e2e/`).
-   - Recommend **Track 1** (single-app setup), **Track 2** (if `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.claude/commands/`, `.github/prompts/`, or custom helper scripts exist), **Track 3** (if multiple engineering squads share the repo), or **Track 4** (for multi-step wizards, multi-portal handoffs, backend API seeding, or upgrading an existing `agentic-solid-qe` installation).
-2. **Step 2 — Run Non-Destructive Initialization (`init`) or Consumer Upgrade (`sync`):**
-   - For first-time setup: execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 init . --url <app-url> --name "<App Name>"`.
-   - For existing consumers upgrading: execute `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync` (`npm run upgrade:skills`).
-   - Both safely merge `package.json` scripts and `tsconfig.json` `@*` path aliases without deleting existing tests, seed missing foundational contracts/helpers (`src/contracts/*`, `src/shared/*`), and automatically back up any pre-existing custom `AGENTS.md` or `.github/copilot-instructions.md` into `.agents/legacy-backups/` so nothing is lost.
-3. **Step 3 — Auto-Discover Legacy Skills, Prompts, Scripts & Spec Gaps (`--discover`):**
-   - Execute `npm run migrate:skill -- --discover` (`npx cortex migrate --discover`).
-   - Present the JSON discovery report to the user:
-     - `discoveredLegacySkillsAndPrompts`: Every `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.agents/legacy-backups/*.md`, `.cursor/rules/*.mdc`, custom `.claude/commands/*.md`, `.github/prompts/*.md`, and oversized/unregistered skill with its token count and ready-to-run migration command.
-     - `existingPlaywrightSuiteAudit`: Existing `.spec.ts` files that import directly from `@playwright/test` instead of `@fixtures/app.fixture` or lack `@data/*` Data Builders.
-4. **Step 4 — Run Guarded Migration (`--apply`) or 1-Test-at-a-Time Orchestration & Verification (`npm run verify`):**
-   - For legacy skills/prompts, run dry-run (`npm run migrate:skill -- <path> --name <skill-id> [--squad <squad>]`), present the **4-Part Migration Triage Matrix** for user confirmation, then run with `--apply` and `npm run verify`.
-   - For complex multi-step/multi-portal/API flows, follow [`.agents/skills/02-solid-architect/references/complex-orchestration-guide.md`](./.agents/skills/02-solid-architect/references/complex-orchestration-guide.md) to explore and compile **1 test at a time**.
+Running `npm run verify:fast` (inner loop, `<1s` static gate) or `npm run verify` (full gate with `self-test.mjs` + `@smoke|@p0`) enforces:
+- **Token Budgets (`audit:solid`):** `AGENTS.md ≤ 600` tok, `.github/copilot-instructions.md ≤ 600` tok, `SKILL.md ≤ 500` tok, `references/*.md ≤ 800` tok (preserving `local-overrides.md`), zero orphaned skill references.
+- **SOLID & Scale Caps (`audit:solid`):** Zero `expect()` outside `tests/*.spec.ts`, Components/Steps/Seeders `≤ 150` lines, Pages `≤ 250` lines, Fixtures/Builders `≤ 200` lines, `≤ 10` tests/spec, required CI tags, zero `test.only`/`waitForTimeout`/`networkidle`, business-domain `test.step()`.
+- **Security Hardening:** Strict Playwright locator allowlist, secret & BiDi/Trojan-Source redaction in `DEFECT-*.md` and migrated refs, path-traversal confinement, IPv4/IPv6 SSRF & offline-egress blocking, git-staged `.env`/`.auth` leak prevention, exact pinned dependencies, and `npx --no-install` in CI.
+- **Release Integrity:** Framework `package.json` ↔ `CHANGELOG.json` version consistency enforced in `audit:solid`.
 
 ---
 
-## Onboarding Tracks (Choose Your Starting Point)
+## Opt-In Governance Telemetry (`Cortex Cloud`)
 
-- **[Track 1: Greenfield / Single-App Quick Start (5 Minutes)](#track-1-greenfield--single-app-quick-start-5-minutes)** — Start from scratch or drop into an existing Playwright repo.
-- **[Track 2: Onboarding Existing Team Skills & Helper Scripts (`/05-skill-migrator`)](#track-2-onboarding-existing-team-skills--helper-scripts-05-skill-migrator)** — Bring your team's existing `.cursorrules`, prompts, and `.sh`/`.js`/`.py` scripts into the framework.
-- **[Track 3: Scaling to 100+ Engineers (3-Tier Federated Organizational Brain)](#track-3-scaling-to-100-engineers-3-tier-federated-organizational-brain)** — Partition domain knowledge and SOLID modules across 10–25 squads without merge conflicts.
-- **[Track 4: Complex Multi-Step Wizards, Multi-Portal Handoffs, Backend APIs & Consumer Upgrades](#track-4-complex-multi-step-wizards-multi-portal-handoffs-backend-apis--consumer-upgrades)** — Orchestrate 5–12 step conditional workflows (e.g., Motor/Home Insurance), Back-Office Agent Portals, Backend API clients, and non-destructive upgrades 1 test at a time.
-
----
-
-## Track 1: Greenfield / Single-App Quick Start (5 Minutes)
-
-### 1. Install or Drop Into Your Repository
-
-**Option A — Drop into any existing TypeScript/Playwright project (`npx`):**
-```bash
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 init . --url https://your-app-url.com --name "Your App"
-npm install
-npx playwright install chromium
-```
-
-**Option B — Clone or Use as a GitHub Template:**
-```bash
-gh repo create my-app-e2e --template letstrnsfrm-ai/agentic-solid-qe --public --clone
-cd my-app-e2e
-npm install
-npx playwright install chromium
-
-# Optional: Run the pre-loaded SauceDemo reference suite
-npm run verify
-
-# Reset demo artifacts and point at your own target application
-npm run init:app -- --url https://your-app-url.com --name "Your App"
-```
-
-### 2. Drive Coverage with the Master Orchestrator & Core QE Slash Commands
-
-Open your IDE agent (**Antigravity, Claude Code, GitHub Copilot, or Cursor**) and invoke:
-
-0. **Diagnose Repo & Get Incremental Coverage Plan (`/00-master-orchestrator`):**
-   > **Prompt:** `"/00-master-orchestrator"` (or `"/master-orchestrator"`)
-   - Runs `npm run coverage:gaps` (`npx cortex orchestrate`) + `npm run migrate:skill -- --discover`, reports your current **Coverage Maturity Stage (`Stage 0`–`Stage 4`)**, and recommends the exact next skill to invoke.
-1. **Bootstrap Environment & SSO/MFA Session (`/00-env-bootstrap`):**
-   > **Prompt:** `"/00-env-bootstrap"`
-   - Launches `agent-browser --headed`, captures authenticated `.auth/<persona>.json` (`storageState`), and maps top-level routes into `.agents/domain/shards/*.md`.
-2. **Explore & Curate Session Tapes (`/01-cli-explorer`):**
-   > **Prompt:** `"/01-cli-explorer"`
-   - Runs `npm run coverage:gaps`, recommends the **Top 3 Uncovered High-Risk Scenarios** (P0 `happy-path-baseline` ➔ P1 `multi-persona-auth` / `boundary-analysis` ➔ P2 `state-interruption`), explores the flow live, logs any bugs to `defects/`, and outputs QE-approved `.exploratory/tapes/<scenario>.json`.
-3. **Compile Tapes into SOLID TypeScript (`/02-solid-architect`):**
-   > **Prompt:** `"/02-solid-architect"`
-   - Compiles uncompiled Session Tapes into `src/contracts/`, `src/components/`, `src/pages/`, `src/data/`, `src/fixtures/`, and `tests/*.spec.ts`, then runs `npm run verify`.
-4. **Harden CI Tags & Sharded Pipelines (`/04-ci-pipeline`):**
-   > **Prompt:** `"/04-ci-pipeline"`
-5. **Heal Live Test Failures (`/03-drift-healer`):**
-   > **Prompt:** `"/03-drift-healer"`
-
----
-
-## Track 2: Onboarding Existing Team Skills & Helper Scripts (`/05-skill-migrator`)
-
-Already have team skills, `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.claude/commands`, `.github/prompts`, or ad-hoc helper scripts (`.sh`, `.js`, `.mjs`, `.ts`, `.py`) that aren't structured for `agentic-solid-qe`? Use **`/05-skill-migrator`** (backed by [`scripts/migrate-skill.mjs`](./scripts/migrate-skill.mjs) and the [Migration Starter Guide](./.agents/skills/05-skill-migrator/references/migration-starter-guide.md)).
-
-### 1. Auto-Discover All Legacy Skills, Prompts & Spec Guardrail Gaps (`--discover`)
-Scan your entire workspace to inventory unmigrated AI rules, skills, helper scripts, and existing `.spec.ts` files needing SOLID alignment:
+The MIT core operates **100% locally with zero API keys and zero telemetry by default**. Teams wanting multi-repo Stage 0–4 maturity dashboards, `tokenFootprint` tracking, and automated GitHub/Azure DevOps PR comment bots can opt in via CI:
 
 ```bash
-npm run migrate:skill -- --discover
+npx cortex report --dry-run   # Inspect exact sanitized JSON payload (counts, stage, solidPassed, tokenFootprint)
+# Upload with CORTEX_CLOUD_URL & CORTEX_CLOUD_TOKEN (disabled automatically when CORTEX_OFFLINE=1)
+npx cortex report
 ```
-
-### 2. Run a Dry-Run Migration Scan for a Specific Skill
-Point the migrator at any discovered markdown prompt or folder containing a skill and its scripts:
-
-```bash
-npm run migrate:skill -- ./path/to/legacy-skill-or-folder --name 06-billing-seeder --squad billing
-```
-
-Or inside your IDE chat:
-> **Prompt:** `"/05-skill-migrator ./path/to/legacy-skill-or-folder"`
-
-The analyzer inspects your files without modifying them and presents a **4-Part Migration Triage Matrix**:
-1. **Token Budget Audit:** Compares original token count against the strict `< 500`-token `SKILL.md` cap and previews what will move to secret-sanitized `.agents/skills/<skill-id>/references/legacy-reference.md`.
-2. **Script Discovery & Classification:**
-   - `utility-or-api-seeder` scripts (API callers, DB seeders, schema tools) are slated for `.agents/skills/<skill-id>/scripts/` with hardcoded `http(s)://` URLs parameterized via `process.env.BASE_URL` and secrets redacted.
-   - `legacy-ui-automation` scripts (raw Puppeteer/Playwright/Cypress files using `waitForTimeout` or XPath) are archived in `references/` and bridged into schema-valid **Session Tapes** (`.exploratory/tapes/<skill-id>.json`) for `/02-solid-architect`.
-3. **Rewritten Root-Relative Commands:** Fragile relative invocations (`bash ../scripts/seed.sh`) are rewritten to canonical commands (`bash .agents/skills/06-billing-seeder/scripts/seed.sh`).
-4. **Domain Brain Extraction & Indexing:** Embedded `/routes` and `data-testid` attributes are extracted into a `≤ 150`-line Domain Shard and indexed in `.agents/domain/domain-memory.md` (or `.agents/domain/domains/<squad>/index.md`).
-
-### 3. Apply & Verify All Guardrails
-```bash
-npm run migrate:skill -- ./path/to/legacy-skill-or-folder --name 06-billing-seeder --squad billing --apply
-npm run verify
-```
-This scaffolds `.agents/skills/<skill-id>/{SKILL.md,references/,scripts/}`, bridges any UI script into `.exploratory/tapes/<skill-id>.json`, scaffolds & indexes the `≤ 150`-line Domain Shard, registers the skill in `AGENTS.md` and `.github/copilot-instructions.md`, and creates `.claude/commands/<skill-id>.md` + `.github/prompts/<skill-id>.prompt.md` wrappers in one step.
-
-| Legacy Pattern | `agentic-solid-qe` Guardrail Standard | Verification Gate |
-| :--- | :--- | :--- |
-| Monolithic prompt (`> 500` tokens) | `< 500`-token `SKILL.md` + `references/legacy-reference.md` | `npm run audit:solid` |
-| Unindexed or `> 150`-line domain notes | Indexed Tier 0/1/2 Domain Shard (`≤ 150` lines) + `**Last Verified:**` | `npm run audit:solid` & `npm run domain:graph` |
-| Hardcoded secrets (`sk-*`, `ghp_*`, `password=...`) | Redacted in `references/` & `scripts/`; read from `process.env` / `src/data/*.builder.ts` | `npm run audit:solid` |
-| Raw UI script (`waitForTimeout`, XPath) | Archived in `references/`, bridged to `.exploratory/tapes/<id>.json`, compiled via `/02-solid-architect` | `npm run validate:tapes` & `npm run audit:solid` |
-| Existing `.spec.ts` importing `@playwright/test` | Import `{ test, expect }` from `@fixtures/app.fixture` and builders from `@data/*` | `npm run audit:solid` |
-
----
-
-## Track 3: Scaling to 100+ Engineers (3-Tier Federated Organizational Brain)
-
-When 100+ engineers across 10–25 squads contribute to an Organizational Brain, a single flat `domain-memory.md` file or a single `src/fixtures/app.fixture.ts` quickly becomes a merge-conflict bottleneck. `agentic-solid-qe` scales horizontally using a **3-Tier Federated Hierarchy** and **Domain-Scoped SOLID Modules**:
-
-```mermaid
-flowchart TD
-  subgraph Tier0["Tier 0: Org Root Brain (≤ 150 lines)"]
-    RootIndex[".agents/domain/domain-memory.md\n(Global Env, Personas, Squad Router)"]
-    GraphRouter[".agents/domain/domain-graph.json\n(O(1) Route -> Shard, Owner & Capability Lookup)"]
-  end
-
-  subgraph Tier1["Tier 1: Squad Sub-Hubs (≤ 150 lines each)"]
-    IdentityHub[".agents/domain/domains/identity/index.md\nOwner: @org/identity-squad"]
-    CatalogHub[".agents/domain/domains/catalog/index.md\nOwner: @org/catalog-squad"]
-    CheckoutHub[".agents/domain/domains/checkout/index.md\nOwner: @org/checkout-squad"]
-  end
-
-  subgraph Tier2["Tier 2: Bounded-Context Feature Shards (≤ 150 lines each)"]
-    AuthShard["shards/sso-mfa.md\n(Invariants, Cookie Seeders, Quirks)"]
-    CartShard["shards/inventory-cart.md\n(Invariants, localStorage Seeders, Quirks)"]
-    PayShard["shards/payment-tax.md\n(Invariants, Tax Rules, Quirks)"]
-  end
-
-  RootIndex --> GraphRouter
-  RootIndex --> IdentityHub
-  RootIndex --> CatalogHub
-  RootIndex --> CheckoutHub
-  IdentityHub --> AuthShard
-  CatalogHub --> CartShard
-  CheckoutHub --> PayShard
-```
-
-### Enterprise Scaling Commands
-
-1. **Scaffold a New Squad Sub-Hub & Isolated SOLID Domain Module (`--squad`):**
-   ```bash
-   node scripts/sync-skills.mjs sync --squad checkout
-   ```
-   - Creates `.agents/domain/domains/checkout/index.md` (`≤ 150` lines) and `.agents/domain/domains/checkout/shards/`.
-   - Creates `src/domains/checkout/{components,pages,data,fixtures}/` so the Checkout squad never conflicts with other squads on `src/fixtures/app.fixture.ts` or triggers cross-squad DIP literal collisions.
-   - Registers the squad sub-hub in `.agents/domain/domain-memory.md`.
-
-2. **Sync a Shared Org Brain Across Federated Repositories (`--org-brain`):**
-   ```bash
-   node scripts/sync-skills.mjs sync --org-brain ../org-qe-brain --squad checkout
-   ```
-   - Syncs Tier 0 `.agents/domain/domain-memory.md`, `.agents/domain/domain-graph.json`, `src/contracts/`, and `src/shared/` from a central platform repository or package while preserving each squad's local shards and specs.
-
-3. **Compile the O(1) Domain Graph & Audit Shard Freshness (`npm run domain:graph`):**
-   ```bash
-   npm run domain:graph
-   npm run coverage:gaps
-   ```
-   - Compiles `.agents/domain/domain-graph.json` with `routeIndex`, `ownerSquad`, `publishedCapabilities` (reusable API/`storageState` precondition seeders for downstream squads), `codeownersRules`, and automatic TTL staleness tracking (`**Last Verified:** YYYY-MM-DD`, default 90 days via `DOMAIN_STALE_DAYS`).
-
----
-
-## Track 4: Complex Multi-Step Wizards, Multi-Portal Handoffs, Backend APIs & Consumer Upgrades
-
-For enterprise applications with 5–12 step conditional wizards (e.g., Motor/Home Insurance Quote & Buy), Back-Office Agent/Underwriting portals, and Backend Rating/Policy APIs, follow the **[Complex Application, Multi-Portal & Backend API Orchestration Guide](./.agents/skills/02-solid-architect/references/complex-orchestration-guide.md)**.
-
-### 1. Four Enterprise Orchestration Patterns (`1 Test at a Time`)
-
-| Pattern | Session Tape Contract | SOLID TypeScript Target (`src/`) | When to Use |
-| :--- | :--- | :--- | :--- |
-| **Pattern A: Conditional Multi-Step Wizards** | `semanticSteps[].conditionRef` | Atomic `≤ 150`-line step components implementing [`WizardStepContract<TRiskProfile>`](./src/contracts/wizard-step.contract.ts) + [`RelativeDateHelper`](./src/shared/data/relative-date.helper.ts) | 5–12 step Motor/Home quote flows with conditional sections (claims history, convictions, non-standard property). |
-| **Pattern B: Backend API Discovery, Seeding & Contracts** | `charter: "api-contract"`, `action: "apiCall"`, `source: "apiResponseJson"`, `networkContracts.clientCandidate` | Typed `APIRequestContext` clients in `src/domains/<squad>/api/*.client.ts` implementing [`ApiClientContract`](./src/contracts/api-client.contract.ts) + [`AuthTokenBridge`](./src/shared/api/auth-token.bridge.ts) | Fast API precondition seeding (create a Quote/Policy via API before testing Agent Portal UI) or standalone API rating tests. |
-| **Pattern C: Cross-Portal Multi-Actor Handoffs** | `charter: "cross-portal-handoff"`, root `actors[]`, step `actor` & `portalUrl`, `capturedVariables` | Multi-context Playwright fixtures (`browser.newContext({ storageState })`) isolating Customer B2C and Back-Office Agent sessions | End-to-end journeys spanning Customer Quote Portal ➔ `QuoteId` ➔ Back-Office Underwriter/Agent Portal approval. |
-| **Pattern D: Strict 1-Test-at-a-Time Pacing** | `nextSingleScenarioToAutomate` in `npm run coverage:gaps` | Single vertical slice compiled via `/02-solid-architect <scenario-id>` and verified via `npm run verify` | Building a stable enterprise regression suite incrementally without unverified batch generation. |
-
-### 2. How Existing Day-to-Day Consumers Receive This Update Non-Destructively
-
-If your team already uses `agentic-solid-qe` in an existing repository, upgrade in one command without touching your existing domain shards, pages, components, builders, or `.spec.ts` files:
-
-```bash
-# Preview changes first without modifying any files:
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync --dry-run
-
-# Apply the non-destructive upgrade:
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.9.1 sync
-# Or via your package.json script:
-npm run upgrade:skills
-```
-
-- **Automatically Updated (`overwrite: true`):** `.agents/skills/*` (including [`complex-orchestration-guide.md`](./.agents/skills/02-solid-architect/references/complex-orchestration-guide.md)), `.agents/domain/session-tape.schema.json`, `scripts/*.mjs`, `AGENTS.md` (with automatic backup of any custom file to `.agents/legacy-backups/`), `.github/copilot-instructions.md`, `.github/prompts/*`, and `.claude/commands/*`.
-- **Seeded Only If Missing (`overwrite: false`):** [`src/contracts/api-client.contract.ts`](./src/contracts/api-client.contract.ts), [`src/contracts/wizard-step.contract.ts`](./src/contracts/wizard-step.contract.ts), [`src/shared/api/auth-token.bridge.ts`](./src/shared/api/auth-token.bridge.ts), and [`src/shared/data/relative-date.helper.ts`](./src/shared/data/relative-date.helper.ts).
-- **Non-Destructively Merged (JSONC-Safe):** `@domains/*` and `@shared/*` path aliases in `tsconfig.json` (even if your `tsconfig.json` uses `//` comments or trailing commas) and verification scripts in `package.json`.
-- **100% Preserved:** `.agents/domain/domain-memory.md`, `.agents/domain/shards/*.md`, `.agents/domain/domains/**`, `.exploratory/tapes/*.json`, `defects/*.md`, `src/{components,pages,data,fixtures,domains}/**`, and `tests/**/*.spec.ts`.
-
----
-
-## Quality Gates & Verification Scripts
-
-| Command (`npm run` or `npx cortex` / `npx asqe`) | Description |
-| :--- | :--- |
-| `npm run verify` | **Full Gate:** Runs `typecheck` + `domain:graph` + `audit:solid` + `validate:tapes` + `test:engine` + `playwright test`. |
-| `npx cortex compile [<tape>] [--squad <squad>] [--apply]` | **Deterministic Tape-to-SOLID Compiler:** Compiles a Session Tape into SOLID Components, Wizard Steps, Pages, API Clients, Data Builders, Fixtures, and `.spec.ts` (`npm run compile:tape`). |
-| `npx cortex orchestrate` / `npm run orchestrate` | **Master Orchestrator Snapshot:** Outputs `coverageMaturityStage` (Stage 0–4), uncovered/stale shards, uncompiled Session Tapes, API contracts, and recommended next skill (`npx cortex status`). |
-| `npm run test:engine` | Runs zero-browser `node --test` self-tests verifying `--dry-run`, legacy consumer `sync` upgrades, JSONC `tsconfig.json` merging, and `--seed-from-tapes` auto-indexing. |
-| `npx cortex init --url <url> --name "<App>" [--dry-run]` | Initializes or resets a repository with a clean SOLID skeleton (`npm run init:app`). |
-| `npx cortex sync [--squad <squad>] [--org-brain <path>] [--dry-run]` | Upgrades skills/schema/contracts non-destructively, scaffolds a Tier 1 Squad Sub-Hub & `src/domains/<squad>/` module, or syncs an Org Brain. |
-| `npx cortex migrate --discover` | Inventories legacy AI rules (`.cursorrules`, `CLAUDE.md`, backups), skills, helper scripts, and non-SOLID `.spec.ts` files. |
-| `npx cortex migrate <path> [--name <id>] [--apply]` | Analyzes and scaffolds legacy team skills, prompts, and helper scripts (`npm run migrate:skill`). |
-| `npx cortex graph` / `npm run domain:graph` | Compiles `.agents/domain/domain-graph.json` (routes, squad owners, published capabilities, stale shards) and refreshes `reports/system-map.html`. |
-| `npx cortex map` / `npm run map` | Generates self-contained interactive HTML System & Business Flow Map (`reports/system-map.html`, configurable via `--out <path>`). |
-| `npx cortex gaps` / `npm run coverage:gaps` | Outputs JSON snapshot of uncovered shards, stale shards, uncompiled Session Tapes, and recommended next skill. |
-| `npx cortex audit` / `npm run audit:solid` | Enforces `< 500`-token skills, `≤ 150`-line hubs/shards/components, zero `expect()` in `src/`, LSP contracts, and scoped DIP builders. |
-| `npm run validate:tapes` | Validates all `.exploratory/tapes/*.json` files against `.agents/domain/session-tape.schema.json`. |
-| `npm run upgrade:skills` | Upgrades core skills, scripts, and missing contracts from `github:letstrnsfrm-ai/agentic-solid-qe` while preserving your domain brain. |
 
 ---
 
 ## License
 
-MIT © Agentic-SOLID-QE Contributors
+[MIT](LICENSE)

@@ -89,6 +89,36 @@ if (fs.existsSync(copilotInstrFile)) {
   }
 }
 
+// 1b-ver. Audit Release Manifest Consistency (CHANGELOG.json internal sync + framework package.json sync)
+const changelogFile = path.join(ROOT, 'CHANGELOG.json');
+const rootPkgFile = path.join(ROOT, 'package.json');
+if (fs.existsSync(changelogFile)) {
+  try {
+    const changelog = JSON.parse(fs.readFileSync(changelogFile, 'utf8'));
+    const topReleaseVer = changelog?.releases?.[0]?.version;
+    if (changelog?.latestVersion && topReleaseVer && changelog.latestVersion !== topReleaseVer) {
+      violations.push(
+        `[Release Version Drift] CHANGELOG.json latestVersion (${changelog.latestVersion}) !== releases[0].version (${topReleaseVer}).`
+      );
+    }
+    if (fs.existsSync(rootPkgFile)) {
+      const rootPkg = JSON.parse(fs.readFileSync(rootPkgFile, 'utf8'));
+      if (
+        rootPkg?.name === 'agentic-solid-qe' &&
+        rootPkg?.version &&
+        changelog?.latestVersion &&
+        rootPkg.version !== changelog.latestVersion
+      ) {
+        violations.push(
+          `[Release Version Drift] package.json version (${rootPkg.version}) !== CHANGELOG.json latestVersion (${changelog.latestVersion}). Keep framework manifests aligned.`
+        );
+      }
+    }
+  } catch {
+    violations.push('[Release Version Drift] CHANGELOG.json is invalid JSON.');
+  }
+}
+
 // 1. Audit SKILL.md Token Budget (<= 500 tokens) & Reference Topic Chunk Budget (<= 800 tokens)
 const skillFiles = walkFiles(path.join(ROOT, '.agents/skills'), 'SKILL.md');
 for (const file of skillFiles) {
