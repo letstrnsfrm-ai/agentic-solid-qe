@@ -47,6 +47,7 @@ Usage:
   cortex sync [target-dir] [--squad <squad-name>] [--org-brain <path>] [--dry-run] [--force]
   cortex migrate --discover
   cortex migrate <legacy-path> [--name <skill-id>] [--squad <squad>] [--apply]
+  cortex wave [options]        2,000-test Squad Wave Factory, Wave-0 Seeders/Flows & HTML Parity Dashboard
   cortex graph                 Compile 3-Tier Federated Brain (.agents/domain/domain-graph.json)
   cortex map [--out <path>]    Generate interactive HTML System & Business Flow Map (reports/system-map.html)
   cortex gaps                  Run Coverage, Staleness & Traceability Analyzer
@@ -64,6 +65,7 @@ const subcommandDelegateMap = {
   explore: 'explore-session.mjs',
   heal: 'heal-drift.mjs',
   migrate: 'migrate-skill.mjs',
+  wave: 'migration-wave-factory.mjs',
   graph: 'build-domain-graph.mjs',
   map: 'build-system-map.mjs',
   gaps: 'analyze-coverage.mjs',
@@ -703,6 +705,7 @@ function mergeConsumerPackageJson() {
     map: 'node scripts/build-system-map.mjs',
     'compile:tape': 'node scripts/compile-tape.mjs',
     'migrate:skill': 'node scripts/migrate-skill.mjs',
+    'migrate:wave': 'node scripts/migration-wave-factory.mjs',
     'coverage:gaps': 'node scripts/analyze-coverage.mjs',
     orchestrate: 'node scripts/orchestrate.mjs',
     'audit:solid': 'node scripts/audit-solid.mjs',
@@ -1083,6 +1086,8 @@ const coreEnginePaths = [
   'scripts/heal-drift.mjs',
   'scripts/migrate-skill.mjs',
   'scripts/legacy-test-migrator.mjs',
+  'scripts/dotnet-enterprise-analyzer.mjs',
+  'scripts/migration-wave-factory.mjs',
   'scripts/orchestrate.mjs',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',

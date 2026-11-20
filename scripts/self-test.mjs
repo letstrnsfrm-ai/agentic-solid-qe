@@ -3329,4 +3329,222 @@ test('32. Phase 2 explore speed & token efficiency: direct bin, snapshot pruning
   assert.ok(!/\bexpect\s*\(/.test(seederCodeOnly), 'Promoted seeder must contain zero expect() calls');
 });
 
+test('33. Milestone 1 Enterprise C#/.NET Analyzer: multi-.csproj squads, BaseTest inheritance, SpecFlow/Reqnroll, hybrid seeders, and Wave-0 prefix rationalization', async () => {
+  const { discoverLegacyTests } = await import('./legacy-test-migrator.mjs');
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-dotnet-ent-'));
+  try {
+    // 1. Multi-.csproj solution with MotorPortal.Tests + Claims.Tests + Shared BaseTest
+    fs.writeFileSync(path.join(tmpRoot, 'Enterprise.sln'), 'Microsoft Visual Studio Solution File\n', 'utf8');
+    fs.mkdirSync(path.join(tmpRoot, 'Shared'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'MotorPortal.Tests/Features'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'Claims.Tests'), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpRoot, 'MotorPortal.Tests/MotorPortal.Tests.csproj'),
+      '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Reqnroll.NUnit" Version="2.0.0" /><PackageReference Include="RestSharp" Version="110.0.0" /></ItemGroup></Project>',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'Claims.Tests/Claims.Tests.csproj'),
+      '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Dapper" Version="2.1.0" /></ItemGroup></Project>',
+      'utf8'
+    );
+
+    // BaseTest -> AuthenticatedTestBase -> MotorQuoteTests inheritance chain
+    fs.writeFileSync(
+      path.join(tmpRoot, 'Shared/BaseTest.cs'),
+      `public abstract class BaseTest {
+        protected LoginPage _loginPage;
+        [OneTimeSetUp] public void GlobalAuthSetup() { _loginPage.SignIn(); }
+      }`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'Shared/AuthenticatedTestBase.cs'),
+      `public abstract class AuthenticatedTestBase : BaseTest {
+        protected QuotePage _quotePage;
+        [SetUp] public void InitSession() { Authenticate(); }
+      }`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'MotorPortal.Tests/MotorQuoteTests.cs'),
+      `using NUnit.Framework;
+      using RestSharp;
+      public class MotorQuoteTests : AuthenticatedTestBase {
+        [Test] public void CreateQuoteForStandardDriver() {
+          var client = new RestClient("https://api.example.com");
+          _loginPage.SignIn(); _quotePage.CreateQuote();
+        }
+        [Test] public void CreateQuoteForYoungDriver() {
+          var client = new RestClient("https://api.example.com");
+          _loginPage.SignIn(); _quotePage.CreateQuote();
+        }
+      }`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'Claims.Tests/ClaimsDbTests.cs'),
+      `using NUnit.Framework;
+      using System.Data.SqlClient;
+      public class ClaimsDbTests : BaseTest {
+        [Ignore("Flaky legacy")]
+        [Test] public void QuarantinedClaimTest() {
+          using var conn = new SqlConnection("Server=.;");
+          conn.ExecuteAsync("sp_SeedClaim");
+        }
+      }`,
+      'utf8'
+    );
+
+    // SpecFlow / Reqnroll .feature + [Binding] + ScenarioContext
+    fs.writeFileSync(
+      path.join(tmpRoot, 'MotorPortal.Tests/Features/Renewal.feature'),
+      `@p0 @smoke
+      Feature: Policy Renewal
+        Scenario Outline: Renew active policy
+          Given an active policy exists
+          When the customer accepts renewal terms for <plan>
+          Then the renewed policy confirmation is displayed
+          Examples:
+            | plan |
+            | Gold |
+            | Silver |
+      `,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'MotorPortal.Tests/RenewalSteps.cs'),
+      `[Binding]
+      public class RenewalSteps {
+        private readonly ScenarioContext _scenarioContext;
+        [Given("an active policy exists")] public void SeedActivePolicy() { _scenarioContext["policyNumber"] = "POL-1"; }
+        [When("the customer accepts renewal terms for (.*)")] public void AcceptRenewal(string plan) {}
+        [Then("the renewed policy confirmation is displayed")] public void VerifyRenewed() {}
+      }`,
+      'utf8'
+    );
+
+    const disc = discoverLegacyTests(tmpRoot);
+    assert.deepEqual(disc.solutionTopology.squads.sort(), ['claims', 'motor-portal']);
+    assert.equal(disc.specflowSummary.featureFileCount, 1);
+    assert.equal(disc.specflowSummary.bindingCount, 3);
+    assert.ok(disc.specflowSummary.scenarioContextKeys.includes('policyNumber'));
+
+    const motorTest = disc.tests.find((t) => t.testMethod === 'CreateQuoteForStandardDriver');
+    assert.ok(motorTest, 'Expected MotorQuoteTests method to be discovered');
+    assert.equal(motorTest.squad, 'motor-portal');
+    assert.deepEqual(motorTest.inheritanceChain, ['MotorQuoteTests', 'AuthenticatedTestBase', 'BaseTest']);
+    assert.equal(motorTest.seederProfile.primaryStrategy, 'api-seeder');
+
+    const claimTest = disc.tests.find((t) => t.testMethod === 'QuarantinedClaimTest');
+    assert.ok(claimTest, 'Expected ClaimsDbTests method to be discovered');
+    assert.equal(claimTest.squad, 'claims');
+    assert.equal(claimTest.isSkipped, true);
+    assert.equal(claimTest.seederProfile.primaryStrategy, 'db-seeder');
+
+    // Rationalization: dead test triaged, Wave-0 shared prefix mined, near-duplicates consolidated
+    assert.equal(disc.rationalization.summary.skippedQuarantine, 1);
+    assert.ok(disc.rationalization.wave0Prereqs.length >= 1, 'Expected shared Wave-0 prefix to be mined');
+    assert.equal(disc.rationalization.wave0Prereqs[0].recommendedContract, 'StateSeederContract');
+    assert.ok(disc.rationalization.consolidationGroups.length >= 1, 'Expected near-duplicate motor quote tests to consolidate');
+    assert.ok(disc.rationalization.summary.reductionPct > 0, 'Expected rationalization reduction > 0%');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('34. Milestone 2 Squad Wave Factory: resume-safe ledger, token-bounded batches, Wave-0 Seeder/Flow scaffolding, and XSS-safe HTML Parity Dashboard', async () => {
+  const {
+    initOrUpdateMigrationLedger,
+    selectNextWaveBatch,
+    scaffoldWave0Prereq,
+    generateMigrationDashboard,
+  } = await import('./migration-wave-factory.mjs');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-wave-factory-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpRoot, '--url', 'https://app.example.com', '--name', 'WaveApp'], REPO_ROOT);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    // Seed a legacy .NET solution under legacy-cs/
+    const legacyDir = path.join(tmpRoot, 'legacy-cs');
+    fs.mkdirSync(path.join(legacyDir, 'Motor.Tests'), { recursive: true });
+    fs.mkdirSync(path.join(legacyDir, 'Claims.Tests'), { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'Motor.Tests/Motor.Tests.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>', 'utf8');
+    fs.writeFileSync(path.join(legacyDir, 'Claims.Tests/Claims.Tests.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>', 'utf8');
+
+    fs.writeFileSync(
+      path.join(legacyDir, 'Motor.Tests/QuoteFlowTests.cs'),
+      `using NUnit.Framework;
+      using RestSharp;
+      public class QuoteFlowTests {
+        private LoginPage _loginPage;
+        private QuotePage _quotePage;
+        [Test] public void BindQuoteForBasicPlan() { new RestClient("https://api.example.com"); _loginPage.SignIn(); _quotePage.CreateQuote(); }
+        [Test] public void BindQuoteForPremiumPlan() { new RestClient("https://api.example.com"); _loginPage.SignIn(); _quotePage.CreateQuote(); }
+        [Test] public void CancelActiveQuote() { _loginPage.SignIn(); _quotePage.CancelQuote(); }
+      }`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(legacyDir, 'Claims.Tests/ClaimTests.cs'),
+      `using NUnit.Framework;
+      public class ClaimTests {
+        private LoginPage _loginPage;
+        [Ignore("Legacy broken")]
+        [Test] public void BrokenLegacyClaim() { _loginPage.SignIn(); }
+      }`,
+      'utf8'
+    );
+
+    // 1. Build resume-safe ledger
+    const manifest = initOrUpdateMigrationLedger(legacyDir, tmpRoot);
+    assert.equal(manifest.schemaVersion, '2.0.0');
+    assert.equal(manifest.ledger.length, 4);
+    assert.ok(manifest.wave0Prereqs.length >= 1, 'Expected Wave-0 shared prereq');
+
+    // Mark 1 test live-verified & re-scan -> must preserve live-verified status (resume-safe)
+    const firstPending = manifest.ledger.find((e) => e.status === 'pending');
+    firstPending.status = 'live-verified';
+    firstPending.targetSpec = 'tests/motor/bind-quote.spec.ts';
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/migration-manifest.json'),
+      JSON.stringify(manifest, null, 2),
+      'utf8'
+    );
+    const refreshed = initOrUpdateMigrationLedger(legacyDir, tmpRoot);
+    const preserved = refreshed.ledger.find((e) => e.id === firstPending.id);
+    assert.equal(preserved.status, 'live-verified', 'Ledger refresh must preserve live-verified progress');
+
+    // 2. Token-bounded squad & wave micro-batch selection
+    const w0Batch = selectNextWaveBatch(refreshed, { squad: 'motor', wave: 0, batchSize: 1 });
+    assert.equal(w0Batch.wave, 0);
+    assert.equal(w0Batch.batch.length, 1);
+
+    // 3. Scaffold Wave-0 shared seeder/flow and verify SOLID audit passes
+    const built = scaffoldWave0Prereq(w0Batch.batch[0], tmpRoot);
+    assert.ok(fs.existsSync(path.join(tmpRoot, built.relPath)), `Expected scaffolded Wave-0 file at ${built.relPath}`);
+    const auditRes = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.equal(auditRes.status, 0, `Wave-0 scaffold failed audit:solid: ${auditRes.stderr}\n${auditRes.stdout}`);
+
+    // 4. Generate HTML Burn-Down & N:1 Parity Dashboard + security checks (XSS escape & path traversal)
+    const dash = generateMigrationDashboard(tmpRoot, 'reports/migration-dashboard.html');
+    const html = fs.readFileSync(path.join(tmpRoot, dash.outPath), 'utf8');
+    assert.match(html, /Cortex Legacy-to-SOLID Migration Burn-Down/);
+    assert.match(html, /N:1 Legacy-to-Playwright Parity Traceability/);
+    assert.match(html, /status-live-verified/);
+    assert.match(html, /status-consolidated/);
+
+    assert.throws(
+      () => generateMigrationDashboard(tmpRoot, '../outside.html'),
+      /Security Error/
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
+
 
