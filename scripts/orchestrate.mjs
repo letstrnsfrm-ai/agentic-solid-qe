@@ -269,16 +269,52 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
   } else if (totalLegacyCount > 0) {
     maturityStage = 'Stage 0 — Legacy Rules & Test Migration';
     const hasLegacyTests = legacyCodeTests.length > 0;
-    nextAction = {
-      priority: 4,
-      skill: '05-skill-migrator',
-      why: `Discovered ${legacyRulesAndPrompts.length} legacy skill/prompt file(s) and ${legacyCodeTests.length} pending Java/C# test(s).`,
-      command: hasLegacyTests
-        ? 'node scripts/legacy-test-migrator.mjs --discover'
-        : 'npm run migrate:skill -- --discover',
-      autoRunnable: false,
-      humanGate: 'Approve the 1-test-at-a-time migration wave / slice selection.',
-    };
+    const waveManifestPath = path.join(rootDir, '.agents/domain/migration-manifest.json');
+    let waveManifest = null;
+    if (fs.existsSync(waveManifestPath)) {
+      try {
+        waveManifest = JSON.parse(fs.readFileSync(waveManifestPath, 'utf8'));
+      } catch {
+        waveManifest = null;
+      }
+    }
+    const pendingWave0 = (waveManifest?.wave0Prereqs || []).filter((w) => w.status === 'pending');
+    const pendingLedger = (waveManifest?.ledger || []).filter((e) => e.status === 'pending');
+    const useWaveFactory = pendingWave0.length > 0 || pendingLedger.length > 0 || legacyCodeTests.length >= 10;
+
+    if (useWaveFactory) {
+      const targetWave = pendingWave0.length > 0 ? 0 : (pendingLedger[0]?.wave ?? 1);
+      const waveCmd =
+        targetWave === 0
+          ? 'npx cortex wave --wave 0 --run --dashboard'
+          : `npx cortex wave --wave ${targetWave} --batch-size 5 --run --dashboard`;
+      nextAction = {
+        priority: 4,
+        skill: '05-skill-migrator',
+        why:
+          pendingWave0.length > 0
+            ? `${pendingWave0.length} shared Wave-0 StateSeeder/Flow prerequisite(s) ready to scaffold before migrating ${pendingLedger.length} downstream legacy test(s).`
+            : `Large legacy suite (${legacyCodeTests.length} test(s), ${pendingLedger.length || legacyCodeTests.length} pending) ready for token-bounded Wave ${targetWave} micro-batch migration.`,
+        command: waveCmd,
+        runArgs:
+          targetWave === 0
+            ? [path.join(__dirname, 'migration-wave-factory.mjs'), '--wave', '0', '--run', '--dashboard']
+            : [path.join(__dirname, 'migration-wave-factory.mjs'), '--wave', String(targetWave), '--batch-size', '5', '--run', '--dashboard'],
+        autoRunnable: true,
+        humanGate: 'Review micro-batch compilation & reports/migration-dashboard.html parity burn-down.',
+      };
+    } else {
+      nextAction = {
+        priority: 4,
+        skill: '05-skill-migrator',
+        why: `Discovered ${legacyRulesAndPrompts.length} legacy skill/prompt file(s) and ${legacyCodeTests.length} pending Java/C# test(s).`,
+        command: hasLegacyTests
+          ? 'node scripts/legacy-test-migrator.mjs --discover'
+          : 'npm run migrate:skill -- --discover',
+        autoRunnable: false,
+        humanGate: 'Approve the 1-test-at-a-time migration wave / slice selection.',
+      };
+    }
   } else if (uncoveredShards.length > 0) {
     const nextShard = uncoveredShards[0];
     const shardName = typeof nextShard === 'string' ? nextShard : nextShard.shard || nextShard.feature;

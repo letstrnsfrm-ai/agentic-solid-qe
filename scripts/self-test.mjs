@@ -3545,6 +3545,82 @@ test('34. Milestone 2 Squad Wave Factory: resume-safe ledger, token-bounded batc
   }
 });
 
+test('35. Autonomous resilient cortex wave --run micro-batch execution & orchestrate.mjs Wave Factory auto-routing', async () => {
+  const {
+    initOrUpdateMigrationLedger,
+    selectNextWaveBatch,
+    executeWaveBatch,
+    generateMigrationDashboard,
+  } = await import('./migration-wave-factory.mjs');
+  const { buildOrchestrationBlueprint } = await import('./orchestrate.mjs');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-wave-auto-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpRoot, '--url', 'https://app.example.com', '--name', 'AutoWaveApp'], REPO_ROOT);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    // Seed a lean multi-squad C#/.NET fixture under legacy-cs/
+    const legacyDir = path.join(tmpRoot, 'legacy-cs');
+    fs.mkdirSync(path.join(legacyDir, 'Billing.Tests'), { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'Billing.Tests/Billing.Tests.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>', 'utf8');
+    fs.writeFileSync(
+      path.join(legacyDir, 'Billing.Tests/InvoiceTests.cs'),
+      `using NUnit.Framework;
+      using OpenQA.Selenium;
+      public class InvoiceTests {
+        private IWebDriver driver;
+        [Test] public void PayOpenInvoice() {
+          driver.Navigate().GoToUrl("https://app.example.com/invoices");
+          driver.FindElement(By.Id("pay-btn")).Click();
+          Assert.IsTrue(driver.FindElement(By.Id("paid-badge")).Displayed);
+        }
+        [Test] public void DownloadInvoicePdf() {
+          driver.Navigate().GoToUrl("https://app.example.com/invoices");
+          driver.FindElement(By.Id("pdf-btn")).Click();
+          Assert.IsTrue(driver.FindElement(By.Id("pdf-ready")).Displayed);
+        }
+      }`,
+      'utf8'
+    );
+
+    const manifest = initOrUpdateMigrationLedger(legacyDir, tmpRoot);
+
+    // 1. orchestrate.mjs auto-routes to `npx cortex wave` when migration-manifest.json has pending items
+    const bp = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(bp.nextAction.priority, 4);
+    assert.match(bp.nextAction.command, /^npx cortex wave /);
+    assert.equal(bp.nextAction.autoRunnable, true);
+
+    // 2. Resilient continue-on-error micro-batch execution: inject 1 bad ID alongside 1 real ID
+    const realBatch = selectNextWaveBatch(manifest, { squad: 'billing', batchSize: 1 });
+    assert.equal(realBatch.batch.length, 1);
+    const badEntry = { id: 'non-existent-legacy-test', squad: 'billing', wave: 1, status: 'pending' };
+    manifest.ledger.push(badEntry);
+
+    const execRes = executeWaveBatch(
+      manifest,
+      { wave: 1, squad: 'billing', batch: [badEntry, realBatch.batch[0]] },
+      { projectRoot: tmpRoot, verify: false }
+    );
+    assert.equal(execRes.processed, 2);
+    assert.equal(execRes.results[0].status, 'needs-triage', 'Bad test must be marked needs-triage without halting batch');
+    assert.ok(execRes.results[0].lastError, 'needs-triage entry must record lastError');
+    assert.equal(execRes.results[1].status, 'compiled', 'Valid test after failure must still compile cleanly');
+    assert.ok(fs.existsSync(path.join(tmpRoot, execRes.results[1].targetSpec)), 'Expected compiled spec to exist on disk');
+
+    // 3. Dashboard reflects both compiled and needs-triage statuses
+    const dash = generateMigrationDashboard(tmpRoot, 'reports/migration-dashboard.html');
+    assert.equal(dash.compiledCount, 1);
+    assert.equal(dash.triageCount, 1);
+    const html = fs.readFileSync(path.join(tmpRoot, dash.outPath), 'utf8');
+    assert.match(html, /status-needs-triage/);
+    assert.match(html, /status-compiled/);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
 
 
 
