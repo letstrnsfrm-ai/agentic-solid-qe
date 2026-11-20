@@ -1,32 +1,32 @@
 ---
 name: 05-skill-migrator
-description: Onboards legacy or unorganized team skills, prompts (.cursorrules, .claude/commands, CLAUDE.md), and helper scripts (.sh, .js, .mjs, .ts, .py) into the <500-token Agentic-SOLID-QE framework and 3-Tier Domain Brain. Invoke /05-skill-migrator [<path> | --discover] to migrate.
-file_names:
-    - references/migration-starter-guide.md
-    - references/legacy-java-csharp-migration-guide.md
+description: Onboards legacy or unorganized team skills, prompts (.cursorrules, .claude/commands, CLAUDE.md), helper scripts, and Java/C# test suites into the <500-token Agentic-SOLID-QE framework and 3-Tier Domain Brain.
 ---
+
 # Skill 05: Legacy Skill & Test Onboarding Migrator
 
-## 1. Zero-Prompt Auto-Start: Discovery & Dry-Run Scan
-When invoked as `/05-skill-migrator`:
-1. Read `.agents/domain/domain-memory.md`, `references/migration-starter-guide.md`, and `references/legacy-java-csharp-migration-guide.md`.
-2. Scan the workspace for legacy skills/scripts AND Java/C# Selenium + API tests:
+## 1. Zero-Prompt Auto-Start: Discovery & Dry-Run
+1. Run `npx cortex context` (`≤ 400` tok) and scan the workspace:
    ```bash
    npm run migrate:skill -- --discover
    ```
-3. Run the dry-run analyzer on a legacy skill **or** a ranked Wave 1–3 Java/C# test:
+2. Run dry-run analysis on 1 legacy skill **or** a ranked Wave 1–3 Java/C# test:
    ```bash
    npm run migrate:skill -- <source-path> --name <skill-id> [--squad <squad>]
    npm run migrate:skill -- --legacy <test-id> [--slice <n>] [--static-only]
    ```
+   For large suites (50–2,000 tests), use `npx cortex wave --scan <legacy-dir>` + `npx cortex wave --run --verify --workers 4`.
 
-## 2. Checkpoint: Present Migration Triage Matrix
-Pause and present to the engineer:
-1. **Skill/Script Bundle:** `< 500`-token `SKILL.md` + secret-sanitized `references/` & `scripts/` + `≤ 150`-line Domain Shard.
-2. **Java/C# Legacy Test Waves:** Wave 1 (small `@smoke`/`@p0` & API), Wave 2 (medium UI), Wave 3 (monoliths split into `api-seeder`, `auth-session`, and atomic UI slices).
-3. **Session Tape Bridge:** Draft `.exploratory/tapes/<id>.json` for live `agent-browser` verification and `/02-solid-architect` compilation.
+## 2. Human Checkpoint: 4-Part Triage Matrix
+Pause and present:
+1. **Skill/Script Bundle:** `< 500`-tok `SKILL.md`, `≤ 800`-tok sanitized `references/` & `scripts/`, `≤ 150`-line Domain Shard.
+2. **Java/C# Legacy Waves:** Wave 0 (Seeders/Flows), Wave 1 (`@p0`/API), Wave 2 (medium UI), Wave 3 (split monoliths).
+3. **Session Tape Bridge:** Draft `.exploratory/tapes/<id>.json` for live verification & `/02-solid-architect`.
 
-## 3. Apply, Verify & Track Parity
-Upon human approval, the agent executes:
-1. Re-run with `--apply` (writes tapes, SOLID scaffolds, and `migration-manifest.json`).
-2. Verify via `agent-browser` (if UI), compile via `02-solid-architect`, and run `npm run verify`.
+## 3. Apply & Verify
+Re-run with `--apply`, compile via `02-solid-architect` (or `cortex wave --run --verify`), and run `npm run verify`.
+
+## 4. Lazy Reference Index (Read ONLY When Needed)
+- `references/migration-starter-guide.md` — Target skill anatomy & Phase A–D onboarding workflow.
+- `references/migration-guardrails-checklist.md` — 4-Part Triage Matrix, guardrail mapping & Wave Factory (`cortex wave`).
+- `references/legacy-java-csharp-migration-guide.md` — Java/C# Selenium/RestAssured/SpecFlow migration rules.

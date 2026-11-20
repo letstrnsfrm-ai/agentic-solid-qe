@@ -16,6 +16,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { computeTokenFootprint } from './lib/cli-output.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -274,6 +275,7 @@ export function buildSanitizedReport({ prNumber } = {}) {
     pageCount: Number(counts.pages ?? 0),
     apiClientCount: Number(counts.apiClients ?? 0),
     openDefectCount: Number(counts.openDefects ?? 0),
+    tokenFootprint: computeTokenFootprint(ROOT),
   };
 }
 

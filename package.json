@@ -27,6 +27,8 @@
     "domain:graph": "node scripts/build-domain-graph.mjs",
     "map": "node scripts/build-system-map.mjs",
     "compile:tape": "node scripts/compile-tape.mjs",
+    "context": "node scripts/context-pack.mjs",
+    "tape": "node scripts/tape-cli.mjs",
     "heal": "node scripts/heal-drift.mjs",
     "migrate:skill": "node scripts/migrate-skill.mjs",
     "migrate:wave": "node scripts/migration-wave-factory.mjs",

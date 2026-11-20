@@ -8,6 +8,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { estimateTokens, TOKEN_BUDGETS } from './lib/cli-output.mjs';
 
 const ROOT = process.cwd();
 const MAX_COMPONENT_LINES = 150;
@@ -18,7 +19,10 @@ const MAX_TESTS_PER_SPEC = 10;
 const MAX_DOMAIN_LINES = 150;
 const MAX_GLOBAL_SHARDS_BEFORE_SQUAD_HUB = 10;
 const SHARD_STALE_DAYS = 90;
-const MAX_SKILL_TOKENS = 500;
+const MAX_SKILL_TOKENS = TOKEN_BUDGETS.skillMd;
+const MAX_REFERENCE_TOKENS = TOKEN_BUDGETS.referenceMd;
+const MAX_AGENTS_MD_TOKENS = TOKEN_BUDGETS.agentsMd;
+const MAX_COPILOT_INSTRUCTIONS_TOKENS = TOKEN_BUDGETS.copilotInstructions;
 const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
 const warnings = [];
 
@@ -65,13 +69,31 @@ function rel(filePath) {
   return path.relative(ROOT, filePath).replace(/\\/g, '/');
 }
 
-// 1. Audit SKILL.md Token Budget (< 500 tokens per SKILL.md)
+// 1a. Audit Always-On Instruction Files (AGENTS.md <= 600 tok, .github/copilot-instructions.md <= 600 tok)
+const agentsMdFile = path.join(ROOT, 'AGENTS.md');
+if (fs.existsSync(agentsMdFile)) {
+  const agentsTok = estimateTokens(fs.readFileSync(agentsMdFile, 'utf8'));
+  if (agentsTok > MAX_AGENTS_MD_TOKENS) {
+    violations.push(
+      `[NFR Always-On Token Budget] AGENTS.md is ~${agentsTok} tokens (max ${MAX_AGENTS_MD_TOKENS}). Move detailed prose to skill references/.`
+    );
+  }
+}
+const copilotInstrFile = path.join(ROOT, '.github/copilot-instructions.md');
+if (fs.existsSync(copilotInstrFile)) {
+  const copilotTok = estimateTokens(fs.readFileSync(copilotInstrFile, 'utf8'));
+  if (copilotTok > MAX_COPILOT_INSTRUCTIONS_TOKENS) {
+    violations.push(
+      `[NFR Always-On Token Budget] .github/copilot-instructions.md is ~${copilotTok} tokens (max ${MAX_COPILOT_INSTRUCTIONS_TOKENS}). Keep it a lean router without eager reference preloading.`
+    );
+  }
+}
+
+// 1. Audit SKILL.md Token Budget (<= 500 tokens) & Reference Topic Chunk Budget (<= 800 tokens)
 const skillFiles = walkFiles(path.join(ROOT, '.agents/skills'), 'SKILL.md');
 for (const file of skillFiles) {
   const content = fs.readFileSync(file, 'utf8');
-  const words = content.trim().split(/\s+/).filter(Boolean).length;
-  // Conservative token estimate: max(words * 1.35, chars / 4)
-  const estimatedTokens = Math.ceil(Math.max(words * 1.35, content.length / 4));
+  const estimatedTokens = estimateTokens(content);
   if (estimatedTokens > MAX_SKILL_TOKENS) {
     violations.push(
       `[NFR Token Budget] ${rel(file)} is ~${estimatedTokens} tokens (max ${MAX_SKILL_TOKENS}). Move detailed templates to references/.`
@@ -87,6 +109,18 @@ for (const file of skillFiles) {
         violations.push(
           `[Orphaned Skill Reference] ${rel(refFile)} is not indexed in ${rel(file)}. Link every reference file from SKILL.md so progressive disclosure never loses knowledge.`
         );
+      }
+      const refTokens = estimateTokens(fs.readFileSync(refFile, 'utf8'));
+      if (refTokens > MAX_REFERENCE_TOKENS) {
+        if (refName === 'legacy-reference.md') {
+          warnings.push(
+            `[Reference Size Advisory] ${rel(refFile)} is ~${refTokens} tokens (target <= ${MAX_REFERENCE_TOKENS}). Consider splitting into topic chunks.`
+          );
+        } else {
+          violations.push(
+            `[NFR Reference Token Budget] ${rel(refFile)} is ~${refTokens} tokens (max ${MAX_REFERENCE_TOKENS}). Split monolithic references into focused <= ${MAX_REFERENCE_TOKENS}-token topic files indexed from SKILL.md.`
+          );
+        }
       }
     }
   }

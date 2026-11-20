@@ -16,6 +16,12 @@ import { fileURLToPath } from 'node:url';
 import { buildDomainGraph } from './build-domain-graph.mjs';
 import { buildSystemMap } from './build-system-map.mjs';
 import { resolveLocalBin } from './explore-session.mjs';
+import {
+  capLines,
+  isCompactMode,
+  summarizeNodeTestRun,
+  summarizePlaywrightRun,
+} from './lib/cli-output.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -92,10 +98,12 @@ export async function runFastVerify({
   skipMap = fast,
   workers = 4,
   quiet = false,
+  compact = false,
 } = {}) {
   const tStart = performance.now();
   const safeSpecs = sanitizeSpecList(specs, rootDir);
   const safeWorkers = Math.max(1, Math.min(32, Number.isFinite(Number(workers)) ? Math.floor(Number(workers)) : 4));
+  const captureTests = quiet || compact;
 
   const stages = {};
 
@@ -175,7 +183,8 @@ export async function runFastVerify({
 
   if (failedStage) {
     if (!quiet) {
-      console.error(`❌ verify failed at static stage '${failedStage.stage}':\n${failedStage.output}`);
+      const msg = compact ? capLines(failedStage.output, { maxLines: 25 }) : failedStage.output;
+      console.error(`❌ verify failed at static stage '${failedStage.stage}':\n${msg}`);
     }
     return {
       ok: false,
@@ -191,17 +200,28 @@ export async function runFastVerify({
     if (withEngine && !fast && fs.existsSync(path.join(rootDir, 'scripts/self-test.mjs'))) {
       const engRes = await spawnAsync(process.execPath, ['--test', 'scripts/self-test.mjs'], {
         cwd: rootDir,
-        inherit: !quiet,
+        inherit: !captureTests,
       });
-      stages.engineTests = { status: engRes.status, durationMs: engRes.durationMs };
+      const engSummary = captureTests ? summarizeNodeTestRun(engRes.stdout, engRes.stderr) : null;
+      stages.engineTests = {
+        status: engRes.status,
+        durationMs: engRes.durationMs,
+        ...(engSummary ? { summary: engSummary.summaryLine } : {}),
+      };
       if (engRes.status !== 0) {
+        const failureExcerpt = engSummary?.failingTests?.length
+          ? engSummary.failingTests.join('\n')
+          : capLines(engRes.stderr || engRes.stdout || '', { maxLines: 25 });
+        if (!quiet && compact) {
+          console.error(`❌ verify failed at 'engineTests' (${engSummary?.summaryLine || `exit ${engRes.status}`}):\n${failureExcerpt}`);
+        }
         return {
           ok: false,
           mode: 'full',
           failedStage: {
             stage: 'engineTests',
             status: engRes.status,
-            output: (engRes.stderr || engRes.stdout || '').trim().slice(0, 2000),
+            output: failureExcerpt.slice(0, 2000),
           },
           stages,
           totalMs: Math.round(performance.now() - tStart),
@@ -218,23 +238,38 @@ export async function runFastVerify({
       } else {
         pwArgs.push('--project=chromium', '--grep', '@smoke|@p0', '--pass-with-no-tests');
       }
+      if (captureTests) {
+        pwArgs.push('--reporter=line');
+      }
       const pwRes = await spawnAsync(pwBin.command, pwArgs, {
         cwd: rootDir,
-        inherit: !quiet,
+        inherit: !captureTests,
       });
+      const pwSummary = captureTests ? summarizePlaywrightRun(pwRes.stdout, pwRes.stderr) : null;
       stages.playwrightTests = {
         status: pwRes.status,
         durationMs: pwRes.durationMs,
         specs: safeSpecs.length > 0 ? safeSpecs : ['@smoke|@p0'],
+        ...(pwSummary ? { summary: pwSummary.summaryLine } : {}),
       };
       if (pwRes.status !== 0) {
+        const blocks = pwSummary?.failureBlocks?.length
+          ? pwSummary.failureBlocks.join('\n')
+          : capLines(pwRes.stderr || pwRes.stdout || '', { maxLines: 25 });
+        const ctxHint = pwSummary?.errorContextPaths?.length
+          ? `\nArtifacts: ${pwSummary.errorContextPaths.join(', ')}`
+          : '';
+        const failureExcerpt = `${blocks}${ctxHint}`;
+        if (!quiet && compact) {
+          console.error(`❌ verify failed at 'playwrightTests' (${pwSummary?.summaryLine || `exit ${pwRes.status}`}):\n${failureExcerpt}`);
+        }
         return {
           ok: false,
           mode: fast ? 'fast' : 'full',
           failedStage: {
             stage: 'playwrightTests',
             status: pwRes.status,
-            output: (pwRes.stderr || pwRes.stdout || '').trim().slice(0, 2000),
+            output: failureExcerpt.slice(0, 2000),
           },
           stages,
           totalMs: Math.round(performance.now() - tStart),
@@ -262,7 +297,7 @@ if (isMain) {
 ⚡ Cortex Parallel Two-Tier Verify Gate (npx cortex verify)
 
 Usage:
-  npx cortex verify [--fast] [--specs tests/a.spec.ts,tests/b.spec.ts] [--skip-tests] [--with-engine] [--skip-map] [--workers N] [--json]
+  npx cortex verify [--fast] [--specs tests/a.spec.ts,tests/b.spec.ts] [--skip-tests] [--with-engine] [--skip-map] [--workers N] [--compact|--verbose|--json]
 `);
     process.exit(0);
   }
@@ -272,6 +307,7 @@ Usage:
   const withEngine = args.includes('--with-engine');
   const skipMap = args.includes('--skip-map') || fast;
   const jsonOut = args.includes('--json');
+  const compactOut = !jsonOut && isCompactMode(args);
 
   const specs = [];
   let workers = 4;
@@ -299,13 +335,14 @@ Usage:
     skipMap,
     workers,
     quiet: jsonOut,
+    compact: compactOut,
   })
     .then((res) => {
       if (jsonOut) {
         console.log(JSON.stringify(res, null, 2));
       } else if (res.ok) {
         const parts = Object.entries(res.stages)
-          .map(([k, v]) => `${k}:${v.durationMs}ms`)
+          .map(([k, v]) => `${k}:${v.summary ? `${v.summary} ` : ''}${v.durationMs}ms`)
           .join(', ');
         console.log(`✅ verify (${res.mode}) passed in ${res.totalMs}ms [${parts}]`);
       }

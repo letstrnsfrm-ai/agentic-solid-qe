@@ -3935,3 +3935,195 @@ test('37. Orchestrator Loop Speed Suite: parallel verify-fast, Smart Auto-Drain 
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test('38. Token-Efficiency 5-Pillar Suite: static budgets, compact CLI/failure summaries, cortex context, cortex tape, and report-cloud tokenFootprint', async () => {
+  const {
+    TOKEN_BUDGETS,
+    estimateTokens,
+    computeTokenFootprint,
+    stripAnsi,
+    isCompactMode,
+    capLines,
+    capToTokens,
+    summarizePlaywrightRun,
+    summarizeNodeTestRun,
+  } = await import('./lib/cli-output.mjs');
+  const { assertSafeScenarioId } = await import('./tape-cli.mjs');
+
+  // 1. Pillar 1: Hard static prompt budgets pass on REPO_ROOT
+  const fp = computeTokenFootprint(REPO_ROOT);
+  assert.equal(fp.budgetsPassed, true, `Expected all static token budgets to pass: ${JSON.stringify(fp)}`);
+  assert.ok(fp.agentsMdTokens <= TOKEN_BUDGETS.agentsMd, `AGENTS.md exceeded budget: ${fp.agentsMdTokens}`);
+  assert.ok(
+    fp.copilotInstructionsTokens <= TOKEN_BUDGETS.copilotInstructions,
+    `copilot-instructions.md exceeded budget: ${fp.copilotInstructionsTokens}`
+  );
+  assert.ok(fp.maxSkillTokens <= TOKEN_BUDGETS.skillMd, `Max SKILL.md exceeded budget: ${fp.maxSkillTokens}`);
+  assert.ok(
+    fp.maxReferenceTokens <= TOKEN_BUDGETS.referenceMd,
+    `Max reference exceeded budget: ${fp.maxReferenceTokens}`
+  );
+
+  // 2. Pillar 2: Shared compact CLI helpers & ANSI-stripped failure-only summaries
+  assert.equal(stripAnsi('\x1b[31mFAIL\x1b[0m ok'), 'FAIL ok');
+  assert.equal(isCompactMode(['--compact'], { stream: { isTTY: true } }), true);
+  assert.equal(isCompactMode(['--verbose'], { env: { CORTEX_COMPACT: '1' }, stream: { isTTY: false } }), false);
+  assert.equal(isCompactMode([], { env: { CORTEX_COMPACT: '1' }, stream: { isTTY: true } }), true);
+  assert.equal(isCompactMode([], { env: {}, stream: { isTTY: false }, autoNonTty: true }), true);
+  assert.match(capLines('a\nb\nc\nd\ne', { maxLines: 2 }), /\+3 lines omitted/);
+  assert.ok(estimateTokens(capToTokens('word '.repeat(500).split(' ').join('\n'), 120)) <= 130);
+
+  const pwSum = summarizePlaywrightRun(
+    '\x1b[31m1) [chromium] › tests/checkout.spec.ts:12:5 › Checkout\x1b[0m\n  Error: Timed out waiting for locator\n  See test-results/checkout/error-context.md\n  1 failed\n  2 passed\n',
+    ''
+  );
+  assert.equal(pwSum.passed, 2);
+  assert.equal(pwSum.failed, 1);
+  assert.equal(pwSum.failureBlocks.length, 1);
+  assert.deepEqual(pwSum.errorContextPaths, ['test-results/checkout/error-context.md']);
+
+  const nodeSum = summarizeNodeTestRun('✖ 1. Sample fail\n  AssertionError: expected 1 to equal 2\nℹ pass 36\nℹ fail 1\n', '');
+  assert.equal(nodeSum.passed, 36);
+  assert.equal(nodeSum.failed, 1);
+  assert.equal(nodeSum.failingTests.length, 1);
+
+  // Compact CLI stdout caps on REPO_ROOT
+  const covCompact = runNode(path.join(REPO_ROOT, 'scripts/analyze-coverage.mjs'), ['--compact'], REPO_ROOT);
+  assert.equal(covCompact.status, 0, covCompact.stderr);
+  assert.ok(estimateTokens(covCompact.stdout) <= 220, `analyze-coverage --compact too large: ${estimateTokens(covCompact.stdout)} tok`);
+  assert.match(covCompact.stdout, /^STAGE\s+\|/m);
+
+  const compCompact = runNode(
+    path.join(REPO_ROOT, 'scripts/compile-tape.mjs'),
+    ['saucedemo-e2e-checkout', '--compact'],
+    REPO_ROOT
+  );
+  assert.equal(compCompact.status, 0, compCompact.stderr);
+  assert.ok(estimateTokens(compCompact.stdout) <= 220, `compile-tape --compact too large: ${estimateTokens(compCompact.stdout)} tok`);
+  assert.match(compCompact.stdout, /^COMPILE \| DRY-RUN/m);
+
+  const healCompact = runNode(
+    path.join(REPO_ROOT, 'scripts/heal-drift.mjs'),
+    ['--error', 'waiting for getByRole("button", { name: "Missing" })', '--compact'],
+    REPO_ROOT
+  );
+  assert.equal(healCompact.status, 0, healCompact.stderr);
+  assert.ok(estimateTokens(healCompact.stdout) <= 150, `heal-drift --compact too large: ${estimateTokens(healCompact.stdout)} tok`);
+  assert.match(healCompact.stdout, /^HEAL\s+\|/m);
+
+  // 3. Pillar 3: Single-call <=400-token Context Packs via `cortex context`
+  const ctxRoute = runNode(SYNC_SCRIPT, ['context', '--route', '/checkout'], REPO_ROOT);
+  assert.equal(ctxRoute.status, 0, ctxRoute.stderr);
+  assert.ok(estimateTokens(ctxRoute.stdout) <= 420, `context --route exceeded budget: ${estimateTokens(ctxRoute.stdout)}`);
+  assert.match(ctxRoute.stdout, /checkout\.md/);
+  assert.doesNotMatch(ctxRoute.stdout, /shards\/auth\.md/);
+
+  const ctxTape = runNode(SYNC_SCRIPT, ['context', '--tape', 'saucedemo-e2e-checkout'], REPO_ROOT);
+  assert.equal(ctxTape.status, 0, ctxTape.stderr);
+  assert.ok(estimateTokens(ctxTape.stdout) <= 420, `context --tape exceeded budget: ${estimateTokens(ctxTape.stdout)}`);
+  assert.match(ctxTape.stdout, /TAPE\s+\| saucedemo-e2e-checkout/);
+
+  const ctxSpec = runNode(SYNC_SCRIPT, ['context', '--spec', 'tests/e2e-checkout.spec.ts'], REPO_ROOT);
+  assert.equal(ctxSpec.status, 0, ctxSpec.stderr);
+  assert.match(ctxSpec.stdout, /SPEC\s+\| tests\/e2e-checkout\.spec\.ts/);
+  assert.doesNotMatch(ctxSpec.stdout, /tags=.*@fixtures/);
+
+  // 4. Pillar 4 & 5: Adopter init propagation, cortex tape clone/patch, audit:solid budget enforcement & report-cloud tokenFootprint
+  assert.throws(() => assertSafeScenarioId('../escape'), /Invalid scenarioId/);
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-token-5pillars-'));
+  try {
+    const initRes = runNode(
+      SYNC_SCRIPT,
+      ['init', tmpRoot, '--demo', '--url', 'https://www.saucedemo.com', '--name', 'TokenBench'],
+      REPO_ROOT
+    );
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}\n${initRes.stdout}`);
+
+    // Verify new files and npm scripts propagated to adopter
+    for (const relFile of [
+      'scripts/lib/cli-output.mjs',
+      'scripts/context-pack.mjs',
+      'scripts/tape-cli.mjs',
+      '.agents/skills/00-master-orchestrator/references/subagent-isolation.md',
+      '.agents/skills/00-master-orchestrator/references/onboarding-and-upgrade.md',
+    ]) {
+      assert.equal(fs.existsSync(path.join(tmpRoot, relFile)), true, `Missing synced file: ${relFile}`);
+    }
+    const pkg = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'package.json'), 'utf8'));
+    assert.equal(pkg.scripts.context, 'node scripts/context-pack.mjs');
+    assert.equal(pkg.scripts.tape, 'node scripts/tape-cli.mjs');
+
+    // cortex tape list / show / clone / patch + validate-tapes
+    const listRes = runNode(path.join(tmpRoot, 'scripts/tape-cli.mjs'), ['list'], tmpRoot);
+    assert.equal(listRes.status, 0, listRes.stderr);
+    assert.match(listRes.stdout, /saucedemo-e2e-checkout/);
+
+    const showRes = runNode(path.join(tmpRoot, 'scripts/tape-cli.mjs'), ['show', 'saucedemo-e2e-checkout'], tmpRoot);
+    assert.equal(showRes.status, 0, showRes.stderr);
+    assert.match(showRes.stdout, /toContainText\(CheckoutBuilder\.backpackOrderSummary\(\)\.totalText\)/);
+
+    const cloneRes = runNode(
+      path.join(tmpRoot, 'scripts/tape-cli.mjs'),
+      [
+        'clone',
+        'saucedemo-e2e-checkout',
+        'saucedemo-checkout-variant',
+        '--title',
+        'Checkout Variant Flow',
+        '--tags',
+        '@p1,@regression',
+      ],
+      tmpRoot
+    );
+    assert.equal(cloneRes.status, 0, cloneRes.stderr);
+
+    const patchRes = runNode(
+      path.join(tmpRoot, 'scripts/tape-cli.mjs'),
+      [
+        'patch',
+        'saucedemo-checkout-variant',
+        '--add-tag',
+        '@smoke',
+        '--set-step',
+        '1',
+        'intent=Navigate to Swag Labs login entry',
+        '--add-expect',
+        'checkoutPage.summary.totalLabel|toBeVisible',
+      ],
+      tmpRoot
+    );
+    assert.equal(patchRes.status, 0, patchRes.stderr);
+    assert.match(patchRes.stdout, /@smoke/);
+    assert.match(patchRes.stdout, /Navigate to Swag Labs login entry/);
+
+    const valRes = runNode(path.join(tmpRoot, 'scripts/validate-tapes.mjs'), [], tmpRoot);
+    assert.equal(valRes.status, 0, `validate-tapes failed on cloned/patched tape: ${valRes.stderr}\n${valRes.stdout}`);
+
+    // Pillar 5: report-cloud emits tokenFootprint
+    const repRes = runNode(path.join(tmpRoot, 'scripts/report-cloud.mjs'), ['--dry-run'], tmpRoot);
+    assert.equal(repRes.status, 0, repRes.stderr);
+    const repJson = JSON.parse(repRes.stdout);
+    assert.equal(repJson.tokenFootprint.budgetsPassed, true);
+    assert.ok(repJson.tokenFootprint.agentsMdTokens <= TOKEN_BUDGETS.agentsMd);
+    assert.ok(repJson.tokenFootprint.maxReferenceTokens <= TOKEN_BUDGETS.referenceMd);
+
+    // Pillar 1 enforcement: audit-solid fails if AGENTS.md or a reference file exceeds its hard budget
+    const origAgents = fs.readFileSync(path.join(tmpRoot, 'AGENTS.md'), 'utf8');
+    fs.writeFileSync(path.join(tmpRoot, 'AGENTS.md'), origAgents + '\n' + 'bloat '.repeat(600), 'utf8');
+    const bloatAgentsRes = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.notEqual(bloatAgentsRes.status, 0, 'Expected audit-solid to fail when AGENTS.md exceeds 600 tokens');
+    assert.match(bloatAgentsRes.stdout + bloatAgentsRes.stderr, /NFR Always-On Token Budget/);
+    fs.writeFileSync(path.join(tmpRoot, 'AGENTS.md'), origAgents, 'utf8');
+
+    const refPath = path.join(tmpRoot, '.agents/skills/00-master-orchestrator/references/subagent-isolation.md');
+    const origRef = fs.readFileSync(refPath, 'utf8');
+    fs.writeFileSync(refPath, origRef + '\n' + 'verbose '.repeat(800), 'utf8');
+    const bloatRefRes = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.notEqual(bloatRefRes.status, 0, 'Expected audit-solid to fail when reference exceeds 800 tokens');
+    assert.match(bloatRefRes.stdout + bloatRefRes.stderr, /NFR Reference Token Budget/);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+

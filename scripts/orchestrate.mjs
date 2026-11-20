@@ -22,6 +22,7 @@ import { analyzeCoverage } from './analyze-coverage.mjs';
 import { buildDomainGraph } from './build-domain-graph.mjs';
 import { compileSessionTape, finalizeBatchDomainRefresh } from './compile-tape.mjs';
 import { analyzeAndHealDrift } from './heal-drift.mjs';
+import { isCompactMode } from './lib/cli-output.mjs';
 import { discoverLegacyTests, MIGRATION_MANIFEST_REL_PATH } from './legacy-test-migrator.mjs';
 import {
   selectNextWaveBatch,
@@ -855,10 +856,11 @@ Usage:
       });
   } else {
     const blueprint = buildOrchestrationBlueprint(rootDir, { squad });
+    const useCompact = !jsonOut && (compactOut || isCompactMode(args));
 
     if (jsonOut) {
       console.log(JSON.stringify(blueprint, null, 2));
-    } else if (compactOut) {
+    } else if (useCompact) {
       console.log(formatCompactBlueprint(blueprint));
     } else {
       console.log(formatBlueprintMarkdown(blueprint));

@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDomainGraph } from './build-domain-graph.mjs';
+import { isCompactMode } from './lib/cli-output.mjs';
 
 const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
 
@@ -502,6 +503,40 @@ const report = isCompact
   return report;
 }
 
+export function formatCompactCoverage(report) {
+  const stage = report.coverageMaturityStage || {};
+  const counts = report.counts || {
+    domainShards: (report.domainShards || []).length,
+    uncoveredShards: (report.uncoveredShards || []).length,
+    recordedTapes: (report.recordedSessionTapes || []).length,
+    uncompiledTapes: (report.uncompiledTapes || []).length,
+    automatedSpecs: (report.automatedSpecs || []).length,
+    components: (report.existingArchitecture?.components || []).length,
+    pages: (report.existingArchitecture?.pages || []).length,
+    openDefects: (report.openDefects || []).length,
+  };
+  const uncompiled = (report.uncompiledTapes || report.topUncompiledTapes || [])
+    .map((t) => (typeof t === 'string' ? t : t.scenarioId || t.file))
+    .slice(0, 5);
+  const uncovered = (report.uncoveredShards || report.topUncoveredShards || [])
+    .map((s) => (typeof s === 'string' ? s : s.file || s.shard))
+    .slice(0, 5);
+  const missingAuth = (report.targetApp?.missingAuthSessions || []).slice(0, 4);
+  const lines = [
+    `STAGE  | ${stage.stage ?? '?'} — ${stage.name || 'Unknown'}`,
+    `APP    | ${report.targetApp?.baseUrl || 'unconfigured'}${missingAuth.length ? ` | missingAuth=[${missingAuth.join(', ')}]` : ''}`,
+    `COUNTS | shards=${counts.domainShards} uncovered=${counts.uncoveredShards} tapes=${counts.recordedTapes} uncompiled=${counts.uncompiledTapes} specs=${counts.automatedSpecs} comps=${counts.components} defects=${counts.openDefects}`,
+  ];
+  if (uncompiled.length) lines.push(`UNCOMP | ${uncompiled.join(', ')}`);
+  if (uncovered.length) lines.push(`UNCOV  | ${uncovered.join(', ')}`);
+  if (report.nextSingleScenarioToAutomate) {
+    const nxt = report.nextSingleScenarioToAutomate;
+    lines.push(`PICK   | ${typeof nxt === 'string' ? nxt : nxt.scenarioId || JSON.stringify(nxt)}`);
+  }
+  lines.push(`NEXT   | ${String(report.recommendedNextAction || '').slice(0, 180)}`);
+  return lines.join('\n');
+}
+
 const isMain =
   Boolean(process.argv[1]) &&
   fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
@@ -511,6 +546,7 @@ if (isMain) {
   let forceSummary = false;
   let forceFull = false;
   let jsonOnly = false;
+  let compactOut = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--squad' && args[i + 1]) {
       filterSquad = args[++i].trim().toLowerCase();
@@ -518,17 +554,25 @@ if (isMain) {
       filterSquad = args[i].slice('--squad='.length).trim().toLowerCase();
     } else if (args[i] === '--summary') {
       forceSummary = true;
-    } else if (args[i] === '--full') {
+    } else if (args[i] === '--full' || args[i] === '--verbose') {
       forceFull = true;
     } else if (args[i] === '--json') {
       jsonOnly = true;
+    } else if (args[i] === '--compact') {
+      compactOut = true;
     }
   }
+  const useCompact =
+    !jsonOnly &&
+    !forceSummary &&
+    !forceFull &&
+    (compactOut || isCompactMode(args, { autoNonTty: false }));
+
   let report;
   try {
     report = analyzeCoverage(process.cwd(), {
       squad: filterSquad,
-      summary: forceSummary,
+      summary: forceSummary || useCompact,
       full: forceFull,
       writeGraph: true,
     });
@@ -536,8 +580,12 @@ if (isMain) {
     console.error(`❌ ${err.message}`);
     process.exit(1);
   }
-  if (!jsonOnly) {
-    console.log('📊 Agentic-SOLID-QE Coverage & Federated Brain Snapshot:\n');
+  if (useCompact) {
+    console.log(formatCompactCoverage(report));
+  } else {
+    if (!jsonOnly) {
+      console.log('📊 Agentic-SOLID-QE Coverage & Federated Brain Snapshot:\n');
+    }
+    console.log(JSON.stringify(report, null, 2));
   }
-  console.log(JSON.stringify(report, null, 2));
 }

@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isCompactMode } from './lib/cli-output.mjs';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const HIGH_CONFIDENCE_THRESHOLD = 0.65;
@@ -815,6 +816,26 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
   return result;
 }
 
+export function formatCompactHealResult(res) {
+  const lines = [
+    `HEAL   | status=${res.status} | class=${res.classification || 'unknown'}${res.spec ? ` | spec=${res.spec}` : ''}`,
+  ];
+  if (res.failingLocator) lines.push(`BROKEN | ${res.failingLocator}`);
+  if (res.componentMatch?.relPath) {
+    lines.push(`COMP   | ${res.componentMatch.relPath}:${(res.componentMatch.lineIndex ?? 0) + 1} (${res.componentMatch.propertyName || '?'})`);
+  }
+  if (res.topCandidate) {
+    lines.push(
+      `TOP    | score=${res.topCandidate.score} | ${res.topCandidate.suggestedExpr || '?'}`
+    );
+  }
+  if (Array.isArray(res.appliedChanges) && res.appliedChanges.length > 0) {
+    lines.push(`PATCH  | ${res.appliedChanges.join(', ')}`);
+  }
+  if (res.defectFile) lines.push(`DEFECT | ${res.defectFile}`);
+  return lines.join('\n');
+}
+
 // CLI execution
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain) {
@@ -824,7 +845,7 @@ if (isMain) {
 🩹 Cortex Drift-Healer CLI (npx cortex heal)
 
 Usage:
-  npx cortex heal [--spec <path>] [--error <msg>] [--snapshot <yml>] [--to <locator>] [--apply] [--json]
+  npx cortex heal [--spec <path>] [--error <msg>] [--snapshot <yml>] [--to <locator>] [--apply] [--compact|--verbose|--json]
 `);
     process.exit(0);
   }
@@ -844,6 +865,8 @@ Usage:
 
   if (args.includes('--json')) {
     console.log(JSON.stringify(res, null, 2));
+  } else if (isCompactMode(args)) {
+    console.log(formatCompactHealResult(res));
   } else {
     console.log(`\n🩹 Cortex Drift-Healer (${res.status}):\n`);
     console.log(JSON.stringify(res, null, 2));
