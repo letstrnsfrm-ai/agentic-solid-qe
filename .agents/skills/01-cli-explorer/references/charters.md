@@ -1,4 +1,4 @@
-# Exploratory Testing Charters, Multi-Oracle Heuristics & Coverage Selection Matrix (`@playwright/cli`)
+# Exploratory Testing Charters, Multi-Oracle Heuristics & Coverage Selection Matrix (`agent-browser`)
 
 Use these playbooks when executing `01-cli-explorer` on unfamiliar or complex multi-page workflows. Always run inside a named session (`-s=<charter_name>`).
 
@@ -8,7 +8,7 @@ Use these playbooks when executing `01-cli-explorer` on unfamiliar or complex mu
 
 When a Quality Engineer asks to explore a feature they do not know end-to-end yet:
 1. Start at the entry route (or reuse `.auth/<persona>.json` from `00-env-bootstrap`).
-2. Inspect `.playwright-cli/page-*.yml` at each step to map the **Multi-Page State Graph**:
+2. Inspect `.agent-browser/page-*.yml` at each step to map the **Multi-Page State Graph**:
    - Entry controls, wizard steps (`Step 1` ➔ `Step 2` ➔ `Confirmation`), modals/drawers, and dynamic tables.
    - Dynamic runtime values generated along the flow (e.g., Order ID, Quote Reference, Calculated Tax/Total) that must be verified on downstream pages (`capturedVariables`).
    - Network/API requests (`GET`/`POST`/`PUT`/`DELETE`) triggered during page transitions (`networkContracts`).
@@ -48,12 +48,12 @@ When Point A of a complex E2E journey requires heavy seeded data or is already a
 
 When the user prefers to click through a flow themselves in a connected browser and generate native Playwright codegen scripts before converting to SOLID automation:
 1. **Option 1 — Fresh Start:**
-   - Run `npx playwright-cli -s=record open <baseUrl> --headed` followed by `npx playwright-cli -s=record recording-start` (or `npx playwright codegen <baseUrl> -o .exploratory/recordings/<scenario>.ts`).
-   - User completes the business flow manually in the browser, then run `npx playwright-cli -s=record recording-stop`.
+   - Run `npx agent-browser --session record open <baseUrl> --headed` followed by `npx agent-browser --session record recording-start` (or `npx playwright codegen <baseUrl> -o .exploratory/recordings/<scenario>.ts`).
+   - User completes the business flow manually in the browser, then run `npx agent-browser --session record recording-stop`.
 2. **Option 2 — Start from Existing Spec & Pause Anywhere:**
    - Run `npm run test:explore -- tests/<spec>.spec.ts -g "<test>"` (auto-pauses after Point A), **or** run `npx playwright test tests/<spec>.spec.ts --debug` / temporary `await page.pause()` / `pause-at <file:line>` to pause at any chosen step mid-flow.
-   - Attach and record from that exact state: `npx playwright-cli -s=record attach --cdp=http://localhost:9222` + `npx playwright-cli -s=record recording-start` (or click **Record** in Playwright Inspector).
-   - User completes the new downstream flow from the paused point, then run `npx playwright-cli -s=record recording-stop` (and `detach`).
+   - Attach and record from that exact state: `npx agent-browser --session record attach --cdp=http://localhost:9222` + `npx agent-browser --session record recording-start` (or click **Record** in Playwright Inspector).
+   - User completes the new downstream flow from the paused point, then run `npx agent-browser --session record recording-stop` (and `detach`).
 3. **Convert Codegen Script into SOLID Automation:**
    - Save the recorded script to `.exploratory/recordings/<scenario>.ts` and ingest it via `npm run migrate:skill -- .exploratory/recordings/<scenario>.ts --name <scenario> --apply` (or translate directly into `.exploratory/tapes/<scenario>.json` with `businessStep` and optional `resumesFrom`).
    - Validate (`npm run validate:tapes`) and compile **1 test at a time** via `/02-solid-architect <scenario>` (`npx cortex compile <scenario> --apply`) + `npm run verify` so secrets move to Data Builders, components stay `<= 150` lines, and `test.step()` uses business-domain language.
@@ -64,9 +64,9 @@ When the user prefers to click through a flow themselves in a connected browser 
 
 While traversing any feature flow, automatically evaluate four quality dimensions:
 1. **Functional & Cross-Page State Integrity:** Do selections/inputs on Page 1 persist accurately on summary/review screens and survive `reload` / `go-back`?
-2. **API & Network Integration Telemetry:** Are background requests returning `2xx` within SLA, or are `4xx`/`5xx` statuses, GraphQL payload errors, or unhandled promise rejections firing (`npx playwright-cli -s=<session> console error`)?
+2. **API & Network Integration Telemetry:** Are background requests returning `2xx` within SLA, or are `4xx`/`5xx` statuses, GraphQL payload errors, or unhandled promise rejections firing (`npx agent-browser --session <session> console error`)?
 3. **Boundary & Negative Validation:** How do interactive forms (`textbox`, `combobox`, `spinbutton`) react to empty submissions, invalid formats, or duplicate clicks?
-4. **Semantic & Accessibility (a11y) Readiness:** Do interactive controls in `.playwright-cli/page-*.yml` expose clean ARIA roles and accessible names, or are unlabeled elements creating both usability defects and automation risk?
+4. **Semantic & Accessibility (a11y) Readiness:** Do interactive controls in `.agent-browser/page-*.yml` expose clean ARIA roles and accessible names, or are unlabeled elements creating both usability defects and automation risk?
 
 ---
 
@@ -98,23 +98,23 @@ While traversing any feature flow, automatically evaluate four quality dimension
 
 ## 3b. Complex UI Challenges (Cookies, Popups, Dialogs, Radios, Shadow DOM, Iframes & Portals)
 
-| UI Challenge | During `@playwright/cli` Exploration | Encode in Session Tape / Deterministic Suite |
+| UI Challenge | During `agent-browser` Exploration | Encode in Session Tape / Deterministic Suite |
 | :--- | :--- | :--- |
 | **Cookie Banners & Promo Overlays** | Dismiss once and save `.auth/<persona>.json` (`state-save`) | Pre-seed consent in `.auth/<persona>.json` + rely on `registerOverlayHandlers(page)` (`page.addLocatorHandler`) in `src/shared/ui/overlay-handler.ts`. Do not pollute business steps with `if (visible)` checks. |
-| **Native JS Dialogs (`alert`/`confirm`/`prompt`)** | Run `npx playwright-cli -s=<session> dialog-accept` or `dialog-dismiss` | Set `dialogAction: "accept"` (or `"dismiss"`) on the triggering `semanticStep`. |
+| **Native JS Dialogs (`alert`/`confirm`/`prompt`)** | Run `npx agent-browser --session <session> dialog-accept` or `dialog-dismiss` | Set `dialogAction: "accept"` (or `"dismiss"`) on the triggering `semanticStep`. |
 | **New-Tab / OAuth / PDF Popups** | Run `tab-list` / `tab-select <idx>` to inspect the popup, then switch back | Set `opensPopup: true` on the triggering `semanticStep` (compiles to `Promise.all([page.waitForEvent('popup'), ...])`). |
 | **Custom / `sr-only` Radio Buttons & Checkboxes** | Target the accessible `getByRole('radio', { name })` or `getByLabel(...)` ref | If `<input>` is visually hidden behind a styled `<label>`, set `locatorContract.force: true` (compiles to `.check({ force: true })`). |
 | **Shadow DOM (Open vs. Closed)** | `getByRole`/`getByLabel`/`getByTestId` pierce **open** Shadow DOM automatically; never use XPath | Record semantic locators (`getByRole`/`getByLabel`/`getByTestId`). For **closed** Shadow DOM, target the host element + keyboard navigation (`press`). |
-| **Embedded `<iframe>` (e.g., Payment / 3DS)** | Inspect frame refs in `.playwright-cli/page-*.yml` | Set `locatorContract.iframeSelector` (compiles to `page.frameLocator(...)`). |
+| **Embedded `<iframe>` (e.g., Payment / 3DS)** | Inspect frame refs in `.agent-browser/page-*.yml` | Set `locatorContract.iframeSelector` (compiles to `page.frameLocator(...)`). |
 | **Portal Dropdowns (`role="listbox"` at `body`)** | Snapshot after opening the combobox to see the portal listbox outside the form | Set `locatorContract.portalScope: true` on the option step so it roots on `page` instead of `this.root`. |
 
 ---
 
 ## 3c. Non-Functional Charters: Accessibility & Visual Regression
 
-| Charter | `@playwright/cli` Exploration Oracle | Session Tape `expectedStates[]` Encoding |
+| Charter | `agent-browser` Exploration Oracle | Session Tape `expectedStates[]` Encoding |
 | :--- | :--- | :--- |
-| **`accessibility`** | Verify landmarks (`main`, `nav`, `banner`), heading hierarchy (`h1`->`h2`), keyboard Tab order, and accessible names in `.playwright-cli/page-*.yml`. | Use `assertionType: "toMatchAriaSnapshot"` targeting the component/landmark `root` with an ARIA YAML snapshot builder ref in `expectedValueRef`. |
+| **`accessibility`** | Verify landmarks (`main`, `nav`, `banner`), heading hierarchy (`h1`->`h2`), keyboard Tab order, and accessible names in `.agent-browser/page-*.yml`. | Use `assertionType: "toMatchAriaSnapshot"` targeting the component/landmark `root` with an ARIA YAML snapshot builder ref in `expectedValueRef`. |
 | **`visual-regression`** | Identify dynamic regions (timestamps, avatars, live counters) that fluctuate across runs. | Use `assertionType: "toHaveScreenshot"` with `maskSelectors: ["[data-testid='timestamp']"]` and `maxDiffPixelRatio: 0.02` (compiles with `animations: 'disabled'`). |
 
 ---
@@ -127,7 +127,7 @@ Avoid re-running huge 10+ step flows from Step 1 during exploration or CI. `npm 
 - Cross-portal / multi-actor boundary (`actors.length >= 2` or `>= 2` distinct `portalUrl`s)
 - State-creation milestone (`capturesVariable`, `apiCall`, or checkout/submit/quote/policy/claim milestone) with `>= 6` total steps
 
-When flagged (or when resuming from Point A via `npm run test:explore` + `playwright-cli attach`), emit a Point-B Session Tape with `resumesFrom`:
+When flagged (or when resuming from Point A via `npm run test:explore` + `cortex explore start --from-spec`), emit a Point-B Session Tape with `resumesFrom`:
 - **`api-seed` (Fastest):** Set `handoffStrategy: "api-seed"` and `seedClientRef: "<ApiClient>.<seedMethod>()"` to create Point-A state via `ApiClientContract` before Point-B UI steps.
 - **`checkpoint-state`:** Set `handoffStrategy: "checkpoint-state"` and `checkpointPath: ".exploratory/checkpoints/<point-a-id>.json"` (gitignored) to restore saved cookies & captured variables.
 - **`ui-prereq`:** Set `handoffStrategy: "ui-prereq"` with `specFile` and `resumeStep` to document Point-A ➔ Point-B lineage in Playwright reports.

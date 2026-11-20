@@ -30,7 +30,7 @@ Tests are scored (`valueScore`: 0–100) and grouped into **3 Migration Waves**:
 | Wave | Criteria | Target Pattern |
 | :--- | :--- | :--- |
 | **Wave 1 (Quick Wins)** | Small `@smoke`/`@p0` UI tests & standalone API tests (RestAssured, RestSharp, HttpClient) | Direct 1-to-1 Session Tape ➔ `@p0`/`@api-contract` spec |
-| **Wave 2 (Medium)** | Single-flow UI tests (`<= 80` lines, `<= 2` Page Objects) | Draft Tape ➔ `@playwright/cli` live verification ➔ `compile:tape` |
+| **Wave 2 (Medium)** | Single-flow UI tests (`<= 80` lines, `<= 2` Page Objects) | Draft Tape ➔ `agent-browser` live verification ➔ `compile:tape` |
 | **Wave 3 (Decompose)** | Monolithic E2E tests (`> 80` lines, `>= 5` assertions, or `>= 3` Page Objects/navigations) | Hybrid split into `api-seeder`, `auth-session`, and atomic UI slices |
 
 ---
@@ -46,8 +46,8 @@ Tests are scored (`valueScore`: 0–100) and grouped into **3 Migration Waves**:
    npm run migrate:skill -- --legacy <test-id-or-file> [--slice <n>] --apply
    ```
    *(Pass `--static-only` if no live `BASE_URL` is reachable yet.)*
-3. **Verify Live Locators via `@playwright/cli`:**
-   Open `BASE_URL` with `npx playwright-cli -s=migrate-<id> open <url> --headed` and `snapshot` to refine any draft `locatorContract` entries into strict semantic locators (`getByRole`, `getByLabel`, `getByTestId`).
+3. **Verify Live Locators via `agent-browser`:**
+   Open `BASE_URL` with `npx agent-browser --session migrate-<id> open <url> --headed` and `snapshot` to refine any draft `locatorContract` entries into strict semantic locators (`getByRole`, `getByLabel`, `getByTestId`).
 4. **Compile to SOLID TypeScript & Verify:**
    ```bash
    npm run compile:tape -- .exploratory/tapes/<scenario-id>.json --apply

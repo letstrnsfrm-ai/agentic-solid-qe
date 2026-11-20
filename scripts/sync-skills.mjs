@@ -717,7 +717,6 @@ function mergeConsumerPackageJson() {
     'upgrade:skills': 'node scripts/upgrade-framework.mjs',
   };
   const requiredDevDeps = {
-    '@playwright/cli': '0.1.22',
     '@playwright/test': '1.64.1',
     '@types/node': '22.20.5',
     'agent-browser': '0.43.0',

@@ -8,7 +8,7 @@
  *      tests and Page Objects, scoring & ranking them into Migration Waves 1 (Quick Wins), 2 (Medium), 3 (Decompose).
  *   3. Monolith Decomposition: Splits large Wave 3 E2E tests into API seeders, auth fixtures, and atomic UI slices.
  *   4. Intent-to-Tape Bridge: Translates legacy test steps + Page Object locators + API calls into schema-valid
- *      Session Tapes (.exploratory/tapes/<id>.json) ready for live @playwright/cli verification & `compile:tape`.
+ *      Session Tapes (.exploratory/tapes/<id>.json) ready for live agent-browser verification & `compile:tape`.
  *   5. Parity Manifest: Tracks incremental migration state in .agents/domain/migration-manifest.json.
  */
 import fs from 'node:fs';
@@ -1354,10 +1354,10 @@ function translateSeleniumLocatorToPlaywright(loc) {
     return {
       expr: `page.locator('xpath=${esc}')`,
       needsReview: true,
-      note: 'TODO: replace weak XPath with semantic locator via @playwright/cli',
+      note: 'TODO: replace weak XPath with semantic locator via agent-browser',
     };
   }
-  return { expr: `page.locator('${esc}')`, needsReview: true, note: 'TODO: verify locator via @playwright/cli' };
+  return { expr: `page.locator('${esc}')`, needsReview: true, note: 'TODO: verify locator via agent-browser' };
 }
 
 function classifyLocatorGroup(loc) {
@@ -1720,7 +1720,7 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
       ...(appSettings ? [`Base URL detected from ${appSettings.sourceFile}; override via BASE_URL in .env.`] : []),
       options.staticOnly
         ? 'Static-only fallback mode: verify locators before CI promotion.'
-        : 'Verify draft locators against live BASE_URL via @playwright/cli before compile:tape.',
+        : 'Verify draft locators against live BASE_URL via agent-browser before compile:tape.',
     ],
     semanticSteps,
     networkContracts,

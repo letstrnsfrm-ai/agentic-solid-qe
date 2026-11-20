@@ -25,7 +25,7 @@ flowchart TD
   CheckTapes -- "Yes (1 at a time)" --> S02["Invoke /02-solid-architect <scenario-id>\nCompile 1 Tape -> SOLID TS + npm run verify"]
   CheckTapes -- "No" --> CheckShards{"Uncovered shards or\nnext charter stage?"}
 
-  CheckShards -- "Uncovered P0 / P1 / P2 / API / Multi-Portal" --> S01["Invoke /01-cli-explorer\nExplore 1 flow live via @playwright/cli\n& emit 1 Session Tape"]
+  CheckShards -- "Uncovered P0 / P1 / P2 / API / Multi-Portal" --> S01["Invoke /01-cli-explorer\nExplore 1 flow live via agent-browser\n& emit 1 Session Tape"]
   CheckShards -- "Failing spec in CI/local" --> S03["Invoke /03-drift-healer\nLive triage: DEFECT-*.md vs. healed drift"]
   CheckShards -- "Ready for CI sharding" --> S04["Invoke /04-ci-pipeline\nCurate @p0/@smoke/@regression & CI YAML"]
 ```
@@ -40,9 +40,9 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | **`00-master-orchestrator`** | `/00-master-orchestrator` or `/master-orchestrator` | **Entry Point & Advisor:** Runs live diagnostics, explains all framework features, selects the right Onboarding Track (1–4), and guides incremental coverage across Stages 0–4. | `npx cortex orchestrate` / `npm run coverage:gaps` |
 | **`00-env-bootstrap`** | `/00-env-bootstrap` | **Environment & Auth Bootstrap:** Sets `baseUrl`, captures reusable `.auth/<persona>.json` (`storageState`) for SSO/MFA apps, and seeds top-level feature shards in `.agents/domain/domain-memory.md`. | `npm run init:app` |
-| **`01-cli-explorer`** | `/01-cli-explorer` | **Autonomous Explorer & Coverage Curator:** Explores unfamiliar UI flows and backend APIs via `npx playwright-cli -s=<session> --headed`, resumes from paused existing specs (`test:explore` / `--debug` + `attach`), or records human flows via `recording-start` / `playwright codegen`, and emits 1 validated `.exploratory/tapes/<scenario>.json` at a time. | `npm run coverage:gaps` & `npm run validate:tapes` |
+| **`01-cli-explorer`** | `/01-cli-explorer` | **Autonomous Explorer & Coverage Curator:** Explores unfamiliar UI flows and backend APIs via `npx agent-browser --session <session> --headed`, resumes from paused existing specs (`test:explore` / `--debug` + `attach`), or records human flows via `recording-start` / `playwright codegen`, and emits 1 validated `.exploratory/tapes/<scenario>.json` at a time. | `npm run coverage:gaps` & `npm run validate:tapes` |
 | **`02-solid-architect`** | `/02-solid-architect` | **SOLID TypeScript Compiler:** Compiles 1 Session Tape at a time into `src/contracts/`, `src/components/` (`≤ 150` lines, zero `expect()`), `src/pages/`, `src/domains/<squad>/`, `src/data/` Builders, `src/fixtures/`, and declarative `tests/*.spec.ts`. | `npm run verify` |
-| **`03-drift-healer`** | `/03-drift-healer` | **Live Failure Triage & Self-Healing:** Replays failing `.spec.ts` routes via `@playwright/cli` to separate genuine application regressions (`defects/DEFECT-*.md`) from UI locator, wizard condition, API contract, or auth drift. | `npx playwright test` |
+| **`03-drift-healer`** | `/03-drift-healer` | **Live Failure Triage & Self-Healing:** Replays failing `.spec.ts` routes via `agent-browser` to separate genuine application regressions (`defects/DEFECT-*.md`) from UI locator, wizard condition, API contract, or auth drift. | `npx playwright test` |
 | **`04-ci-pipeline`** | `/04-ci-pipeline` | **CI/CD & Tag Architect:** Curates `@p0`, `@smoke`, `@regression`, and `@api-contract` tags, hardens `playwright.config.ts`, and scaffolds sharded GitHub Actions and Azure DevOps pipelines. | `npm run audit:solid` |
 | **`05-skill-migrator`** | `/05-skill-migrator` | **Legacy Skill & Script Migrator:** Discovers and decomposes `.cursorrules`, `CLAUDE.md`, custom prompts, and `.sh`/`.js`/`.ts`/`.py` scripts into `< 500`-token `SKILL.md` bundles, secret-redacted `references/` & `scripts/`, Session Tapes, and `≤ 150`-line Domain Shards. | `npm run migrate:skill` |
 
@@ -101,7 +101,7 @@ Never attempt to automate an entire application in a single unverified batch. Us
 - **Goal:** Run fast, reliable quality gates in CI/CD and heal application evolution without manual maintenance bottlenecks.
 - **Actions:**
   1. Invoke `/04-ci-pipeline` to audit `@p0`/`@smoke`/`@regression` tag distribution and configure sharded GitHub Actions (`.github/workflows/playwright-ci.yml`) or Azure DevOps (`.azure-pipelines/playwright-ci.yml`).
-  2. When a test fails locally or in CI, invoke `/03-drift-healer` to inspect the live route via `@playwright/cli`:
+  2. When a test fails locally or in CI, invoke `/03-drift-healer` to inspect the live route via `agent-browser`:
      - **Real App Bug:** Automatically logs `defects/DEFECT-<timestamp>-<slug>.md` with reproduction evidence and leaves the failing assertion intact.
      - **Harmless UI/API/Wizard Drift:** Updates only the affected Component locator, WizardStep condition, API Client endpoint, or Domain Shard `**Last Verified:**` date, then verifies with `npm run verify`.
 - **Exit Criteria:** `staleShards.length === 0`, all specs carry execution tags, and `npm run verify` runs green in sharded CI.

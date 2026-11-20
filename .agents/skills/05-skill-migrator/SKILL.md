@@ -24,9 +24,9 @@ When invoked as `/05-skill-migrator`:
 Pause and present to the engineer:
 1. **Skill/Script Bundle:** `< 500`-token `SKILL.md` + secret-sanitized `references/` & `scripts/` + `≤ 150`-line Domain Shard.
 2. **Java/C# Legacy Test Waves:** Wave 1 (small `@smoke`/`@p0` & API), Wave 2 (medium UI), Wave 3 (monoliths split into `api-seeder`, `auth-session`, and atomic UI slices).
-3. **Session Tape Bridge:** Draft `.exploratory/tapes/<id>.json` for live `@playwright/cli` verification and `/02-solid-architect` compilation.
+3. **Session Tape Bridge:** Draft `.exploratory/tapes/<id>.json` for live `agent-browser` verification and `/02-solid-architect` compilation.
 
 ## 3. Apply, Verify & Track Parity
 Upon human approval, the agent executes:
 1. Re-run with `--apply` (writes tapes, SOLID scaffolds, and `migration-manifest.json`).
-2. Verify via `@playwright/cli` (if UI), compile via `02-solid-architect`, and run `npm run verify`.
+2. Verify via `agent-browser` (if UI), compile via `02-solid-architect`, and run `npm run verify`.
