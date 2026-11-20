@@ -14,7 +14,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { discoverLegacyTests, MIGRATION_MANIFEST_REL_PATH, assertSafeLegacyScanRoot } from './legacy-test-migrator.mjs';
+import {
+  discoverLegacyTests,
+  buildLegacyMigrationPlan,
+  MIGRATION_MANIFEST_REL_PATH,
+  assertSafeLegacyScanRoot,
+} from './legacy-test-migrator.mjs';
 import { resolveLocalBin } from './explore-session.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -260,7 +265,112 @@ export function runClosedLoopLiveVerifyAndHeal(specRelPath, projectRoot = ROOT) 
       }
     }
   }
-  return { status: 'needs-triage', healed: false };
+  return { status: 'needs-triage', healed: false, lastError: (firstRun.stderr || firstRun.stdout || 'Playwright run failed').trim().slice(0, 240) };
+}
+
+// ─── 4b. Resilient Continue-on-Error Micro-Batch Executor (`--run`) ─────────
+
+export function executeWaveBatch(manifest, selection, { projectRoot = ROOT, verify = false } = {}) {
+  const manifestPath = path.join(projectRoot, MIGRATION_MANIFEST_REL_PATH);
+  const saveManifest = () => {
+    manifest.updatedAt = new Date().toISOString();
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  };
+
+  if (selection.wave === 0) {
+    const scaffolded = [];
+    for (const prereq of selection.batch || []) {
+      try {
+        const res = scaffoldWave0Prereq(prereq, projectRoot);
+        prereq.status = 'wave0-scaffolded';
+        prereq.targetFile = res.relPath;
+        scaffolded.push({ id: prereq.id, status: 'wave0-scaffolded', targetFile: res.relPath, contract: res.contract });
+      } catch (err) {
+        prereq.status = 'needs-triage';
+        prereq.lastError = String(err.message || err).slice(0, 240);
+        scaffolded.push({ id: prereq.id, status: 'needs-triage', lastError: prereq.lastError });
+      }
+      saveManifest();
+    }
+    return { wave: 0, processed: scaffolded.length, results: scaffolded };
+  }
+
+  const scanRootAbs = assertSafeLegacyScanRoot(path.resolve(projectRoot, manifest.scanRoot || '.'), projectRoot);
+  const compileScript = path.join(__dirname, 'compile-tape.mjs');
+  const results = [];
+
+  for (const item of selection.batch || []) {
+    try {
+      const squadArg = item.squad && item.squad !== 'core' ? item.squad : '';
+      const plan = buildLegacyMigrationPlan(scanRootAbs, item.id, { squad: squadArg });
+      const scenarioId = plan.draftTape.scenarioId;
+
+      // Write tape safely inside projectRoot/.exploratory/tapes/
+      const tapeRel = `.exploratory/tapes/${scenarioId}.json`;
+      const tapeAbs = assertSafeOutputPath(projectRoot, tapeRel);
+      fs.mkdirSync(path.dirname(tapeAbs), { recursive: true });
+      fs.writeFileSync(tapeAbs, JSON.stringify(plan.draftTape, null, 2) + '\n', 'utf8');
+
+      for (const sf of plan.scaffoldedFiles || []) {
+        const destAbs = assertSafeOutputPath(projectRoot, sf.path);
+        if (!fs.existsSync(destAbs)) {
+          fs.mkdirSync(path.dirname(destAbs), { recursive: true });
+          fs.writeFileSync(destAbs, sf.content, 'utf8');
+        }
+      }
+
+      const compArgs = [compileScript, scenarioId, '--apply'];
+      if (squadArg) compArgs.push('--squad', squadArg);
+      const compRes = spawnSync(process.execPath, compArgs, { cwd: projectRoot, encoding: 'utf8' });
+      if (compRes.status !== 0) {
+        item.status = 'needs-triage';
+        item.lastError = (compRes.stderr || compRes.stdout || 'compile-tape failed').trim().slice(0, 240);
+        item.nextAction = `npx cortex explore start --scenario ${scenarioId}`;
+        item.updatedAt = new Date().toISOString();
+        results.push({ id: item.id, status: 'needs-triage', lastError: item.lastError, nextAction: item.nextAction });
+        saveManifest();
+        continue;
+      }
+
+      const candidateSpecs = [
+        squadArg ? `tests/${squadArg}/${scenarioId}.spec.ts` : null,
+        `tests/${scenarioId}.spec.ts`,
+      ].filter(Boolean);
+      const specRel = candidateSpecs.find((s) => fs.existsSync(path.join(projectRoot, s))) || candidateSpecs[0];
+
+      item.targetSpec = specRel;
+      item.status = 'compiled';
+      item.lastError = null;
+      item.nextAction = null;
+
+      if (verify && specRel) {
+        const verifyRes = runClosedLoopLiveVerifyAndHeal(specRel, projectRoot);
+        item.status = verifyRes.status;
+        if (verifyRes.status === 'needs-triage') {
+          item.lastError = verifyRes.lastError || 'Live verification & auto-heal failed';
+          item.nextAction = `npx cortex explore start --from-spec ${specRel}`;
+        }
+      }
+
+      item.updatedAt = new Date().toISOString();
+      results.push({
+        id: item.id,
+        status: item.status,
+        targetSpec: item.targetSpec,
+        ...(item.lastError ? { lastError: item.lastError, nextAction: item.nextAction } : {}),
+      });
+    } catch (err) {
+      item.status = 'needs-triage';
+      item.lastError = String(err.message || err).slice(0, 240);
+      item.nextAction = `node scripts/legacy-test-migrator.mjs --legacy ${item.id}`;
+      item.updatedAt = new Date().toISOString();
+      results.push({ id: item.id, status: 'needs-triage', lastError: item.lastError, nextAction: item.nextAction });
+    }
+    saveManifest();
+  }
+
+  return { wave: selection.wave, processed: results.length, results };
 }
 
 // ─── 5. Interactive HTML Migration Burn-Down & N:1 Parity Dashboard ─────────
@@ -277,6 +387,7 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
   const total = ledger.length;
   const verifiedCount = ledger.filter((e) => ['live-verified', 'healed', 'parity-verified'].includes(e.status)).length;
   const compiledCount = ledger.filter((e) => e.status === 'compiled').length;
+  const triageCount = ledger.filter((e) => e.status === 'needs-triage').length;
   const skippedCount = ledger.filter((e) => e.status === 'skipped-quarantine').length;
   const consolidatedCount = ledger.filter((e) => e.status === 'consolidated').length;
   const activeTarget = Math.max(1, total - skippedCount - consolidatedCount);
@@ -285,11 +396,12 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
   const squadMap = new Map();
   for (const e of ledger) {
     const sq = e.squad || 'core';
-    if (!squadMap.has(sq)) squadMap.set(sq, { squad: sq, total: 0, done: 0, compiled: 0, skipped: 0 });
+    if (!squadMap.has(sq)) squadMap.set(sq, { squad: sq, total: 0, done: 0, compiled: 0, triage: 0, skipped: 0 });
     const row = squadMap.get(sq);
     row.total++;
     if (['live-verified', 'healed', 'parity-verified', 'consolidated'].includes(e.status)) row.done++;
     else if (e.status === 'compiled') row.compiled++;
+    else if (e.status === 'needs-triage') row.triage++;
     else if (e.status === 'skipped-quarantine') row.skipped++;
   }
 
@@ -298,7 +410,7 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
       const denom = Math.max(1, s.total - s.skipped);
       const pct = Math.min(100, Math.round((s.done / denom) * 100));
       return `<div class="squad-row">
-        <div class="squad-meta"><strong>${escapeHtml(s.squad)}</strong><span>${s.done}/${denom} verified (${pct}%) &middot; ${s.compiled} compiled &middot; ${s.skipped} quarantined</span></div>
+        <div class="squad-meta"><strong>${escapeHtml(s.squad)}</strong><span>${s.done}/${denom} verified (${pct}%) &middot; ${s.compiled} compiled &middot; ${s.triage} triage &middot; ${s.skipped} quarantined</span></div>
         <div class="bar-bg"><div class="bar-fill" style="width:${pct}%"></div></div>
       </div>`;
     })
@@ -311,7 +423,7 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
         <td><code>${escapeHtml(e.id)}</code></td>
         <td>${escapeHtml(e.squad)}</td>
         <td>W${escapeHtml(e.wave)}</td>
-        <td><span class="badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span></td>
+        <td><span class="badge status-${escapeHtml(e.status)}" title="${escapeHtml(e.lastError || '')}">${escapeHtml(e.status)}</span></td>
         <td>${escapeHtml(e.seederStrategy || 'standalone')}</td>
         <td><code>${escapeHtml(e.consolidatedInto ? `-> ${e.consolidatedInto} (N:1)` : e.targetSpec || '-')}</code></td>
       </tr>`
@@ -344,6 +456,7 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
     .badge { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; background: #334155; }
     .status-live-verified, .status-healed, .status-parity-verified { background: #065f46; color: #a7f3d0; }
     .status-compiled { background: #1e40af; color: #bfdbfe; }
+    .status-needs-triage { background: #991b1b; color: #fecaca; }
     .status-consolidated { background: #5b21b6; color: #ddd6fe; }
     .status-skipped-quarantine { background: #78350f; color: #fde68a; }
   </style>
@@ -355,7 +468,8 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
     <div class="card"><div class="val">${total}</div><div class="lbl">Legacy Tests Scanned</div></div>
     <div class="card"><div class="val">${escapeHtml(manifest.summary?.estimatedTargetSpecs ?? activeTarget)} (-${escapeHtml(manifest.summary?.reductionPct ?? 0)}%)</div><div class="lbl">Rationalized SOLID Target</div></div>
     <div class="card"><div class="val">${(manifest.wave0Prereqs || []).length}</div><div class="lbl">Wave-0 Shared Seeders/Flows</div></div>
-    <div class="card"><div class="val">${verifiedPct}%</div><div class="lbl">Live-Verified / Healed</div></div>
+    <div class="card"><div class="val">${verifiedPct}%</div><div class="lbl">Live-Verified / Healed (${compiledCount} compiled)</div></div>
+    <div class="card"><div class="val">${triageCount}</div><div class="lbl">Needs Triage</div></div>
     <div class="card"><div class="val">${skippedCount}</div><div class="lbl">Quarantined / Skipped</div></div>
   </div>
   <div class="panel">
@@ -372,6 +486,7 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
         <option value="compiled">compiled</option>
         <option value="live-verified">live-verified</option>
         <option value="healed">healed</option>
+        <option value="needs-triage">needs-triage</option>
         <option value="consolidated">consolidated (N:1)</option>
         <option value="skipped-quarantine">skipped-quarantine</option>
       </select>
@@ -398,7 +513,7 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
 
   fs.mkdirSync(path.dirname(absOut), { recursive: true });
   fs.writeFileSync(absOut, html, 'utf8');
-  return { outPath: outRelPath, total, verifiedPct };
+  return { outPath: outRelPath, total, verifiedPct, compiledCount, triageCount };
 }
 
 // ─── CLI Entrypoint ─────────────────────────────────────────────────────────
@@ -416,7 +531,9 @@ function main() {
   --squad <squad-slug>     Filter wave queue to a single federated squad
   --wave <0|1|2|3>         Select Wave 0 (shared seeders/flows) or Waves 1-3 (tests)
   --batch-size <N>         Token-bounded micro-batch size (default: 5, max: 25)
-  --scaffold-wave0         Scaffold selected Wave-0 StateSeederContract / FlowContract files
+  --run                    Execute the selected micro-batch (Wave-0 scaffold or Wave 1-3 migrate -> compile)
+  --verify                 With --run, execute live Playwright verify + cortex heal auto-repair per spec
+  --scaffold-wave0         Alias for --wave 0 --run
   --dashboard [out-path]   Generate HTML Migration Burn-Down & N:1 Parity Dashboard (default: reports/migration-dashboard.html)
   --json                   Emit machine-readable JSON output
 `);
@@ -428,7 +545,8 @@ function main() {
   const waveArg = getFlag(args, '--wave');
   const wave = waveArg !== undefined ? Number(waveArg) : null;
   const batchSize = Number(getFlag(args, '--batch-size', '5'));
-  const scaffoldWave0 = args.includes('--scaffold-wave0');
+  const shouldRun = args.includes('--run') || args.includes('--scaffold-wave0');
+  const shouldVerify = args.includes('--verify');
   const wantDashboard = args.includes('--dashboard');
   const jsonOut = args.includes('--json');
 
@@ -444,15 +562,9 @@ function main() {
   }
 
   const selection = selectNextWaveBatch(manifest, { squad, wave, batchSize });
-  const scaffolded = [];
-  if (scaffoldWave0 && selection.wave === 0) {
-    for (const prereq of selection.batch) {
-      const res = scaffoldWave0Prereq(prereq, ROOT);
-      prereq.status = 'wave0-scaffolded';
-      prereq.targetFile = res.relPath;
-      scaffolded.push(res);
-    }
-    fs.writeFileSync(path.join(ROOT, MIGRATION_MANIFEST_REL_PATH), JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  let execution = null;
+  if (shouldRun) {
+    execution = executeWaveBatch(manifest, selection, { projectRoot: ROOT, verify: shouldVerify });
   }
 
   let dashboard = null;
@@ -468,7 +580,7 @@ function main() {
   const output = {
     summary: manifest.summary,
     selection,
-    ...(scaffolded.length > 0 ? { scaffolded } : {}),
+    ...(execution ? { execution } : {}),
     ...(dashboard ? { dashboard } : {}),
   };
 
@@ -478,8 +590,14 @@ function main() {
     console.log(
       `🌊 Cortex Wave Factory | Legacy: ${manifest.summary.totalLegacy} -> Target: ${manifest.summary.estimatedTargetSpecs} (-${manifest.summary.reductionPct}%) | Wave-0 Prereqs: ${manifest.summary.wave0SharedPrereqs} | Queue(${selection.squad}/W${selection.wave}): ${selection.batch.length}/${selection.remainingInQueue}`
     );
-    for (const item of selection.batch) {
-      console.log(`  - ${item.id} (${item.className || item.squad || 'core'})`);
+    if (execution) {
+      for (const r of execution.results) {
+        console.log(`  [${r.status}] ${r.id}${r.targetSpec ? ` -> ${r.targetSpec}` : r.targetFile ? ` -> ${r.targetFile}` : ''}${r.lastError ? ` (${r.lastError})` : ''}`);
+      }
+    } else {
+      for (const item of selection.batch) {
+        console.log(`  - ${item.id} (${item.className || item.squad || 'core'})`);
+      }
     }
     if (dashboard) console.log(`📊 Dashboard written -> ${dashboard.outPath}`);
   }
