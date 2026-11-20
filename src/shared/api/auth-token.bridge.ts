@@ -64,7 +64,7 @@ function matchesCookieDomain(
 ): boolean {
   if (!targetHost) return true;
   const effectiveDomain = cookieDomain || fallbackOriginHost;
-  if (!effectiveDomain) return true;
+  if (!effectiveDomain) return false;
   const normalizedTarget = targetHost.toLowerCase();
   const normalizedCookie = effectiveDomain.toLowerCase().replace(/^\.+/, '');
   return (
@@ -80,17 +80,24 @@ function matchesCookieDomain(
 export class AuthTokenBridge {
   /**
    * Validates and resolves a `.auth/<persona>.json` path strictly inside the workspace `.auth/` directory,
-   * rejecting path traversal (`..`), symbolic links, and oversized files.
+   * rejecting path traversal (`..`), symbolic links (file or parent `.auth/` dir), and oversized files.
    */
   static assertSafeStorageStatePath(storageStatePath: string): string | null {
     const normalizedInput = String(storageStatePath || '').replace(/\\/g, '/').replace(/^\.\//, '');
     if (!SAFE_STORAGE_STATE_PATH_REGEX.test(normalizedInput)) {
       return null;
     }
-    const authRoot = path.resolve(process.cwd(), '.auth');
-    const resolved = path.resolve(process.cwd(), normalizedInput);
+    const workspaceRoot = path.resolve(process.cwd());
+    const authRoot = path.resolve(workspaceRoot, '.auth');
+    const resolved = path.resolve(workspaceRoot, normalizedInput);
     const relToAuth = path.relative(authRoot, resolved);
     if (relToAuth.startsWith('..') || path.isAbsolute(relToAuth)) {
+      return null;
+    }
+    if (fs.existsSync(authRoot) && fs.lstatSync(authRoot).isSymbolicLink()) {
+      return null;
+    }
+    if (fs.existsSync(resolved) && fs.lstatSync(resolved).isSymbolicLink()) {
       return null;
     }
     return resolved;
@@ -184,8 +191,7 @@ export class AuthTokenBridge {
       if (
         !options?.allowCrossOrigin &&
         targetOriginUrl &&
-        originEntry.origin &&
-        originEntry.origin !== targetOriginUrl.origin
+        (!originEntry.origin || originEntry.origin !== targetOriginUrl.origin)
       ) {
         continue;
       }

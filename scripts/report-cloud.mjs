@@ -10,7 +10,9 @@
  *   npx cortex report --out .exploratory/cortex-report.json
  *   CORTEX_CLOUD_URL=https://cloud.example.com/api/v1/reports CORTEX_CLOUD_TOKEN=... npx cortex report
  */
+import dns from 'node:dns/promises';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -22,15 +24,62 @@ const ROOT = process.cwd();
 const FORBIDDEN_HOSTS = new Set([
   '0.0.0.0',
   '[::]',
+  '::',
   '169.254.169.254',
   '169.254.170.2',
   '100.100.100.200',
   '[fd00:ec2::254]',
+  'fd00:ec2::254',
   'metadata.google.internal',
   'metadata.azure.com',
   'metadata',
   'instance-data',
 ]);
+
+function isForbiddenIpv4(ip, { allowLoopback = false } = {}) {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    return true;
+  }
+  const [a, b] = parts;
+  if (a === 0) return true; // 0.0.0.0/8
+  if (a === 10) return true; // RFC1918 10.0.0.0/8
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
+  if (a === 127) return !allowLoopback; // Loopback 127.0.0.0/8
+  if (a === 169 && b === 254) return true; // Link-local / cloud metadata 169.254.0.0/16
+  if (a === 172 && b >= 16 && b <= 31) return true; // RFC1918 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // RFC1918 192.168.0.0/16
+  if (a >= 224) return true; // Multicast & reserved
+  return false;
+}
+
+export function isForbiddenIpAddress(rawIp, { allowLoopback = false } = {}) {
+  const ip = String(rawIp || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!ip) return true;
+  const family = net.isIP(ip);
+  if (family === 4) {
+    return isForbiddenIpv4(ip, { allowLoopback });
+  }
+  if (family === 6) {
+    if (ip === '::' || ip === '0:0:0:0:0:0:0:0') return true;
+    if (ip === '::1' || ip === '0:0:0:0:0:0:0:1') return !allowLoopback;
+    if (/^fe[89ab][0-9a-f]:/.test(ip)) return true; // Link-local fe80::/10
+    if (/^f[cd][0-9a-f]{2}:/.test(ip)) return true; // ULA fc00::/7 (includes fd00:ec2::254)
+    if (/^64:ff9b::/.test(ip)) return true; // NAT64 well-known prefix
+    // IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:a9fe:a9fe)
+    const v4Dotted = ip.match(/^(?:0*:)*ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (v4Dotted) return isForbiddenIpv4(v4Dotted[1], { allowLoopback });
+    const v4Hex = ip.match(/^(?:0*:)*ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (v4Hex) {
+      const hi = parseInt(v4Hex[1], 16);
+      const lo = parseInt(v4Hex[2], 16);
+      const dotted = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+      return isForbiddenIpv4(dotted, { allowLoopback });
+    }
+    return false;
+  }
+  return false;
+}
 
 export function assertSafeCloudUrl(rawUrl, env = process.env) {
   if (
@@ -56,15 +105,19 @@ export function assertSafeCloudUrl(rawUrl, env = process.env) {
     throw new Error('Embedded credentials in CORTEX_CLOUD_URL are forbidden.');
   }
   const host = parsed.hostname.toLowerCase();
+  const bareHost = host.replace(/^\[|\]$/g, '');
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
   if (
     FORBIDDEN_HOSTS.has(host) ||
+    FORBIDDEN_HOSTS.has(bareHost) ||
     /^169\.254\./.test(host) ||
     /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(host) ||
-    /^\[fe80:/i.test(host)
+    /^\[fe80:/i.test(host) ||
+    (net.isIP(bareHost) !== 0 && isForbiddenIpAddress(bareHost, { allowLoopback: isLocalHost }))
   ) {
-    throw new Error(`Cloud metadata / link-local host '${parsed.hostname}' is forbidden (SSRF protection).`);
+    throw new Error(`Cloud metadata / private / link-local host '${parsed.hostname}' is forbidden (SSRF protection).`);
   }
-  if (parsed.protocol === 'http:' && host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') {
+  if (parsed.protocol === 'http:' && !isLocalHost) {
     throw new Error('CORTEX_CLOUD_URL must use https:// for non-localhost endpoints.');
   }
   const allowedHostsRaw = (env.CORTEX_ALLOWED_CLOUD_HOSTS || '').trim();
@@ -82,6 +135,27 @@ export function assertSafeCloudUrl(rawUrl, env = process.env) {
     }
   }
   return parsed.toString();
+}
+
+export async function assertSafeResolvedCloudTarget(safeUrl) {
+  const parsed = new URL(safeUrl);
+  const host = parsed.hostname.toLowerCase();
+  const bareHost = host.replace(/^\[|\]$/g, '');
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  if (isLocalHost || net.isIP(bareHost) !== 0) {
+    if (net.isIP(bareHost) !== 0 && isForbiddenIpAddress(bareHost, { allowLoopback: isLocalHost })) {
+      throw new Error(`Security Error: Target IP '${bareHost}' is forbidden (SSRF protection).`);
+    }
+    return;
+  }
+  const records = await dns.lookup(bareHost, { all: true });
+  for (const rec of records) {
+    if (isForbiddenIpAddress(rec.address, { allowLoopback: false })) {
+      throw new Error(
+        `Security Error: CORTEX_CLOUD_URL host '${bareHost}' resolves to private/internal IP '${rec.address}' (SSRF protection).`
+      );
+    }
+  }
 }
 
 function detectCiProvider() {
@@ -237,18 +311,26 @@ Environment:
   const payload = buildSanitizedReport({ prNumber: explicitPr });
 
   if (outFile) {
-    const resolvedOut = path.resolve(ROOT, outFile);
-    if (!resolvedOut.startsWith(ROOT + path.sep) && resolvedOut !== ROOT) {
+    const resolvedRoot = path.resolve(ROOT);
+    const resolvedOut = path.resolve(resolvedRoot, outFile);
+    const relOut = path.relative(resolvedRoot, resolvedOut);
+    if (relOut.startsWith('..') || path.isAbsolute(relOut)) {
       console.error(`❌ Security Error: --out path '${outFile}' must stay inside repository root.`);
       process.exit(1);
     }
-    if (fs.existsSync(resolvedOut) && fs.lstatSync(resolvedOut).isSymbolicLink()) {
-      console.error(`❌ Security Error: Refusing to overwrite symbolic link '${outFile}'.`);
-      process.exit(1);
+    let cur = resolvedOut;
+    while (cur !== resolvedRoot) {
+      if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+        console.error(`❌ Security Error: Refusing to write through symbolic link '${path.relative(resolvedRoot, cur)}'.`);
+        process.exit(1);
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
     }
     fs.mkdirSync(path.dirname(resolvedOut), { recursive: true });
     fs.writeFileSync(resolvedOut, JSON.stringify(payload, null, 2) + '\n', 'utf8');
-    console.log(`📝 Wrote sanitized Cortex report -> ${path.relative(ROOT, resolvedOut)}`);
+    console.log(`📝 Wrote sanitized Cortex report -> ${path.relative(resolvedRoot, resolvedOut)}`);
   }
 
   if (dryRun) {
@@ -270,6 +352,7 @@ Environment:
   let safeUrl;
   try {
     safeUrl = assertSafeCloudUrl(cloudUrl);
+    await assertSafeResolvedCloudTarget(safeUrl);
   } catch (err) {
     console.error(`❌ ${err.message}`);
     process.exit(1);

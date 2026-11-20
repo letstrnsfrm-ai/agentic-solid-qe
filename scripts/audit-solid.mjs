@@ -414,7 +414,7 @@ function extractBuilderLiterals(files) {
     const bCode = stripComments(fs.readFileSync(bFile, 'utf8'))
       .replace(/^\s*import\s+.*$/gm, '')
       .replace(/\brole\s*:\s*[^,\n}]+/g, '');
-    const stringMatches = bCode.matchAll(/(['"])((?:\\.|(?!\1).)+)\1/g);
+    const stringMatches = bCode.matchAll(/(['"])((?:\\.|(?!\1)[^\\])+)\1/g);
     for (const match of stringMatches) {
       const val = match[2].trim();
       if (val.length >= 5) {
@@ -509,7 +509,7 @@ for (const file of specFiles) {
   // Strip import lines and test/describe title strings before checking spec body literals
   const specBodyOnly = codeWithoutComments
     .replace(/^\s*import\s+.*$/gm, '')
-    .replace(/\btest(?:\.describe)?\s*\(\s*(['"`])(?:\\.|(?!\1).)*\1/g, 'test(');
+    .replace(/\btest(?:\.describe)?\s*\(\s*(['"`])(?:\\.|(?!\1)[^\\])*\1/g, 'test(');
 
   if (/['"`]https?:\/\/[^'"`]+['"`]/.test(specBodyOnly)) {
     violations.push(
@@ -518,7 +518,7 @@ for (const file of specFiles) {
   }
 
   const specLiterals = new Set(
-    [...specBodyOnly.matchAll(/(['"`])((?:\\.|(?!\1).)+)\1/g)].map((m) => m[2].trim())
+    [...specBodyOnly.matchAll(/(['"`])((?:\\.|(?!\1)[^\\])+)\1/g)].map((m) => m[2].trim())
   );
 
   // Check global builder literals + matching squad builder literals (if spec is inside tests/<squad>/)
@@ -548,7 +548,7 @@ for (const file of specFiles) {
   const IMPLEMENTATION_JARGON_REGEX =
     /\b(?:click|fill|press|hover|locator|selector|xpath|css|dom|getbyrole|getbylabel|getbytestid|getbyplaceholder|getbytext|input\s+field|button|checkbox|dropdown)\b/i;
   for (const stepMatch of codeWithoutComments.matchAll(
-    /\btest\.step\s*\(\s*(['"`])((?:\\.|(?!\1).)+)\1/g
+    /\btest\.step\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])+)\1/g
   )) {
     const stepTitle = stepMatch[2].trim();
     const jargonMatch = stepTitle.match(IMPLEMENTATION_JARGON_REGEX);

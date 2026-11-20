@@ -27,6 +27,63 @@ const CHECKPOINTS_DIR = path.resolve(process.cwd(), '.exploratory', 'checkpoints
 const LIVE_SESSION_FILE = path.resolve(process.cwd(), '.exploratory', 'live-session.json');
 const RELEASE_SENTINEL_FILE = path.resolve(process.cwd(), '.exploratory', 'live-session.release');
 
+const FORBIDDEN_CHECKPOINT_HOSTS = new Set([
+  '0.0.0.0',
+  '[::]',
+  '169.254.169.254',
+  '169.254.170.2',
+  '100.100.100.200',
+  '[fd00:ec2::254]',
+  'metadata.google.internal',
+  'metadata.azure.com',
+  'metadata',
+  'instance-data',
+]);
+
+function assertSafeCheckpointUrl(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`Unsafe checkpoint URL '${rawUrl}'.`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Disallowed checkpoint URL protocol '${parsed.protocol}'.`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('Embedded credentials in checkpoint URL are forbidden.');
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (
+    FORBIDDEN_CHECKPOINT_HOSTS.has(host) ||
+    /^169\.254\./.test(host) ||
+    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(host) ||
+    /^\[fe80:/i.test(host) ||
+    /^\[fd00:ec2::/i.test(host)
+  ) {
+    throw new Error(`Cloud metadata / link-local checkpoint host '${parsed.hostname}' is forbidden.`);
+  }
+  return parsed.toString();
+}
+
+function assertNoSymlinkEscape(rootDir: string, targetPath: string): void {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedTarget = path.resolve(targetPath);
+  const rel = path.relative(resolvedRoot, resolvedTarget);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Unsafe path outside workspace: ${targetPath}`);
+  }
+  let cur = resolvedTarget;
+  while (cur !== resolvedRoot) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      throw new Error(`Refusing symlinked path inside workspace: ${path.relative(resolvedRoot, cur)}`);
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+}
+
 function resolveSafeCheckpointPath(nameOrRelPath: string): string {
   const isRelPath = nameOrRelPath.startsWith('.exploratory/checkpoints/');
   const target = isRelPath
@@ -36,10 +93,12 @@ function resolveSafeCheckpointPath(nameOrRelPath: string): string {
   if (rel.startsWith('..') || path.isAbsolute(rel) || !target.endsWith('.json')) {
     throw new Error(`Unsafe checkpoint path outside .exploratory/checkpoints/: ${nameOrRelPath}`);
   }
+  assertNoSymlinkEscape(process.cwd(), target);
   return target;
 }
 
 function writePrivateJson(filePath: string, data: unknown): void {
+  assertNoSymlinkEscape(process.cwd(), filePath);
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
   try {
@@ -120,7 +179,10 @@ export async function restoreCheckpoint(
     await context.addCookies(checkpoint.cookies);
   }
 
-  const targetUrl = typeof checkpoint.url === 'string' && /^https?:\/\//i.test(checkpoint.url) ? checkpoint.url : '';
+  const targetUrl =
+    typeof checkpoint.url === 'string' && /^https?:\/\//i.test(checkpoint.url)
+      ? assertSafeCheckpointUrl(checkpoint.url)
+      : '';
   const localEntries = checkpoint.localStorage && typeof checkpoint.localStorage === 'object' ? checkpoint.localStorage : {};
   const sessionEntries = checkpoint.sessionStorage && typeof checkpoint.sessionStorage === 'object' ? checkpoint.sessionStorage : {};
 

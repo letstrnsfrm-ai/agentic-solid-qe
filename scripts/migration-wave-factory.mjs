@@ -27,6 +27,9 @@ const __dirname = path.dirname(__filename);
 const ROOT = process.cwd();
 
 const SAFE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+const SAFE_CLASS_NAME_RE = /^[A-Z][A-Za-z0-9_]{1,80}$/;
+const SAFE_SPEC_REL_RE = /^tests\/[a-zA-Z0-9_./-]+\.spec\.ts$/;
+const FORBIDDEN_CLASS_NAMES = new Set(['Object', 'Function', 'EvalError', 'Proxy', 'Reflect', 'Array']);
 
 function escapeHtml(str) {
   return String(str ?? '')
@@ -37,17 +40,56 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+function sanitizeCommentText(raw, maxLen = 120) {
+  return String(raw ?? '')
+    .replace(/[\r\n\t\x00-\x1f\x7f\u2028\u2029\u202A-\u202E\u2066-\u2069]/g, ' ')
+    .replace(/[*/]/g, '_')
+    .trim()
+    .slice(0, maxLen);
+}
+
+function assertSafeClassName(rawName) {
+  const name = String(rawName || '').trim();
+  if (!SAFE_CLASS_NAME_RE.test(name) || FORBIDDEN_CLASS_NAMES.has(name)) {
+    throw new Error(
+      `Security Error: Invalid Wave-0 className '${rawName}'. Must match /^[A-Z][A-Za-z0-9_]{1,80}$/.`
+    );
+  }
+  return name;
+}
+
 function assertSafeOutputPath(projectRoot, relOutPath) {
   if (typeof relOutPath !== 'string' || !relOutPath.trim() || path.isAbsolute(relOutPath) || relOutPath.includes('..')) {
-    throw new Error(`Security Error: Unsafe dashboard output path '${relOutPath}'.`);
+    throw new Error(`Security Error: Unsafe output path '${relOutPath}'.`);
   }
-  const resolved = path.resolve(projectRoot, relOutPath);
-  const rel = path.relative(projectRoot, resolved);
+  const resolvedRoot = path.resolve(projectRoot);
+  const resolved = path.resolve(resolvedRoot, relOutPath);
+  const rel = path.relative(resolvedRoot, resolved);
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error(`Security Error: Output path escapes repository root: '${relOutPath}'.`);
   }
-  if (fs.existsSync(resolved) && fs.lstatSync(resolved).isSymbolicLink()) {
-    throw new Error(`Security Error: Refusing to write to symbolic link: '${relOutPath}'.`);
+  let cur = resolved;
+  while (cur !== resolvedRoot) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      throw new Error(`Security Error: Refusing to write through symbolic link: '${path.relative(resolvedRoot, cur)}'.`);
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolved;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(`Security Error: Output realpath escapes repository root: '${relOutPath}'.`);
+    }
   }
   return resolved;
 }
@@ -178,7 +220,13 @@ export function selectNextWaveBatch(manifest, { squad = '', wave = null, batchSi
 
 export function scaffoldWave0Prereq(prereq, projectRoot = ROOT) {
   const squad = prereq.squads?.length === 1 && SAFE_SLUG_RE.test(prereq.squads[0]) ? prereq.squads[0] : '';
-  const slug = String(prereq.id || 'shared-prereq').replace(/^wave0-/, '');
+  const slug = String(prereq.id || 'shared-prereq').replace(/^wave0-/, '').trim();
+  if (!SAFE_SLUG_RE.test(slug)) {
+    throw new Error(`Security Error: Invalid Wave-0 prerequisite slug '${prereq.id}'. Must be kebab-case.`);
+  }
+  const safeClassName = assertSafeClassName(prereq.className);
+  const safeReuseCount = Math.max(0, Math.trunc(Number(prereq.reuseCount) || 0));
+  const safePrefixKey = sanitizeCommentText(prereq.prefixKey || '');
   const isSeeder = prereq.recommendedContract === 'StateSeederContract';
   const relDir = squad
     ? `src/domains/${squad}/${isSeeder ? 'seeders' : 'flows'}`
@@ -193,9 +241,9 @@ import type { StateSeederContract } from '@contracts/state-seeder.contract';
 
 /**
  * Wave-0 Shared State Seeder (SRP <= 150 lines, zero assertions, LSP: StateSeederContract).
- * Serves ${prereq.reuseCount} downstream migrated tests sharing prefix '${String(prereq.prefixKey || '').replace(/\*\//g, '')}'.
+ * Serves ${safeReuseCount} downstream migrated tests sharing prefix '${safePrefixKey}'.
  */
-export class ${prereq.className} implements StateSeederContract<Record<string, unknown>, Record<string, string>> {
+export class ${safeClassName} implements StateSeederContract<Record<string, unknown>, Record<string, string>> {
   constructor(
     private readonly request: APIRequestContext,
     private readonly baseUrl: string
@@ -218,9 +266,9 @@ import type { FlowContract } from '@contracts/flow.contract';
 
 /**
  * Wave-0 Shared Reusable UI Flow (SRP <= 150 lines, zero assertions, LSP: FlowContract).
- * Serves ${prereq.reuseCount} downstream migrated tests sharing prefix '${String(prereq.prefixKey || '').replace(/\*\//g, '')}'.
+ * Serves ${safeReuseCount} downstream migrated tests sharing prefix '${safePrefixKey}'.
  */
-export class ${prereq.className} implements FlowContract<void, Record<string, string>> {
+export class ${safeClassName} implements FlowContract<void, Record<string, string>> {
   constructor(private readonly page: Page) {}
 
   async execute(): Promise<Record<string, string>> {
@@ -232,16 +280,24 @@ export class ${prereq.className} implements FlowContract<void, Record<string, st
 
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   fs.writeFileSync(absPath, codeContent, 'utf8');
-  return { relPath, className: prereq.className, contract: prereq.recommendedContract };
+  return { relPath, className: safeClassName, contract: prereq.recommendedContract };
 }
 
 // ─── 4. Closed-Loop Live Verify + Auto-Heal Runner ──────────────────────────
 
 export function runClosedLoopLiveVerifyAndHeal(specRelPath, projectRoot = ROOT) {
+  const normalizedSpec = String(specRelPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!SAFE_SPEC_REL_RE.test(normalizedSpec) || normalizedSpec.includes('..')) {
+    throw new Error(
+      `Security Error: Invalid spec path '${specRelPath}'. Must match tests/<path>.spec.ts with no traversal or leading '-'.`
+    );
+  }
+  assertSafeOutputPath(projectRoot, normalizedSpec);
+
   const pwBin = resolveLocalBin('playwright', projectRoot);
   const firstRun = spawnSync(
     pwBin.command,
-    [...pwBin.prefixArgs, 'test', specRelPath, '--project=chromium'],
+    [...pwBin.prefixArgs, 'test', normalizedSpec, '--project=chromium'],
     { cwd: projectRoot, encoding: 'utf8' }
   );
   if (firstRun.status === 0) {
@@ -250,14 +306,14 @@ export function runClosedLoopLiveVerifyAndHeal(specRelPath, projectRoot = ROOT) 
 
   const healScript = path.join(__dirname, 'heal-drift.mjs');
   if (fs.existsSync(healScript)) {
-    const healRes = spawnSync(process.execPath, [healScript, '--spec', specRelPath, '--apply'], {
+    const healRes = spawnSync(process.execPath, [healScript, '--spec', normalizedSpec, '--apply'], {
       cwd: projectRoot,
       encoding: 'utf8',
     });
     if (healRes.status === 0) {
       const retryRun = spawnSync(
         pwBin.command,
-        [...pwBin.prefixArgs, 'test', specRelPath, '--project=chromium'],
+        [...pwBin.prefixArgs, 'test', normalizedSpec, '--project=chromium'],
         { cwd: projectRoot, encoding: 'utf8' }
       );
       if (retryRun.status === 0) {
@@ -271,7 +327,7 @@ export function runClosedLoopLiveVerifyAndHeal(specRelPath, projectRoot = ROOT) 
 // ─── 4b. Resilient Continue-on-Error Micro-Batch Executor (`--run`) ─────────
 
 export function executeWaveBatch(manifest, selection, { projectRoot = ROOT, verify = false } = {}) {
-  const manifestPath = path.join(projectRoot, MIGRATION_MANIFEST_REL_PATH);
+  const manifestPath = assertSafeOutputPath(projectRoot, MIGRATION_MANIFEST_REL_PATH);
   const saveManifest = () => {
     manifest.updatedAt = new Date().toISOString();
     fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
@@ -302,9 +358,16 @@ export function executeWaveBatch(manifest, selection, { projectRoot = ROOT, veri
 
   for (const item of selection.batch || []) {
     try {
-      const squadArg = item.squad && item.squad !== 'core' ? item.squad : '';
+      const rawSquad = item.squad && item.squad !== 'core' ? String(item.squad).trim() : '';
+      if (rawSquad && !SAFE_SLUG_RE.test(rawSquad)) {
+        throw new Error(`Security Error: Invalid squad '${item.squad}' in migration ledger.`);
+      }
+      const squadArg = rawSquad;
       const plan = buildLegacyMigrationPlan(scanRootAbs, item.id, { squad: squadArg });
       const scenarioId = plan.draftTape.scenarioId;
+      if (!SAFE_SLUG_RE.test(scenarioId)) {
+        throw new Error(`Security Error: Invalid scenarioId '${scenarioId}'.`);
+      }
 
       // Write tape safely inside projectRoot/.exploratory/tapes/
       const tapeRel = `.exploratory/tapes/${scenarioId}.json`;

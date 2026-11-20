@@ -144,9 +144,7 @@ function detectCiConfigured(rootDir) {
 }
 
 function runCoverageAnalyzer(rootDir, squad) {
-  const analyzerPath = path.join(rootDir, 'scripts/analyze-coverage.mjs');
-  const fallbackAnalyzer = path.join(__dirname, 'analyze-coverage.mjs');
-  const scriptToRun = fs.existsSync(analyzerPath) ? analyzerPath : fallbackAnalyzer;
+  const scriptToRun = path.join(__dirname, 'analyze-coverage.mjs');
 
   const args = [scriptToRun, '--summary', '--json'];
   if (squad) args.push('--squad', squad);
@@ -252,20 +250,32 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     };
   } else if (uncompiledTapes.length > 0) {
     const firstTape = uncompiledTapes[0];
-    const scenarioId = typeof firstTape === 'string' ? firstTape : firstTape.scenarioId;
+    const rawScenarioId = typeof firstTape === 'string' ? firstTape : firstTape.scenarioId;
+    const scenarioId = /^[a-z0-9][a-z0-9-]*$/.test(String(rawScenarioId || ''))
+      ? String(rawScenarioId)
+      : null;
     maturityStage =
       counts.wizardSteps > 0 || counts.apiClients > 0
         ? 'Stage 3 — Enterprise Wizards, APIs & Handoffs'
         : 'Stage 1 — P0 Golden-Path Baseline (1 Test at a Time)';
-    nextAction = {
-      priority: 3,
-      skill: '02-solid-architect',
-      why: `${uncompiledTapes.length} recorded Session Tape(s) ready for deterministic SOLID compilation (next: ${scenarioId}).`,
-      command: `npx cortex compile ${scenarioId} --apply`,
-      runArgs: [path.join(__dirname, 'compile-tape.mjs'), scenarioId, '--apply'],
-      autoRunnable: true,
-      humanGate: 'None — agent compiles & runs npm run verify autonomously.',
-    };
+    nextAction = scenarioId
+      ? {
+          priority: 3,
+          skill: '02-solid-architect',
+          why: `${uncompiledTapes.length} recorded Session Tape(s) ready for deterministic SOLID compilation (next: ${scenarioId}).`,
+          command: `npx cortex compile ${scenarioId} --apply`,
+          runArgs: [path.join(__dirname, 'compile-tape.mjs'), scenarioId, '--apply'],
+          autoRunnable: true,
+          humanGate: 'None — agent compiles & runs npm run verify autonomously.',
+        }
+      : {
+          priority: 3,
+          skill: '01-cli-explorer',
+          why: `Found uncompiled Session Tape with invalid scenarioId '${rawScenarioId}'. Fix the tape schema before compilation.`,
+          command: 'npm run validate:tapes',
+          autoRunnable: false,
+          humanGate: 'Fix invalid scenarioId in .exploratory/tapes/*.json.',
+        };
   } else if (totalLegacyCount > 0) {
     maturityStage = 'Stage 0 — Legacy Rules & Test Migration';
     const hasLegacyTests = legacyCodeTests.length > 0;

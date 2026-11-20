@@ -117,13 +117,17 @@ jobs:
                 process.exit(1);
               }
               const host = parsed.hostname.toLowerCase();
-              const isLocal = host === "localhost" || host === "127.0.0.1";
+              const isLocal = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
               if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocal)) {
                 console.error("❌ Security Error: target_url must use https:// for non-localhost environments.");
                 process.exit(1);
               }
-              if (parsed.username || parsed.password || /^169\.254\.|^100\.100\.100\.200$|^metadata/i.test(host)) {
-                console.error("❌ Security Error: target_url contains forbidden metadata host or embedded credentials.");
+              if (
+                parsed.username ||
+                parsed.password ||
+                /^169\.254\.|^10\.|^192\.168\.|^172\.(?:1[6-9]|2\d|3[01])\.|^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|^0\.|^\[(?:0*:)*ffff:|^\[fe80:|^\[f[cd][0-9a-f]{2}:|^metadata|^instance-data$/i.test(host)
+              ) {
+                console.error("❌ Security Error: target_url contains forbidden private/metadata host or embedded credentials.");
                 process.exit(1);
               }
               const allowed = new Set(
@@ -137,8 +141,8 @@ jobs:
                   allowed.add(new URL(process.env.CONFIGURED_BASE_URL).hostname.toLowerCase());
                 } catch {}
               }
-              if (allowed.size > 0 && !allowed.has(host)) {
-                console.error(`❌ Security Error: target_url host "${host}" is not in ALLOWED_TARGET_HOSTS or BASE_URL.`);
+              if (allowed.size === 0 || !allowed.has(host)) {
+                console.error(`❌ Security Error: target_url host "${host}" is not explicitly permitted by ALLOWED_TARGET_HOSTS or BASE_URL.`);
                 process.exit(1);
               }
             }

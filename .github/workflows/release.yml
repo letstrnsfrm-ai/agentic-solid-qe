@@ -57,8 +57,13 @@ jobs:
           NEXT_TAG: ${{ steps.notes.outputs.next_tag }}
           RELEASE_TITLE: ${{ steps.notes.outputs.release_title }}
         run: |
-          gh release create "$NEXT_TAG" \
+          if [[ ! "$NEXT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Security Error: Unsafe NEXT_TAG format: $NEXT_TAG"
+            exit 1
+          fi
+          gh release create \
             --target "${{ github.sha }}" \
             --title "$RELEASE_TITLE" \
             --notes-file .release-notes.md \
-            --latest
+            --latest \
+            -- "$NEXT_TAG"

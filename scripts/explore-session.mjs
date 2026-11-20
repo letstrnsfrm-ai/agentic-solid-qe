@@ -28,6 +28,46 @@ const LIVE_DRAFT_TAPE_FILE = path.join(EXPLORATORY_DIR, 'live-draft-tape.json');
 const SAFE_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const SENSITIVE_FIELD_RE = /(pass(word|code)?|secret|token|api[-_]?key|ssn|social|cvv|cvc|card|pin|otp|mfa|auth)/i;
 const SENSITIVE_VALUE_RE = /^(sk_|pk_|ghp_|gho_|Bearer\s+|eyJ[A-Za-z0-9_-]+\.|[0-9]{3}-[0-9]{2}-[0-9]{4}|(?:\d[ -]*?){13,16})$/;
+const FORBIDDEN_IDENTIFIERS = new Set([
+  '__proto__',
+  'prototype',
+  'constructor',
+  'toString',
+  'valueOf',
+  'hasOwnProperty',
+  'eval',
+  'arguments',
+  'default',
+  'class',
+  'function',
+  'return',
+  'import',
+  'export',
+]);
+const ALLOWED_EXPLORE_CLI_ACTIONS = new Set([
+  'goto',
+  'fill',
+  'type',
+  'click',
+  'select',
+  'check',
+  'uncheck',
+  'press',
+  'hover',
+  'wait',
+]);
+const FORBIDDEN_EXPLORE_HOSTS = new Set([
+  '0.0.0.0',
+  '[::]',
+  '169.254.169.254',
+  '169.254.170.2',
+  '100.100.100.200',
+  '[fd00:ec2::254]',
+  'metadata.google.internal',
+  'metadata.azure.com',
+  'metadata',
+  'instance-data',
+]);
 
 // ─── Pure Exported Helpers (Unit-Testable) ──────────────────────────────────
 
@@ -36,6 +76,67 @@ export function validateSafeId(val, label = 'id') {
     throw new Error(`Invalid ${label} '${val}'. Must match ^[a-z0-9][a-z0-9-]*$.`);
   }
   return val;
+}
+
+export function assertSafeExploreUrl(rawUrl, label = 'URL') {
+  let parsed;
+  try {
+    parsed = new URL(String(rawUrl || '').trim());
+  } catch {
+    throw new Error(`Security Error: Invalid ${label} '${rawUrl}'.`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Security Error: Disallowed ${label} protocol '${parsed.protocol}'. Only http: and https: are permitted.`
+    );
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`Security Error: Embedded credentials in ${label} are forbidden.`);
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (
+    FORBIDDEN_EXPLORE_HOSTS.has(host) ||
+    /^169\.254\./.test(host) ||
+    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(host) ||
+    /^\[fe80:/i.test(host) ||
+    /^\[fd00:ec2::/i.test(host)
+  ) {
+    throw new Error(`Security Error: Cloud metadata / link-local host '${parsed.hostname}' is forbidden (SSRF protection).`);
+  }
+  return parsed.toString();
+}
+
+export function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedTarget = path.resolve(targetPath);
+  const rel = path.relative(resolvedRoot, resolvedTarget);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Path traversal detected for ${label}: '${targetPath}'.`);
+  }
+  let cur = resolvedTarget;
+  while (cur !== resolvedRoot) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      throw new Error(`Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`);
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolvedTarget;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(`Security Error: Realpath escapes workspace root for ${label}.`);
+    }
+  }
+  return resolvedTarget;
 }
 
 export function resolveConfinedPath(rootDir, relPath, allowedPrefix, label = 'path') {
@@ -52,6 +153,7 @@ export function resolveConfinedPath(rootDir, relPath, allowedPrefix, label = 'pa
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error(`Path traversal detected for ${label}: '${relPath}'.`);
   }
+  assertNoSymlinkEscape(rootDir, resolved, label);
   return { absPath: resolved, relPath: normalized };
 }
 
@@ -532,9 +634,16 @@ export function buildSeederCodeFromTape(tape, mutatingContracts = []) {
   const className = `${pascal}Seeder`;
   const primary = mutatingContracts[0] || { method: 'POST', urlPattern: '/api/v1/seed', expectedStatus: 201 };
   const method = String(primary.method || 'POST').toLowerCase();
+  if (!new Set(['post', 'put', 'patch']).has(method)) {
+    throw new Error(`Security Error: Disallowed seeder HTTP method '${primary.method}'. Expected POST, PUT, or PATCH.`);
+  }
+  const rawPattern = String(primary.urlPattern || '/api/v1/seed').trim();
+  if (!rawPattern || /[\r\n\x00-\x1f\x7f]/.test(rawPattern) || (!rawPattern.startsWith('/') && !/^https?:\/\//i.test(rawPattern))) {
+    throw new Error(`Security Error: Unsafe seeder urlPattern '${primary.urlPattern}'.`);
+  }
   const varNames = (Array.isArray(tape?.capturedVariables) ? tape.capturedVariables : [])
     .map((v) => v?.name)
-    .filter((n) => typeof n === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(n));
+    .filter((n) => typeof n === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !FORBIDDEN_IDENTIFIERS.has(n));
 
   const extractLines =
     varNames.length > 0
@@ -559,7 +668,12 @@ export class ${className} implements StateSeederContract<Record<string, unknown>
   ) {}
 
   async seed(payload: Record<string, unknown> = {}): Promise<Record<string, string>> {
-    const res = await this.request.${method}(\`\${this.baseUrl.replace(/\\/+$/, '')}${primary.urlPattern}\`, {
+    const base = new URL(this.baseUrl);
+    const endpoint = new URL(${JSON.stringify(rawPattern)}, base);
+    if (endpoint.origin !== base.origin) {
+      throw new Error('Security Error: Seeder endpoint origin must match baseUrl origin.');
+    }
+    const res = await this.request.${method}(endpoint.toString(), {
       data: payload,
     });
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -579,6 +693,7 @@ ${extractLines}
 // ─── Private CLI I/O & Agent-Browser Process Helpers ────────────────────────
 
 function writePrivateJson(filePath, data) {
+  assertNoSymlinkEscape(ROOT, filePath, 'explore state file');
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
   try {
@@ -716,6 +831,8 @@ async function cmdStart(args) {
   if (fromSpec) {
     const safeSpec = resolveConfinedPath(ROOT, fromSpec, 'tests/', '--from-spec');
     cdpPort = await findFreePort();
+    assertNoSymlinkEscape(ROOT, LIVE_SESSION_FILE, 'live-session.json');
+    assertNoSymlinkEscape(ROOT, RELEASE_SENTINEL_FILE, 'live-session.release');
     if (fs.existsSync(LIVE_SESSION_FILE)) fs.unlinkSync(LIVE_SESSION_FILE);
     if (fs.existsSync(RELEASE_SENTINEL_FILE)) fs.unlinkSync(RELEASE_SENTINEL_FILE);
 
@@ -756,26 +873,36 @@ async function cmdStart(args) {
     };
   } else if (checkpointName) {
     const safeCk = validateSafeId(checkpointName, 'checkpoint');
-    const ckFile = path.join(CHECKPOINTS_DIR, `${safeCk}.json`);
+    const ckFile = assertNoSymlinkEscape(ROOT, path.join(CHECKPOINTS_DIR, `${safeCk}.json`), 'checkpoint file');
     if (!fs.existsSync(ckFile)) {
       throw new Error(`Checkpoint not found: .exploratory/checkpoints/${safeCk}.json`);
     }
     const ck = JSON.parse(fs.readFileSync(ckFile, 'utf8'));
-    currentUrl = rawUrl || ck.url || process.env.BASE_URL || 'about:blank';
+    const ckUrl = ck.url ? assertSafeExploreUrl(ck.url, 'checkpoint URL') : null;
+    currentUrl = rawUrl
+      ? assertSafeExploreUrl(rawUrl, '--url')
+      : ckUrl || assertSafeExploreUrl(process.env.BASE_URL || 'http://localhost:3000', 'BASE_URL');
     variables = ck.variables || {};
     checkpointPath = `.exploratory/checkpoints/${safeCk}.json`;
-    const openArgs = headed ? ['--headed', 'open', currentUrl] : ['open', currentUrl];
+    const openTarget = ckUrl || currentUrl;
+    const openArgs = headed ? ['--headed', 'open', openTarget] : ['open', openTarget];
     runAgentBrowser(session, openArgs);
-    // Hydrate localStorage & sessionStorage via eval
-    const hydrateJs = `(() => {
-      const l = ${JSON.stringify(ck.localStorage || {})};
-      const s = ${JSON.stringify(ck.sessionStorage || {})};
-      for (const [k,v] of Object.entries(l)) localStorage.setItem(k, v);
-      for (const [k,v] of Object.entries(s)) sessionStorage.setItem(k, v);
-      return location.href;
-    })()`;
-    runAgentBrowser(session, ['eval', hydrateJs], { allowFail: true });
-    if (ck.url) runAgentBrowser(session, ['open', ck.url], { allowFail: true });
+    // Hydrate localStorage & sessionStorage ONLY when the browser origin strictly matches the checkpoint's origin
+    const ckOrigin = ckUrl ? new URL(ckUrl).origin : null;
+    if (ckOrigin && new URL(openTarget).origin === ckOrigin) {
+      const hydrateJs = `(() => {
+        if (window.location.origin !== ${JSON.stringify(ckOrigin)}) return location.href;
+        const l = ${JSON.stringify(ck.localStorage || {})};
+        const s = ${JSON.stringify(ck.sessionStorage || {})};
+        for (const [k,v] of Object.entries(l)) localStorage.setItem(k, v);
+        for (const [k,v] of Object.entries(s)) sessionStorage.setItem(k, v);
+        return location.href;
+      })()`;
+      runAgentBrowser(session, ['eval', hydrateJs], { allowFail: true });
+    }
+    if (currentUrl !== openTarget) {
+      runAgentBrowser(session, ['open', currentUrl], { allowFail: true });
+    }
     resumesFrom = {
       scenarioId: safeCk === scenarioId ? `${safeCk}-prereq` : safeCk,
       handoffStrategy: 'checkpoint-state',
@@ -794,7 +921,10 @@ async function cmdStart(args) {
     } catch {
       /* non-JSON seeder stdout */
     }
-    currentUrl = interpolateVariables(rawUrl || process.env.BASE_URL || 'http://localhost:3000', variables);
+    currentUrl = assertSafeExploreUrl(
+      interpolateVariables(rawUrl || process.env.BASE_URL || 'http://localhost:3000', variables),
+      '--url'
+    );
     const openArgs = headed ? ['--headed', 'open', currentUrl] : ['open', currentUrl];
     runAgentBrowser(session, openArgs);
     resumesFrom = {
@@ -805,6 +935,7 @@ async function cmdStart(args) {
     if (!currentUrl) {
       throw new Error('Provide --from-spec, --from-seed, --checkpoint, or --url <url>.');
     }
+    currentUrl = assertSafeExploreUrl(currentUrl, '--url');
     const openArgs = headed ? ['--headed', 'open', currentUrl] : ['open', currentUrl];
     runAgentBrowser(session, openArgs);
   }
@@ -856,6 +987,37 @@ async function cmdStart(args) {
   );
 }
 
+export function validateExploreActionTuple(tuple, variables = {}) {
+  if (!Array.isArray(tuple) || tuple.length === 0) {
+    throw new Error('Security Error: Explore action tuple must be a non-empty array.');
+  }
+  const [rawAction, target, rawVal] = tuple;
+  const action = String(rawAction || '').trim();
+  if (!ALLOWED_EXPLORE_CLI_ACTIONS.has(action)) {
+    throw new Error(
+      `Security Error: Disallowed explore action '${action}'. Allowed actions: ${[...ALLOWED_EXPLORE_CLI_ACTIONS].join(', ')}.`
+    );
+  }
+  const interpolatedTarget =
+    target !== undefined ? interpolateVariables(String(target), variables) : undefined;
+  const interpolatedVal =
+    rawVal !== undefined ? interpolateVariables(String(rawVal), variables) : undefined;
+
+  if (interpolatedTarget !== undefined && interpolatedTarget.startsWith('-')) {
+    throw new Error(
+      `Security Error: Action target '${interpolatedTarget}' cannot begin with '-' (CLI flag injection blocked).`
+    );
+  }
+  if (action === 'goto') {
+    if (!interpolatedTarget) {
+      throw new Error('Security Error: goto action requires a target URL.');
+    }
+    const safeUrl = assertSafeExploreUrl(interpolatedTarget, 'goto URL');
+    return { action, interpolatedTarget: safeUrl, interpolatedVal: undefined };
+  }
+  return { action, interpolatedTarget, interpolatedVal };
+}
+
 async function executeActions(actionTuples, { stepTitle, scope = '', json = false }) {
   const state = readJsonOrNull(LIVE_STATE_FILE);
   const draftTape = readJsonOrNull(LIVE_DRAFT_TAPE_FILE);
@@ -869,7 +1031,7 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
   const recordedAssertions = [];
 
   for (const tuple of actionTuples) {
-    const [action, target, rawVal, extraVal] = tuple;
+    const [rawAction, target, rawVal, extraVal] = tuple;
     let pageRoute = '/';
     try {
       pageRoute = new URL(state.url).pathname || '/';
@@ -877,7 +1039,7 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
       /* fallback */
     }
 
-    if (action === 'assert') {
+    if (rawAction === 'assert') {
       const assertionType = rawVal || 'toBeVisible';
       const expectedValue = extraVal !== undefined ? interpolateVariables(String(extraVal), state.variables) : 'true';
       const expectedObj = appendRecordedAssertion(draftTape, {
@@ -899,8 +1061,10 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
       continue;
     }
 
-    const interpolatedVal = rawVal !== undefined ? interpolateVariables(String(rawVal), state.variables) : undefined;
-    const interpolatedTarget = target !== undefined ? interpolateVariables(String(target), state.variables) : undefined;
+    const { action, interpolatedTarget, interpolatedVal } = validateExploreActionTuple(
+      tuple,
+      state.variables
+    );
 
     const cliArgs = [action];
     if (interpolatedTarget !== undefined) cliArgs.push(interpolatedTarget);
@@ -981,7 +1145,8 @@ async function cmdActor(args) {
   if (authPath) resolveConfinedPath(ROOT, authPath, '.auth/', '--auth');
 
   const actorSession = `${state.session}-${actorId}`;
-  const targetUrl = urlFlag ? interpolateVariables(urlFlag, state.variables) : state.url;
+  const rawTargetUrl = urlFlag ? interpolateVariables(urlFlag, state.variables) : state.url;
+  const targetUrl = rawTargetUrl ? assertSafeExploreUrl(rawTargetUrl, '--url') : '';
   if (targetUrl) {
     runAgentBrowser(actorSession, ['open', targetUrl], { allowFail: true });
   }
@@ -1008,11 +1173,17 @@ async function cmdActor(args) {
 
 async function cmdCapture(args) {
   const varName = args[0];
-  if (!varName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(varName)) {
+  if (!varName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(varName) || FORBIDDEN_IDENTIFIERS.has(varName)) {
     throw new Error(`Invalid variable name '${varName}'.`);
   }
   const from = getFlagValue(args, '--from', 'url');
+  if (from !== 'url' && from !== 'eval') {
+    throw new Error(`Invalid --from '${from}'. Expected 'url' or 'eval'.`);
+  }
   const expr = getFlagValue(args, '--expr', '');
+  if (expr.length > 256) {
+    throw new Error('Capture --expr exceeds 256-character safety limit.');
+  }
   const state = readJsonOrNull(LIVE_STATE_FILE);
   const draftTape = readJsonOrNull(LIVE_DRAFT_TAPE_FILE);
   if (!state || !draftTape) throw new Error('No active explore session.');
@@ -1021,8 +1192,15 @@ async function cmdCapture(args) {
   let value = '';
   if (from === 'url') {
     const url = (runAgentBrowser(session, ['eval', 'location.href'], { allowFail: true }) || state.url).replace(/^"|"$/g, '');
-    const m = expr ? url.match(new RegExp(expr)) : null;
-    value = m ? m[1] || m[0] : url;
+    if (expr) {
+      if (/\([^)]*[+*][^)]*\)[+*?]/.test(expr)) {
+        throw new Error('Security Error: Capture regex rejected due to nested quantifier (ReDoS protection).');
+      }
+      const m = url.match(new RegExp(expr));
+      value = m ? m[1] || m[0] : url;
+    } else {
+      value = url;
+    }
   } else {
     value = runAgentBrowser(session, ['eval', expr], { allowFail: true }).replace(/^"|"$/g, '');
   }
@@ -1101,11 +1279,12 @@ async function cmdFinish(args) {
   const jsonOut = args.includes('--json');
 
   const finalized = finalizeDraftTape(draftTape, scenarioId);
+  const tapeFile = assertNoSymlinkEscape(ROOT, path.join(TAPES_DIR, `${scenarioId}.json`), 'Session Tape');
   fs.mkdirSync(TAPES_DIR, { recursive: true });
-  const tapeFile = path.join(TAPES_DIR, `${scenarioId}.json`);
   fs.writeFileSync(tapeFile, JSON.stringify(finalized, null, 2) + '\n', 'utf8');
 
   if (!keepBrowser) {
+    assertNoSymlinkEscape(ROOT, RELEASE_SENTINEL_FILE, 'live-session.release');
     fs.mkdirSync(EXPLORATORY_DIR, { recursive: true });
     fs.writeFileSync(RELEASE_SENTINEL_FILE, new Date().toISOString() + '\n', 'utf8');
     if (state?.session) {

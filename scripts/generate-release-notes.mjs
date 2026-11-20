@@ -402,17 +402,40 @@ function assertValidSha(sha, sourceLabel) {
 }
 
 export function resolveSafeRepoOutputPath(targetPath, flagName, rootDir = ROOT) {
-  const resolved = path.resolve(rootDir, targetPath);
-  const relToRoot = path.relative(rootDir, resolved);
+  const resolvedRoot = path.resolve(rootDir);
+  const resolved = path.resolve(resolvedRoot, targetPath);
+  const relToRoot = path.relative(resolvedRoot, resolved);
   if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
     throw new Error(
       `Invalid ${flagName} path '${targetPath}'. Output path must reside within the repository root.`
     );
   }
-  if (fs.existsSync(resolved) && fs.lstatSync(resolved).isSymbolicLink()) {
-    throw new Error(
-      `Security Error: Refusing to write ${flagName} to symbolic link '${targetPath}'.`
-    );
+  let cur = resolved;
+  while (cur !== resolvedRoot) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      throw new Error(
+        `Security Error: Refusing to write ${flagName} to symbolic link '${cur === resolved ? targetPath : path.relative(resolvedRoot, cur)}'.`
+      );
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolved;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(
+        `Security Error: Output realpath escapes repository root for ${flagName}: '${targetPath}'.`
+      );
+    }
   }
   return resolved;
 }

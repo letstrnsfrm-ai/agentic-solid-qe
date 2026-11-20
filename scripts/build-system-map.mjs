@@ -290,7 +290,12 @@ export function collectSystemKnowledge() {
 }
 
 function renderHtml(model) {
-  const safeJson = JSON.stringify(model).replace(/<\/script/gi, '<\\/script');
+  const safeJson = JSON.stringify(model)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -505,9 +510,21 @@ renderCoverage();
 }
 
 export function buildSystemMap({ outPath = DEFAULT_OUT, quiet = false, jsonOnly = false } = {}) {
-  const resolvedOut = path.resolve(ROOT, outPath);
-  if (!isWithinDir(resolvedOut, ROOT)) {
+  const resolvedRoot = path.resolve(ROOT);
+  const resolvedOut = path.resolve(resolvedRoot, outPath);
+  if (!isWithinDir(resolvedOut, resolvedRoot)) {
     throw new Error(`Security Error: Refusing to write outside workspace: ${outPath}`);
+  }
+  let cur = resolvedOut;
+  while (cur !== resolvedRoot) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      throw new Error(
+        `Security Error: Refusing to write system map through symbolic link: ${path.relative(resolvedRoot, cur)}`
+      );
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
   }
   const model = collectSystemKnowledge();
   if (jsonOnly) {
