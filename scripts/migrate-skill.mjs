@@ -389,7 +389,7 @@ function runWorkspaceDiscovery() {
     }
     const bodyOnly = code
       .replace(/^\s*import\s+.*$/gm, '')
-      .replace(/\btest(?:\.describe)?\s*\(\s*(['"`])(?:\\.|(?!\1).)*\1/g, 'test(');
+      .replace(/\btest(?:\.describe)?\s*\(\s*(['"`])(?:\\.|(?!\1)[^\\])*\1/g, 'test(');
     if (/['"`]https?:\/\/[^'"`]+['"`]/.test(bodyOnly)) {
       issues.push('Contains hardcoded http(s):// URL in spec body');
     }
@@ -1324,7 +1324,7 @@ if (applyChanges) {
         }
         scriptBody = scriptBody.replace(
           new RegExp(`(['"\`])${u.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\1`, 'g'),
-          `(process.env.BASE_URL || ${JSON.stringify(u)})`
+          () => `(process.env.BASE_URL || ${JSON.stringify(u)})`
         );
       }
     }

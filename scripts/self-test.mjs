@@ -3620,6 +3620,147 @@ test('35. Autonomous resilient cortex wave --run micro-batch execution & orchest
   }
 });
 
+test('36. Security Audit Remediation: blocks manifest deletion traversal, code injection (seeder/heal/wave0), unallowlisted patches, SSRF/IPv6, CLI injection, and ReDoS', async () => {
+  const { buildSeederCodeFromTape, validateExploreActionTuple, assertSafeExploreUrl, resolveConfinedPath } =
+    await import('./explore-session.mjs');
+  const { assertSafePlaywrightLocatorExpr } = await import('./heal-drift.mjs');
+  const { scaffoldWave0Prereq, runClosedLoopLiveVerifyAndHeal } = await import('./migration-wave-factory.mjs');
+  const { collectPendingPatches } = await import('./upgrade-framework.mjs');
+  const { assertSafeCloudUrl, isForbiddenIpAddress } = await import('./report-cloud.mjs');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-sec-audit-'));
+  const outsideFile = path.join(os.tmpdir(), `asqe-outside-${Date.now()}.txt`);
+  fs.writeFileSync(outsideFile, 'DO_NOT_DELETE\n', 'utf8');
+
+  try {
+    // 1. sync-skills.mjs: manifest stale-file pruning must block path traversal & unmanaged files even with --force
+    const relEscape = path.relative(tmpRoot, outsideFile).replace(/\\/g, '/');
+    const envFile = path.join(tmpRoot, '.env');
+    fs.writeFileSync(envFile, 'SECRET=keep\n', 'utf8');
+    fs.mkdirSync(path.join(tmpRoot, '.agents'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents', 'framework-manifest.json'),
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        version: '0.24.0',
+        files: {
+          [relEscape]: 'deadbeef',
+          '.env': 'deadbeef',
+        },
+      }),
+      'utf8'
+    );
+    const syncRes = spawnSync(process.execPath, [SYNC_SCRIPT, 'sync', tmpRoot, '--force'], {
+      encoding: 'utf8',
+    });
+    assert.equal(syncRes.status, 0, syncRes.stderr);
+    assert.equal(fs.existsSync(outsideFile), true, 'Outside file must NEVER be deleted via manifest traversal');
+    assert.equal(fs.existsSync(envFile), true, '.env must NEVER be deleted via manifest pruning');
+
+    // 2. explore-session.mjs: seeder template injection, action allowlist, SSRF & symlinked seeder
+    const seederBuilt = buildSeederCodeFromTape(
+      { scenarioId: 'safe-seed', capturedVariables: [{ name: 'orderId' }, { name: '__proto__' }] },
+      [{ method: 'POST', urlPattern: '/api/${process.exit(1)}`evil`', expectedStatus: 201 }]
+    );
+    assert.equal(seederBuilt.codeContent.includes('new URL("/api/${process.exit(1)}`evil`", base)'), true);
+    assert.equal(seederBuilt.codeContent.includes('__proto__'), false);
+    assert.throws(() =>
+      buildSeederCodeFromTape({ scenarioId: 'bad-method' }, [{ method: 'EVAL', urlPattern: '/api/x' }])
+    );
+
+    assert.throws(() => validateExploreActionTuple(['eval', 'alert(1)']));
+    assert.throws(() => validateExploreActionTuple(['cookies', 'get']));
+    assert.throws(() => validateExploreActionTuple(['click', '--cdp']));
+    assert.throws(() => validateExploreActionTuple(['goto', 'file:///etc/passwd']));
+    assert.throws(() => validateExploreActionTuple(['goto', 'http://169.254.169.254/latest/meta-data/']));
+    assert.throws(() => assertSafeExploreUrl('javascript:alert(1)'));
+    assert.equal(validateExploreActionTuple(['click', '@e5']).action, 'click');
+
+    // Symlinked seed script escape must be rejected
+    fs.mkdirSync(path.join(tmpRoot, 'scripts'), { recursive: true });
+    fs.symlinkSync(outsideFile, path.join(tmpRoot, 'scripts', 'evil-seed.mjs'));
+    assert.throws(() => resolveConfinedPath(tmpRoot, 'scripts/evil-seed.mjs', 'scripts/', '--from-seed'));
+
+    // 3. heal-drift.mjs: strict Playwright locator grammar rejects JS expressions inside args
+    assert.equal(
+      assertSafePlaywrightLocatorExpr("this.root.getByRole('button', { name: 'Sign In', exact: true }).first()"),
+      "getByRole('button', { name: 'Sign In', exact: true }).first()"
+    );
+    assert.equal(
+      assertSafePlaywrightLocatorExpr("page.locator('[data-test=\"cta\"]').nth(0)"),
+      "locator('[data-test=\"cta\"]').nth(0)"
+    );
+    assert.throws(() => assertSafePlaywrightLocatorExpr("locator(eval('process.exit(1)'))"));
+    assert.throws(() => assertSafePlaywrightLocatorExpr("getByRole('button', { name: (() => 'x')() })"));
+    assert.throws(() => assertSafePlaywrightLocatorExpr("locator(process.env.SECRET)"));
+    assert.throws(() => assertSafePlaywrightLocatorExpr("getByRole('button', { evilKey: 'x' })"));
+
+    // 4. migration-wave-factory.mjs: Wave-0 className & **// comment breakout + spec flag injection
+    assert.throws(() =>
+      scaffoldWave0Prereq(
+        { id: 'wave0-ok', className: 'Evil {} console.log(1); class X', recommendedContract: 'FlowContract' },
+        tmpRoot
+      )
+    );
+    const safeWave0 = scaffoldWave0Prereq(
+      {
+        id: 'wave0-login-prefix',
+        className: 'LoginPrefixFlow',
+        reuseCount: 3,
+        prefixKey: 'login **// evil() /*',
+        recommendedContract: 'FlowContract',
+      },
+      tmpRoot
+    );
+    const wave0Code = fs.readFileSync(path.join(tmpRoot, safeWave0.relPath), 'utf8');
+    assert.equal(wave0Code.includes('**//'), false, 'Comment breakout sequence must be neutralized');
+    assert.throws(() => runClosedLoopLiveVerifyAndHeal('--config=evil.ts', tmpRoot));
+    assert.throws(() => runClosedLoopLiveVerifyAndHeal('scripts/evil.spec.ts', tmpRoot));
+
+    // 5. upgrade-framework.mjs: unallowlisted patch targets (.git/hooks/pre-commit) are ignored
+    const hookPatch = path.join(tmpRoot, '.agents', 'upgrade-patches', '.git', 'hooks', 'pre-commit');
+    fs.mkdirSync(path.dirname(hookPatch), { recursive: true });
+    fs.writeFileSync(hookPatch, '#!/bin/sh\necho pwned\n', 'utf8');
+    const pendingPatches = collectPendingPatches(tmpRoot);
+    assert.equal(
+      pendingPatches.some((p) => p.targetRel.includes('.git/hooks')),
+      false,
+      'Unallowlisted .git/hooks patch must be rejected'
+    );
+
+    // 6. report-cloud.mjs: private IPv4/CGNAT/IPv6 ULA/mapped/NAT64 SSRF blocking
+    assert.throws(() => assertSafeCloudUrl('https://10.0.0.1/api/v1/reports'));
+    assert.throws(() => assertSafeCloudUrl('https://192.168.1.5/api/v1/reports'));
+    assert.throws(() => assertSafeCloudUrl('https://172.16.0.10/api/v1/reports'));
+    assert.throws(() => assertSafeCloudUrl('https://100.64.0.1/api/v1/reports'));
+    assert.throws(() => assertSafeCloudUrl('https://[fd12:3456::1]/api/v1/reports'));
+    assert.throws(() => assertSafeCloudUrl('https://[::ffff:10.0.0.1]/api/v1/reports'));
+    assert.equal(isForbiddenIpAddress('::ffff:7f00:1', { allowLoopback: false }), true);
+    assert.equal(isForbiddenIpAddress('64:ff9b::169.254.169.254', { allowLoopback: false }), true);
+    assert.equal(isForbiddenIpAddress('93.184.216.34', { allowLoopback: false }), false);
+
+    // 7. audit-solid.mjs: ReDoS regression check on pathological backslash sequence completes quickly
+    const redosSpecDir = path.join(tmpRoot, 'tests');
+    fs.mkdirSync(redosSpecDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(redosSpecDir, 'redos-check.spec.ts'),
+      `import { test } from '@fixtures/app.fixture';\nimport { UserBuilder } from '@data/user.builder';\nconst s = "${'\\'.repeat(80)}unclosed;\n`,
+      'utf8'
+    );
+    const t0 = Date.now();
+    spawnSync(process.execPath, [path.join(__dirname, 'audit-solid.mjs')], {
+      cwd: tmpRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    assert.ok(Date.now() - t0 < 4000, 'audit-solid must complete linearly without ReDoS backtracking');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    if (fs.existsSync(outsideFile)) fs.rmSync(outsideFile, { force: true });
+  }
+});
+
+
 
 
 

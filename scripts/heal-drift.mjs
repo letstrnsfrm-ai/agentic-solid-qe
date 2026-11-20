@@ -84,82 +84,252 @@ function escapeSingleQuote(val) {
     .replace(/\u2029/g, '\\u2029');
 }
 
-const ALLOWED_LOCATOR_CALL_RE =
-  /^(?:(?:page|this\.root)\.)?(?:getBy(?:Role|TestId|Label|Placeholder|Text|AltText|Title)|locator)\([\s\S]+\)$/;
+const ALLOWED_LOCATOR_METHODS = new Set([
+  'getByRole',
+  'getByTestId',
+  'getByLabel',
+  'getByPlaceholder',
+  'getByText',
+  'getByAltText',
+  'getByTitle',
+  'locator',
+  'first',
+  'last',
+  'nth',
+  'filter',
+]);
 
+const ALLOWED_ROOT_LOCATOR_METHODS = new Set([
+  'getByRole',
+  'getByTestId',
+  'getByLabel',
+  'getByPlaceholder',
+  'getByText',
+  'getByAltText',
+  'getByTitle',
+  'locator',
+]);
+
+const ALLOWED_LOCATOR_OPTION_KEYS = new Set([
+  'name',
+  'exact',
+  'checked',
+  'disabled',
+  'expanded',
+  'includeHidden',
+  'level',
+  'pressed',
+  'selected',
+  'hasText',
+  'hasNotText',
+]);
+
+/**
+ * Strict recursive-descent validator for Playwright locator expressions.
+ * Permits ONLY chained calls to allowlisted Playwright locator methods whose arguments
+ * are strictly literals (string, regex, boolean, integer) or flat options objects with
+ * allowlisted Playwright keys. Rejects arbitrary JS calls, IIFEs, arrow functions,
+ * member accesses, and template literals.
+ */
 export function assertSafePlaywrightLocatorExpr(rawExpr) {
   const expr = String(rawExpr || '').trim();
-  if (
-    !expr ||
-    /[\r\n\u2028\u2029\u202A-\u202E\u2066-\u2069`]/.test(expr) ||
-    !ALLOWED_LOCATOR_CALL_RE.test(expr)
-  ) {
+  if (!expr || expr.length > 512 || /[\r\n\u2028\u2029\u202A-\u202E\u2066-\u2069`\x00-\x1f\x7f]/.test(expr)) {
     throw new Error(
-      `Security Error: Unsafe Playwright locator expression '${rawExpr}'. Must be a single-line semantic locator call (getByRole, getByTestId, getByLabel, getByPlaceholder, getByText, or locator).`
+      `Security Error: Unsafe Playwright locator expression '${rawExpr}'. Must be a single-line semantic locator call.`
     );
   }
 
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-  let parenDepth = 0;
-  let braceDepth = 0;
+  const stripped = expr.replace(/^(?:page|this\.root)\./, '');
+  let pos = 0;
 
-  for (let i = 0; i < expr.length; i++) {
-    const ch = expr[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      continue;
-    }
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      continue;
-    }
-    if (inSingle || inDouble) continue;
+  const fail = (reason) => {
+    throw new Error(`Security Error: Unsafe Playwright locator expression '${rawExpr}' (${reason}).`);
+  };
 
-    if (ch === ';') {
-      throw new Error(
-        `Security Error: Statement separator ';' is forbidden in locator expression '${rawExpr}'.`
-      );
+  const skipWs = () => {
+    while (pos < stripped.length && (stripped[pos] === ' ' || stripped[pos] === '\t')) pos++;
+  };
+
+  const parseIdentifier = () => {
+    skipWs();
+    const start = pos;
+    if (pos < stripped.length && /[A-Za-z_]/.test(stripped[pos])) {
+      pos++;
+      while (pos < stripped.length && /[A-Za-z0-9_]/.test(stripped[pos])) pos++;
+      return stripped.slice(start, pos);
     }
-    if (ch === '(') parenDepth++;
-    else if (ch === ')') {
-      parenDepth--;
-      if (parenDepth < 0) {
-        throw new Error(`Security Error: Unbalanced parentheses in locator expression '${rawExpr}'.`);
+    return '';
+  };
+
+  const parseStringLiteral = () => {
+    const quote = stripped[pos];
+    if (quote !== "'" && quote !== '"') fail('expected string literal');
+    pos++;
+    while (pos < stripped.length) {
+      const ch = stripped[pos++];
+      if (ch === '\\') {
+        if (pos >= stripped.length) fail('unterminated escape');
+        pos++;
+        continue;
       }
-      if (parenDepth === 0 && i < expr.length - 1) {
-        const rest = expr.slice(i + 1);
-        if (!/^\.(?:first|last|nth|getBy(?:Role|TestId|Label|Placeholder|Text|AltText|Title)|locator|filter)\(/.test(rest)) {
-          throw new Error(
-            `Security Error: Trailing expression '${rest}' is not an allowed Playwright locator chain in '${rawExpr}'.`
-          );
+      if (ch === quote) return;
+    }
+    fail('unterminated string literal');
+  };
+
+  const parseRegexLiteral = () => {
+    if (stripped[pos] !== '/') fail('expected regex literal');
+    pos++;
+    let inCharClass = false;
+    let bodyLen = 0;
+    while (pos < stripped.length) {
+      const ch = stripped[pos++];
+      if (ch === '\\') {
+        if (pos >= stripped.length) fail('unterminated regex escape');
+        pos++;
+        bodyLen += 2;
+        continue;
+      }
+      if (ch === '[') inCharClass = true;
+      else if (ch === ']') inCharClass = false;
+      else if (ch === '/' && !inCharClass) {
+        if (bodyLen === 0) fail('empty regex literal');
+        while (pos < stripped.length && /[gimsuy]/.test(stripped[pos])) pos++;
+        return;
+      }
+      bodyLen++;
+    }
+    fail('unterminated regex literal');
+  };
+
+  const parsePrimitiveValue = () => {
+    skipWs();
+    if (pos >= stripped.length) fail('unexpected end of argument');
+    const ch = stripped[pos];
+    if (ch === "'" || ch === '"') {
+      parseStringLiteral();
+      return;
+    }
+    if (ch === '/') {
+      parseRegexLiteral();
+      return;
+    }
+    if (stripped.startsWith('true', pos) && !/[A-Za-z0-9_$]/.test(stripped[pos + 4] || '')) {
+      pos += 4;
+      return;
+    }
+    if (stripped.startsWith('false', pos) && !/[A-Za-z0-9_$]/.test(stripped[pos + 5] || '')) {
+      pos += 5;
+      return;
+    }
+    const numMatch = stripped.slice(pos).match(/^-?\d+(?![A-Za-z0-9_$.])/);
+    if (numMatch) {
+      pos += numMatch[0].length;
+      return;
+    }
+    fail(`disallowed non-literal token near '${stripped.slice(pos, pos + 20)}'`);
+  };
+
+  const parseOptionsObject = () => {
+    if (stripped[pos] !== '{') fail('expected object literal');
+    pos++;
+    skipWs();
+    if (stripped[pos] === '}') {
+      pos++;
+      return;
+    }
+    let count = 0;
+    while (pos < stripped.length) {
+      skipWs();
+      const key = parseIdentifier();
+      if (!key || !ALLOWED_LOCATOR_OPTION_KEYS.has(key)) {
+        fail(`disallowed option key '${key || stripped.slice(pos, pos + 12)}'`);
+      }
+      skipWs();
+      if (stripped[pos] !== ':') fail(`expected ':' after option '${key}'`);
+      pos++;
+      parsePrimitiveValue();
+      count++;
+      if (count > 12) fail('too many options in locator object');
+      skipWs();
+      if (stripped[pos] === ',') {
+        pos++;
+        skipWs();
+        if (stripped[pos] === '}') {
+          pos++;
+          return;
         }
+        continue;
       }
-    } else if (ch === '{') braceDepth++;
-    else if (ch === '}') {
-      braceDepth--;
-      if (braceDepth < 0) {
-        throw new Error(`Security Error: Unbalanced braces in locator expression '${rawExpr}'.`);
+      if (stripped[pos] === '}') {
+        pos++;
+        return;
       }
+      fail('expected "," or "}" in locator options');
     }
+    fail('unterminated options object');
+  };
+
+  const parseCallArgs = (methodName) => {
+    skipWs();
+    if (stripped[pos] !== '(') fail(`expected '(' after ${methodName}`);
+    pos++;
+    skipWs();
+    if (stripped[pos] === ')') {
+      if (methodName !== 'first' && methodName !== 'last') {
+        fail(`${methodName}() requires at least one literal argument`);
+      }
+      pos++;
+      return;
+    }
+    let argCount = 0;
+    while (pos < stripped.length) {
+      skipWs();
+      if (stripped[pos] === '{') {
+        parseOptionsObject();
+      } else {
+        parsePrimitiveValue();
+      }
+      argCount++;
+      if (argCount > 2) fail(`too many arguments to ${methodName}()`);
+      skipWs();
+      if (stripped[pos] === ',') {
+        pos++;
+        continue;
+      }
+      if (stripped[pos] === ')') {
+        pos++;
+        return;
+      }
+      fail(`unexpected token '${stripped.slice(pos, pos + 12)}' in ${methodName}() arguments`);
+    }
+    fail(`unterminated argument list for ${methodName}()`);
+  };
+
+  const rootMethod = parseIdentifier();
+  if (!ALLOWED_ROOT_LOCATOR_METHODS.has(rootMethod)) {
+    fail(`disallowed root method '${rootMethod}'`);
+  }
+  parseCallArgs(rootMethod);
+
+  let chainDepth = 0;
+  while (pos < stripped.length) {
+    skipWs();
+    if (pos >= stripped.length) break;
+    if (stripped[pos] !== '.') {
+      fail(`unexpected trailing token '${stripped.slice(pos)}'`);
+    }
+    pos++;
+    const nextMethod = parseIdentifier();
+    if (!ALLOWED_LOCATOR_METHODS.has(nextMethod)) {
+      fail(`disallowed chained method '${nextMethod}'`);
+    }
+    parseCallArgs(nextMethod);
+    chainDepth++;
+    if (chainDepth > 8) fail('locator chain exceeds maximum depth');
   }
 
-  if (inSingle || inDouble || parenDepth !== 0 || braceDepth !== 0) {
-    throw new Error(
-      `Security Error: Unterminated string literal or unbalanced delimiters in locator expression '${rawExpr}'.`
-    );
-  }
-
-  return expr.replace(/^(?:page|this\.root)\./, '');
+  return stripped;
 }
 
 export function sanitizeDefectErrorExcerpt(rawText) {

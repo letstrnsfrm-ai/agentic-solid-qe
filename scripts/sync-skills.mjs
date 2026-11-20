@@ -72,7 +72,7 @@ const subcommandDelegateMap = {
   audit: 'audit-solid.mjs',
 };
 
-if (rawArgs[0] && subcommandDelegateMap[rawArgs[0]]) {
+if (rawArgs[0] && Object.hasOwn(subcommandDelegateMap, rawArgs[0])) {
   const scriptFile = path.join(__dirname, subcommandDelegateMap[rawArgs[0]]);
   const res = spawnSync(process.execPath, [scriptFile, ...rawArgs.slice(1)], {
     stdio: 'inherit',
@@ -294,14 +294,42 @@ function rel(dest) {
 }
 
 function isUnsafeDest(dest) {
-  // Refuse to write through a symlinked destination or symlinked parent inside the target repo
-  let cur = dest;
-  while (cur.startsWith(TARGET_ROOT) && cur !== TARGET_ROOT) {
+  // Refuse any destination outside TARGET_ROOT or traversing through a symlinked destination/parent
+  const resolvedRoot = path.resolve(TARGET_ROOT);
+  const resolvedDest = path.resolve(dest);
+  const relToRoot = path.relative(resolvedRoot, resolvedDest);
+  if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
+    console.warn(`⚠️  Skipped path escaping target workspace: ${dest}`);
+    return true;
+  }
+  let cur = resolvedDest;
+  while (cur !== resolvedRoot) {
     if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
       console.warn(`⚠️  Skipped symlinked path (refusing to write through symlink): ${rel(cur)}`);
       return true;
     }
-    cur = path.dirname(cur);
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    try {
+      const realRoot = fs.realpathSync(resolvedRoot);
+      let existing = resolvedDest;
+      while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+        const parent = path.dirname(existing);
+        if (parent === existing) break;
+        existing = parent;
+      }
+      const realExisting = fs.realpathSync(existing);
+      const realRel = path.relative(realRoot, realExisting);
+      if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+        console.warn(`⚠️  Skipped path resolving outside workspace realpath: ${rel(resolvedDest)}`);
+        return true;
+      }
+    } catch {
+      return true;
+    }
   }
   return false;
 }
@@ -1115,20 +1143,40 @@ if (unchangedSyncCount > 0) {
 }
 
 // Prune stale framework-managed files that were removed or renamed in newer releases (only if unmodified)
+const ALLOWED_PRUNE_PREFIXES = [
+  '.agents/skills/',
+  '.github/prompts/',
+  '.claude/commands/',
+  'scripts/',
+  '.agents/domain/session-tape.schema.json',
+];
 const prunedFiles = [];
 for (const [oldRel, oldHash] of Object.entries(previousManifest.files)) {
-  if (nextManagedFiles[oldRel]) continue;
-  const oldDest = path.join(TARGET_ROOT, oldRel);
-  if (!fs.existsSync(oldDest) || fs.lstatSync(oldDest).isSymbolicLink()) continue;
+  if (Object.hasOwn(nextManagedFiles, oldRel)) continue;
+  const normRel = String(oldRel || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (
+    !normRel ||
+    path.isAbsolute(normRel) ||
+    normRel.includes('..') ||
+    !ALLOWED_PRUNE_PREFIXES.some((prefix) => normRel === prefix || normRel.startsWith(prefix))
+  ) {
+    console.warn(`⚠️  Skipped pruning unsafe/unmanaged manifest path: ${oldRel}`);
+    continue;
+  }
+  const oldDest = path.resolve(TARGET_ROOT, normRel);
+  if (isUnsafeDest(oldDest)) continue;
+  if (!fs.existsSync(oldDest)) continue;
+  const stat = fs.lstatSync(oldDest);
+  if (stat.isSymbolicLink() || !stat.isFile()) continue;
   const currentHash = sha256File(oldDest);
   if (currentHash === oldHash || forceOverwrite) {
     if (!dryRun) {
       fs.unlinkSync(oldDest);
     }
-    prunedFiles.push(oldRel);
-    console.log(`${dryRun ? '🔍 [DRY-RUN] Would prune' : '🧹 Pruned'} stale framework file: ${oldRel}`);
+    prunedFiles.push(normRel);
+    console.log(`${dryRun ? '🔍 [DRY-RUN] Would prune' : '🧹 Pruned'} stale framework file: ${normRel}`);
   } else {
-    console.log(`⚠️  Skipped pruning locally modified stale file: ${oldRel}`);
+    console.log(`⚠️  Skipped pruning locally modified stale file: ${normRel}`);
   }
 }
 

@@ -568,9 +568,10 @@ export function compileSessionTape({
             });
           if (missingPropLines.length > 0) {
             const sep = mm[2].trimEnd().endsWith(',') || mm[2].trim() === '' ? '' : ',';
+            const propBlock = missingPropLines.join('\n');
             baseBuilderContent = baseBuilderContent.replace(
               methodRegex,
-              `$1$2${sep}\n${missingPropLines.join('\n')}$3`
+              (_, m1, m2, m3) => `${m1}${m2}${sep}\n${propBlock}${m3}`
             );
           }
         }
@@ -598,7 +599,7 @@ export function compileSessionTape({
           baseBuilderContent = `${REQUIRE_ENV_HELPER_CODE}${baseBuilderContent}`;
         }
         const updatedContent = injectedMethodsCode
-          ? baseBuilderContent.replace(/\}\s*$/, `\n${injectedMethodsCode}\n}\n`)
+          ? baseBuilderContent.replace(/\}\s*$/, () => `\n${injectedMethodsCode}\n}\n`)
           : baseBuilderContent;
         plannedOperations.push({
           layer: 'data-builder',
@@ -860,8 +861,8 @@ export class ${clientClass} implements ApiClientContract {
           .map(([pName, expr]) => `    this.${pName} = ${expr};`)
           .join('\n');
 
-        updated = updated.replace(/(readonly\s+root\s*:\s*Locator\s*;)/, `$1\n${propDecls}`);
-        updated = updated.replace(/(this\.root\s*=\s*[^;]+;)/, `$1\n${propInits}`);
+        updated = updated.replace(/(readonly\s+root\s*:\s*Locator\s*;)/, (_, m1) => `${m1}\n${propDecls}`);
+        updated = updated.replace(/(this\.root\s*=\s*[^;]+;)/, (_, m1) => `${m1}\n${propInits}`);
 
         plannedOperations.push({
           layer: 'component',
@@ -1293,7 +1294,7 @@ export class ${flowClass} implements FlowContract<void, Record<string, string>> 
 
       fixtureContent = fixtureContent.replace(
         /(base\.extend<[^>]+>\(\{)/,
-        `$1\n${implLines}`
+        (_, m1) => `${m1}\n${implLines}`
       );
 
       plannedOperations.push({
@@ -1743,13 +1744,30 @@ ${specBody}
   }
 
   // 8. Apply File Operations & Synchronize Domain Shard Published Capabilities
+  const assertNoSymlinkWrite = (targetAbs, label) => {
+    const resolvedRoot = path.resolve(ROOT);
+    const resolvedTarget = path.resolve(targetAbs);
+    if (!isWithinDir(resolvedTarget, resolvedRoot)) {
+      throw new Error(`Security Error: Refusing to write outside repository workspace: ${label}`);
+    }
+    let cur = resolvedTarget;
+    while (cur !== resolvedRoot) {
+      if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(
+          `Security Error: Refusing to write through symbolic link: ${path.relative(resolvedRoot, cur)}`
+        );
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    return resolvedTarget;
+  };
+
   if (apply) {
     for (const op of plannedOperations) {
       if (!op.codeContent) continue;
-      const absTarget = path.resolve(ROOT, op.file);
-      if (!isWithinDir(absTarget, ROOT)) {
-        throw new Error(`Security Error: Refusing to write outside repository workspace: ${op.file}`);
-      }
+      const absTarget = assertNoSymlinkWrite(path.resolve(ROOT, op.file), op.file);
       fs.mkdirSync(path.dirname(absTarget), { recursive: true });
       fs.writeFileSync(absTarget, op.codeContent, 'utf8');
     }
@@ -1761,7 +1779,7 @@ ${specBody}
       (s) => s.id === scenarioId || (resolvedSquad && s.squad === resolvedSquad)
     );
     if (matchingShard && publishedCapabilities.size > 0) {
-      const shardFullPath = path.join(ROOT, matchingShard.path);
+      const shardFullPath = assertNoSymlinkWrite(path.join(ROOT, matchingShard.path), matchingShard.path);
       if (fs.existsSync(shardFullPath)) {
         let shardText = fs.readFileSync(shardFullPath, 'utf8');
         const mergedCaps = [
@@ -1769,11 +1787,11 @@ ${specBody}
         ];
         const capLine = `- **Published Capabilities:** ${mergedCaps.map((c) => `\`${c}\``).join(', ')}`;
         if (/\*\*Published Capabilities:\*\*/i.test(shardText)) {
-          shardText = shardText.replace(/^.*?\*\*Published Capabilities:\*\*.*$/im, capLine);
+          shardText = shardText.replace(/^.*?\*\*Published Capabilities:\*\*.*$/im, () => capLine);
         } else if (/\*\*Last Verified:\*\*/i.test(shardText)) {
           shardText = shardText.replace(
             /(^.*?\*\*Last Verified:\*\*.*$)/im,
-            `$1\n${capLine}`
+            (_, m1) => `${m1}\n${capLine}`
           );
         }
         fs.writeFileSync(shardFullPath, shardText, 'utf8');

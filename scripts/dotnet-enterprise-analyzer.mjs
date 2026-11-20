@@ -200,13 +200,25 @@ export function parseSpecFlowBindings(csFiles, scanRoot) {
   };
 }
 
+function isSafeRegexPattern(pattern) {
+  if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > 200) return false;
+  // Reject obvious nested-quantifier ReDoS constructs like (a+)+, (.*)*, (\w+)+
+  if (/\([^)]*[+*?][^)]*\)[+*?{]/.test(pattern)) return false;
+  return true;
+}
+
 function matchBinding(stepText, bindings) {
+  const safeStep = String(stepText || '').slice(0, 500);
   for (const b of bindings) {
-    try {
-      const re = new RegExp(b.pattern, 'i');
-      if (re.test(stepText)) return b;
-    } catch {
-      if (stepText.toLowerCase().includes(b.pattern.toLowerCase())) return b;
+    if (isSafeRegexPattern(b.pattern)) {
+      try {
+        const re = new RegExp(b.pattern, 'i');
+        if (re.test(safeStep)) return b;
+      } catch {
+        if (safeStep.toLowerCase().includes(String(b.pattern).toLowerCase())) return b;
+      }
+    } else if (b.pattern && safeStep.toLowerCase().includes(String(b.pattern).toLowerCase())) {
+      return b;
     }
   }
   return null;

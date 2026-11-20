@@ -167,20 +167,73 @@ function walkPatches(dir) {
   return results;
 }
 
+const ALLOWED_UPGRADE_PATCH_TARGETS = new Set([
+  'playwright.config.ts',
+  '.github/workflows/playwright-ci.yml',
+  '.azure-pipelines/playwright-ci.yml',
+  'tsconfig.json',
+  'package.json',
+  '.gitignore',
+]);
+
+function assertSafePatchDestination(targetRoot, targetPath, label = 'patch target') {
+  const resolvedRoot = path.resolve(targetRoot);
+  const resolvedTarget = path.resolve(targetPath);
+  const rel = path.relative(resolvedRoot, resolvedTarget);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Security Error: ${label} escapes target root: '${targetPath}'.`);
+  }
+  let cur = resolvedTarget;
+  while (cur !== resolvedRoot) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      throw new Error(`Security Error: Refusing to access symlinked ${label}: '${path.relative(resolvedRoot, cur)}'.`);
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolvedTarget;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(`Security Error: ${label} realpath escapes target root.`);
+    }
+  }
+  return resolvedTarget;
+}
+
 export function collectPendingPatches(targetRoot) {
   const patchesDir = path.join(targetRoot, '.agents/upgrade-patches');
-  return walkPatches(patchesDir).map((patchPath) => {
+  if (fs.existsSync(patchesDir) && fs.lstatSync(patchesDir).isSymbolicLink()) {
+    return [];
+  }
+  const results = [];
+  for (const patchPath of walkPatches(patchesDir)) {
     const relFromPatches = path.relative(patchesDir, patchPath).replace(/\\/g, '/');
     let targetRel = relFromPatches;
     if (relFromPatches === 'playwright.config.ts.new') targetRel = 'playwright.config.ts';
     else if (relFromPatches === 'playwright-ci.yml.new') targetRel = '.github/workflows/playwright-ci.yml';
-    return {
+
+    if (!ALLOWED_UPGRADE_PATCH_TARGETS.has(targetRel)) {
+      console.warn(`⚠️  Skipped unallowlisted upgrade patch target: ${targetRel}`);
+      continue;
+    }
+    const targetPath = assertSafePatchDestination(targetRoot, path.join(targetRoot, targetRel), targetRel);
+    results.push({
       patchPath,
       patchRel: `.agents/upgrade-patches/${relFromPatches}`,
-      targetPath: path.join(targetRoot, targetRel),
+      targetPath,
       targetRel,
-    };
-  });
+    });
+  }
+  return results;
 }
 
 function runDiffPatches(targetRoot) {
@@ -218,7 +271,7 @@ function injectBlobReporterInPlaywrightConfig(content) {
   const replacement = `${match[1]}process.env.CI && process.env.PLAYWRIGHT_SHARD_INDEX ? [['blob']] : ${existingVal}${trailingComma}`;
   return {
     changed: true,
-    content: content.replace(reporterLineRe, replacement),
+    content: content.replace(reporterLineRe, () => replacement),
   };
 }
 
@@ -230,6 +283,7 @@ function runApplyPatches(targetRoot, { dryRun = false, force = false } = {}) {
   }
   let remaining = 0;
   for (const p of patches) {
+    assertSafePatchDestination(targetRoot, p.targetPath, p.targetRel);
     if (p.targetRel === 'playwright.config.ts' && fs.existsSync(p.targetPath) && !force) {
       const current = fs.readFileSync(p.targetPath, 'utf8');
       const { changed, content } = injectBlobReporterInPlaywrightConfig(current);
@@ -253,7 +307,11 @@ function runApplyPatches(targetRoot, { dryRun = false, force = false } = {}) {
     if (force) {
       if (!dryRun) {
         if (fs.existsSync(p.targetPath)) {
-          const backupPath = path.join(targetRoot, '.agents/legacy-backups', `${path.basename(p.targetRel)}.pre-patch`);
+          const backupPath = assertSafePatchDestination(
+            targetRoot,
+            path.join(targetRoot, '.agents/legacy-backups', `${path.basename(p.targetRel)}.pre-patch`),
+            'backup file'
+          );
           fs.mkdirSync(path.dirname(backupPath), { recursive: true, mode: 0o700 });
           fs.copyFileSync(p.targetPath, backupPath);
         }
@@ -376,12 +434,30 @@ Options:
   if (force) syncFlags.push('--force');
   if (squadName) syncFlags.push('--squad', squadName);
 
+  if (/[&|<>^%!"`\r\n;$]/.test(targetRoot)) {
+    console.error(
+      `❌ Security Error: Target directory '${targetRoot}' contains disallowed shell metacharacters.`
+    );
+    process.exit(1);
+  }
+
   console.log(`\n⚡ Running: npx ${syncFlags.join(' ')}\n`);
-  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const res = spawnSync(npxCmd, syncFlags, {
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-  });
+  const npxCliCandidate = path.join(
+    path.dirname(process.execPath),
+    'node_modules',
+    'npm',
+    'bin',
+    'npx-cli.js'
+  );
+  const res = fs.existsSync(npxCliCandidate)
+    ? spawnSync(process.execPath, [npxCliCandidate, ...syncFlags], {
+        stdio: 'inherit',
+        shell: false,
+      })
+    : spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', syncFlags, {
+        stdio: 'inherit',
+        shell: false,
+      });
   process.exit(res.status ?? 0);
 }
 

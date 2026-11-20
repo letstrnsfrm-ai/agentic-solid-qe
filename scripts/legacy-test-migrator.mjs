@@ -534,11 +534,16 @@ function splitArgTokens(argStr) {
   return out;
 }
 
+function escapeRegExp(str) {
+  return String(str ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function extractParameterizationDatasets(content, testMethod, language) {
+  const safeMethod = escapeRegExp(testMethod);
   const sigRegex =
     language === 'java'
-      ? new RegExp(`((?:@\\w+(?:\\([^)]*\\))?\\s*)+)(?:public|protected|private)?\\s*(?:static\\s+)?void\\s+${testMethod}\\s*\\(([^)]*)\\)`)
-      : new RegExp(`((?:\\[[^\\]]+\\]\\s*)+)(?:public|private|internal|protected)?\\s*(?:async\\s+)?(?:Task|void)\\s+${testMethod}\\s*\\(([^)]*)\\)`);
+      ? new RegExp(`((?:@\\w+(?:\\([^)]*\\))?\\s*)+)(?:public|protected|private)?\\s*(?:static\\s+)?void\\s+${safeMethod}\\s*\\(([^)]*)\\)`)
+      : new RegExp(`((?:\\[[^\\]]+\\]\\s*)+)(?:public|private|internal|protected)?\\s*(?:async\\s+)?(?:Task|void)\\s+${safeMethod}\\s*\\(([^)]*)\\)`);
 
   const sigMatch = content.match(sigRegex);
   if (!sigMatch) return { params: [], datasets: [] };
@@ -721,19 +726,21 @@ function extractSliceBody(fullFileContent, fullTestBody, selectedSlice, pageObje
   const po = selectedSlice.pageObject || '';
   const poBase = po.replace(/Page(?:Object)?$/i, '');
   if (poBase) {
-    const regionRegex = new RegExp(`#region\\s+[^\\n]*${poBase}[^\\n]*\\n([\\s\\S]*?)#endregion`, 'i');
+    const safePoBase = escapeRegExp(poBase);
+    const safePo = escapeRegExp(po);
+    const regionRegex = new RegExp(`#region\\s+[^\\n]*${safePoBase}[^\\n]*\\n([\\s\\S]*?)#endregion`, 'i');
     const rm = fullTestBody.match(regionRegex);
     if (rm) return rm[1];
 
     // Step-comment section matching: // Step X: <poBase> ... until next // Step or end
-    const stepRegex = new RegExp(`//\\s*Step\\s*\\d*[^\\n]*${poBase}[^\\n]*\\n([\\s\\S]*?)(?=//\\s*Step\\s*\\d+|#region|$)`, 'i');
+    const stepRegex = new RegExp(`//\\s*Step\\s*\\d*[^\\n]*${safePoBase}[^\\n]*\\n([\\s\\S]*?)(?=//\\s*Step\\s*\\d+|#region|$)`, 'i');
     const sm = fullTestBody.match(stepRegex);
     if (sm) return sm[1];
 
     // Line-range segmentation between Page Object references
     const lines = fullTestBody.split('\n');
-    const otherPos = [...pageObjectNames].filter((n) => n !== po);
-    const startIdx = lines.findIndex((l) => new RegExp(`\\b${po}\\b`).test(l));
+    const otherPos = [...pageObjectNames].filter((n) => n !== po).map((n) => escapeRegExp(n));
+    const startIdx = lines.findIndex((l) => new RegExp(`\\b${safePo}\\b`).test(l));
     if (startIdx >= 0) {
       let endIdx = lines.length;
       for (let i = startIdx + 1; i < lines.length; i++) {
@@ -846,7 +853,7 @@ function extractTestMethodsFromFile(filePath, scanRoot, pageObjectNames) {
 
     const pageObjectRefs = [];
     for (const po of pageObjectNames) {
-      if (new RegExp(`\\b${po}\\b`).test(body)) {
+      if (new RegExp(`\\b${escapeRegExp(po)}\\b`).test(body)) {
         pageObjectRefs.push(po);
       }
     }
@@ -1631,7 +1638,7 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
 
   const fullFilePath = path.join(scanRoot, match.file);
   const content = readTextSafe(fullFilePath);
-  const methodRegex = new RegExp(`\\b${match.testMethod}\\s*\\([^)]*\\)\\s*(?:throws\\s+[^{]+)?\\{`);
+  const methodRegex = new RegExp(`\\b${escapeRegExp(match.testMethod)}\\s*\\([^)]*\\)\\s*(?:throws\\s+[^{]+)?\\{`);
   const methodMatch = content.match(methodRegex);
   const body = methodMatch
     ? extractBraceBlock(content, methodMatch.index + methodMatch[0].length - 1)
@@ -1836,10 +1843,7 @@ export function migrateMonolithAllSlices(scanRoot, projectRoot, testId, options 
 
   const totalSlices = Math.max(1, (firstPlan.legacyTest.suggestedSlices || []).length);
   const relLegacyRoot = path.relative(projectRoot, scanRoot).replace(/\\/g, '/') || '.';
-  const localCompile = path.join(projectRoot, 'scripts/compile-tape.mjs');
-  const compileScript = fs.existsSync(localCompile)
-    ? localCompile
-    : path.join(__migratorDir, 'compile-tape.mjs');
+  const compileScript = path.join(__migratorDir, 'compile-tape.mjs');
 
   const slices = [];
   const compiledSlices = [];
