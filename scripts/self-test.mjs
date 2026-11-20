@@ -3329,4 +3329,130 @@ test('32. Phase 2 explore speed & token efficiency: direct bin, snapshot pruning
   assert.ok(!/\bexpect\s*\(/.test(seederCodeOnly), 'Promoted seeder must contain zero expect() calls');
 });
 
+test('33. Milestone 1 Enterprise C#/.NET Analyzer: multi-.csproj squads, BaseTest inheritance, SpecFlow/Reqnroll, hybrid seeders, and Wave-0 prefix rationalization', async () => {
+  const { discoverLegacyTests } = await import('./legacy-test-migrator.mjs');
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-dotnet-ent-'));
+  try {
+    // 1. Multi-.csproj solution with MotorPortal.Tests + Claims.Tests + Shared BaseTest
+    fs.writeFileSync(path.join(tmpRoot, 'Enterprise.sln'), 'Microsoft Visual Studio Solution File\n', 'utf8');
+    fs.mkdirSync(path.join(tmpRoot, 'Shared'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'MotorPortal.Tests/Features'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'Claims.Tests'), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(tmpRoot, 'MotorPortal.Tests/MotorPortal.Tests.csproj'),
+      '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Reqnroll.NUnit" Version="2.0.0" /><PackageReference Include="RestSharp" Version="110.0.0" /></ItemGroup></Project>',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'Claims.Tests/Claims.Tests.csproj'),
+      '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Dapper" Version="2.1.0" /></ItemGroup></Project>',
+      'utf8'
+    );
+
+    // BaseTest -> AuthenticatedTestBase -> MotorQuoteTests inheritance chain
+    fs.writeFileSync(
+      path.join(tmpRoot, 'Shared/BaseTest.cs'),
+      `public abstract class BaseTest {
+        protected LoginPage _loginPage;
+        [OneTimeSetUp] public void GlobalAuthSetup() { _loginPage.SignIn(); }
+      }`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'Shared/AuthenticatedTestBase.cs'),
+      `public abstract class AuthenticatedTestBase : BaseTest {
+        protected QuotePage _quotePage;
+        [SetUp] public void InitSession() { Authenticate(); }
+      }`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'MotorPortal.Tests/MotorQuoteTests.cs'),
+      `using NUnit.Framework;
+      using RestSharp;
+      public class MotorQuoteTests : AuthenticatedTestBase {
+        [Test] public void CreateQuoteForStandardDriver() {
+          var client = new RestClient("https://api.example.com");
+          _loginPage.SignIn(); _quotePage.CreateQuote();
+        }
+        [Test] public void CreateQuoteForYoungDriver() {
+          var client = new RestClient("https://api.example.com");
+          _loginPage.SignIn(); _quotePage.CreateQuote();
+        }
+      }`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'Claims.Tests/ClaimsDbTests.cs'),
+      `using NUnit.Framework;
+      using System.Data.SqlClient;
+      public class ClaimsDbTests : BaseTest {
+        [Ignore("Flaky legacy")]
+        [Test] public void QuarantinedClaimTest() {
+          using var conn = new SqlConnection("Server=.;");
+          conn.ExecuteAsync("sp_SeedClaim");
+        }
+      }`,
+      'utf8'
+    );
+
+    // SpecFlow / Reqnroll .feature + [Binding] + ScenarioContext
+    fs.writeFileSync(
+      path.join(tmpRoot, 'MotorPortal.Tests/Features/Renewal.feature'),
+      `@p0 @smoke
+      Feature: Policy Renewal
+        Scenario Outline: Renew active policy
+          Given an active policy exists
+          When the customer accepts renewal terms for <plan>
+          Then the renewed policy confirmation is displayed
+          Examples:
+            | plan |
+            | Gold |
+            | Silver |
+      `,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'MotorPortal.Tests/RenewalSteps.cs'),
+      `[Binding]
+      public class RenewalSteps {
+        private readonly ScenarioContext _scenarioContext;
+        [Given("an active policy exists")] public void SeedActivePolicy() { _scenarioContext["policyNumber"] = "POL-1"; }
+        [When("the customer accepts renewal terms for (.*)")] public void AcceptRenewal(string plan) {}
+        [Then("the renewed policy confirmation is displayed")] public void VerifyRenewed() {}
+      }`,
+      'utf8'
+    );
+
+    const disc = discoverLegacyTests(tmpRoot);
+    assert.deepEqual(disc.solutionTopology.squads.sort(), ['claims', 'motor-portal']);
+    assert.equal(disc.specflowSummary.featureFileCount, 1);
+    assert.equal(disc.specflowSummary.bindingCount, 3);
+    assert.ok(disc.specflowSummary.scenarioContextKeys.includes('policyNumber'));
+
+    const motorTest = disc.tests.find((t) => t.testMethod === 'CreateQuoteForStandardDriver');
+    assert.ok(motorTest, 'Expected MotorQuoteTests method to be discovered');
+    assert.equal(motorTest.squad, 'motor-portal');
+    assert.deepEqual(motorTest.inheritanceChain, ['MotorQuoteTests', 'AuthenticatedTestBase', 'BaseTest']);
+    assert.equal(motorTest.seederProfile.primaryStrategy, 'api-seeder');
+
+    const claimTest = disc.tests.find((t) => t.testMethod === 'QuarantinedClaimTest');
+    assert.ok(claimTest, 'Expected ClaimsDbTests method to be discovered');
+    assert.equal(claimTest.squad, 'claims');
+    assert.equal(claimTest.isSkipped, true);
+    assert.equal(claimTest.seederProfile.primaryStrategy, 'db-seeder');
+
+    // Rationalization: dead test triaged, Wave-0 shared prefix mined, near-duplicates consolidated
+    assert.equal(disc.rationalization.summary.skippedQuarantine, 1);
+    assert.ok(disc.rationalization.wave0Prereqs.length >= 1, 'Expected shared Wave-0 prefix to be mined');
+    assert.equal(disc.rationalization.wave0Prereqs[0].recommendedContract, 'StateSeederContract');
+    assert.ok(disc.rationalization.consolidationGroups.length >= 1, 'Expected near-duplicate motor quote tests to consolidate');
+    assert.ok(disc.rationalization.summary.reductionPct > 0, 'Expected rationalization reduction > 0%');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
 

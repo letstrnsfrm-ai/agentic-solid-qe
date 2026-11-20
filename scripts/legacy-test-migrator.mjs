@@ -15,6 +15,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  parseSolutionSquads,
+  buildInheritanceMap,
+  resolveInheritedSetup,
+  parseSpecFlowSuite,
+  detectHybridSeeders,
+  extractSkipMetadata,
+  rationalizeLegacySuite,
+} from './dotnet-enterprise-analyzer.mjs';
 
 const __migratorDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -909,10 +918,62 @@ export function discoverLegacyTests(scanRoot) {
   }
 
   const dataModels = parseLegacyDataModels(sourceFiles, scanRoot);
+  const csFiles = sourceFiles.filter((f) => f.endsWith('.cs'));
+  const solutionTopology = parseSolutionSquads(scanRoot);
+  const inheritanceMap = buildInheritanceMap(csFiles, scanRoot);
+  const specflowSuite = parseSpecFlowSuite(scanRoot, solutionTopology.resolveSquadForFile);
 
   const tests = [];
   for (const file of sourceFiles) {
-    tests.push(...extractTestMethodsFromFile(file, scanRoot, pageObjectNames));
+    const content = readTextSafe(file) || '';
+    const squad = solutionTopology.resolveSquadForFile(file);
+    const extracted = extractTestMethodsFromFile(file, scanRoot, pageObjectNames);
+    for (const t of extracted) {
+      const inheritedInfo = t.language === 'csharp' ? resolveInheritedSetup(t.className, inheritanceMap) : null;
+      const seederProfile =
+        t.language === 'csharp' ? detectHybridSeeders(content, t.bodyPreview || '', inheritedInfo) : null;
+      const skipMeta = t.language === 'csharp' ? extractSkipMetadata(content) : { isSkipped: false, reason: null };
+      const mergedPoRefs = [
+        ...new Set([...(t.pageObjectRefs || []), ...(inheritedInfo?.inheritedPageObjects || [])]),
+      ];
+      tests.push({
+        ...t,
+        squad,
+        pageObjectRefs: mergedPoRefs,
+        ...(inheritedInfo ? { inheritanceChain: inheritedInfo.inheritanceChain, inheritedHooks: inheritedInfo.inheritedHooks } : {}),
+        ...(seederProfile ? { seederProfile } : {}),
+        isSkipped: skipMeta.isSkipped,
+        skipReason: skipMeta.reason,
+      });
+    }
+  }
+
+  // Merge SpecFlow / Reqnroll .feature scenarios into unified test inventory
+  for (const sc of specflowSuite.scenarios) {
+    const wave = sc.steps.length >= 6 ? 3 : sc.steps.length >= 3 ? 2 : 1;
+    tests.push({
+      id: sc.id,
+      name: sc.name,
+      className: sc.feature,
+      testMethod: sc.name,
+      file: sc.file,
+      squad: sc.squad,
+      language: 'csharp',
+      framework: sc.framework,
+      kind: 'ui',
+      tags: sc.tags,
+      wave,
+      valueScore: sc.tags.some((tg) => /@(p0|smoke|critical)/i.test(tg)) ? 95 : 70,
+      complexity: wave === 3 ? 'high' : wave === 2 ? 'medium' : 'low',
+      lineCount: sc.steps.length * 4,
+      assertionCount: sc.steps.filter((s) => /^Then$/i.test(s.keyword)).length || 1,
+      pageObjectRefs: sc.callPrefixTokens,
+      callPrefixTokens: sc.callPrefixTokens,
+      isSkipped: sc.isSkipped,
+      skipReason: sc.skipReason,
+      seederProfile: { primaryStrategy: 'ui-flow-prereq', detected: [] },
+      specflowScenario: sc,
+    });
   }
 
   tests.sort((a, b) => {
@@ -920,6 +981,8 @@ export function discoverLegacyTests(scanRoot) {
     if (b.valueScore !== a.valueScore) return b.valueScore - a.valueScore;
     return a.lineCount - b.lineCount;
   });
+
+  const rationalization = rationalizeLegacySuite(tests);
 
   const wave1Count = tests.filter((t) => t.wave === 1).length;
   const wave2Count = tests.filter((t) => t.wave === 2).length;
@@ -930,16 +993,33 @@ export function discoverLegacyTests(scanRoot) {
     stacks: stackInfo.stacks,
     buildFiles: stackInfo.buildFiles,
     scanRoot,
+    solutionTopology: {
+      solutionFiles: solutionTopology.solutionFiles,
+      projects: solutionTopology.projects,
+      squads: solutionTopology.squads,
+    },
+    specflowSummary: {
+      featureFileCount: specflowSuite.featureFileCount,
+      bindingCount: specflowSuite.bindingCount,
+      scenarioCount: specflowSuite.scenarios.length,
+      scenarioContextKeys: specflowSuite.scenarioContextKeys,
+    },
+    rationalization,
     summary: {
       totalTests: tests.length,
       javaTests: tests.filter((t) => t.language === 'java').length,
       csharpTests: tests.filter((t) => t.language === 'csharp').length,
+      specflowScenarios: specflowSuite.scenarios.length,
       apiTests: tests.filter((t) => t.kind === 'api').length,
       uiTests: tests.filter((t) => t.kind === 'ui').length,
       hybridTests: tests.filter((t) => t.kind === 'hybrid').length,
+      wave0SharedPrereqs: rationalization.summary.wave0SharedPrereqs,
       wave1Count,
       wave2Count,
       wave3Count,
+      skippedQuarantineCount: rationalization.summary.skippedQuarantine,
+      estimatedTargetSpecs: rationalization.summary.estimatedTargetSpecs,
+      reductionPct: rationalization.summary.reductionPct,
       pageObjectsCount: Object.keys(pageObjects).length,
       dataModelsCount: Object.keys(dataModels).length,
     },

@@ -74,6 +74,7 @@ const CORE_ENGINE_SCRIPTS = new Set([
   'scripts/heal-drift.mjs',
   'scripts/migrate-skill.mjs',
   'scripts/legacy-test-migrator.mjs',
+  'scripts/dotnet-enterprise-analyzer.mjs',
   'scripts/orchestrate.mjs',
   'scripts/analyze-coverage.mjs',
   'scripts/audit-solid.mjs',
