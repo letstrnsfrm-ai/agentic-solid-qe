@@ -3454,5 +3454,97 @@ test('33. Milestone 1 Enterprise C#/.NET Analyzer: multi-.csproj squads, BaseTes
   }
 });
 
+test('34. Milestone 2 Squad Wave Factory: resume-safe ledger, token-bounded batches, Wave-0 Seeder/Flow scaffolding, and XSS-safe HTML Parity Dashboard', async () => {
+  const {
+    initOrUpdateMigrationLedger,
+    selectNextWaveBatch,
+    scaffoldWave0Prereq,
+    generateMigrationDashboard,
+  } = await import('./migration-wave-factory.mjs');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-wave-factory-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpRoot, '--url', 'https://app.example.com', '--name', 'WaveApp'], REPO_ROOT);
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    // Seed a legacy .NET solution under legacy-cs/
+    const legacyDir = path.join(tmpRoot, 'legacy-cs');
+    fs.mkdirSync(path.join(legacyDir, 'Motor.Tests'), { recursive: true });
+    fs.mkdirSync(path.join(legacyDir, 'Claims.Tests'), { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'Motor.Tests/Motor.Tests.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>', 'utf8');
+    fs.writeFileSync(path.join(legacyDir, 'Claims.Tests/Claims.Tests.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>', 'utf8');
+
+    fs.writeFileSync(
+      path.join(legacyDir, 'Motor.Tests/QuoteFlowTests.cs'),
+      `using NUnit.Framework;
+      using RestSharp;
+      public class QuoteFlowTests {
+        private LoginPage _loginPage;
+        private QuotePage _quotePage;
+        [Test] public void BindQuoteForBasicPlan() { new RestClient("https://api.example.com"); _loginPage.SignIn(); _quotePage.CreateQuote(); }
+        [Test] public void BindQuoteForPremiumPlan() { new RestClient("https://api.example.com"); _loginPage.SignIn(); _quotePage.CreateQuote(); }
+        [Test] public void CancelActiveQuote() { _loginPage.SignIn(); _quotePage.CancelQuote(); }
+      }`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(legacyDir, 'Claims.Tests/ClaimTests.cs'),
+      `using NUnit.Framework;
+      public class ClaimTests {
+        private LoginPage _loginPage;
+        [Ignore("Legacy broken")]
+        [Test] public void BrokenLegacyClaim() { _loginPage.SignIn(); }
+      }`,
+      'utf8'
+    );
+
+    // 1. Build resume-safe ledger
+    const manifest = initOrUpdateMigrationLedger(legacyDir, tmpRoot);
+    assert.equal(manifest.schemaVersion, '2.0.0');
+    assert.equal(manifest.ledger.length, 4);
+    assert.ok(manifest.wave0Prereqs.length >= 1, 'Expected Wave-0 shared prereq');
+
+    // Mark 1 test live-verified & re-scan -> must preserve live-verified status (resume-safe)
+    const firstPending = manifest.ledger.find((e) => e.status === 'pending');
+    firstPending.status = 'live-verified';
+    firstPending.targetSpec = 'tests/motor/bind-quote.spec.ts';
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/migration-manifest.json'),
+      JSON.stringify(manifest, null, 2),
+      'utf8'
+    );
+    const refreshed = initOrUpdateMigrationLedger(legacyDir, tmpRoot);
+    const preserved = refreshed.ledger.find((e) => e.id === firstPending.id);
+    assert.equal(preserved.status, 'live-verified', 'Ledger refresh must preserve live-verified progress');
+
+    // 2. Token-bounded squad & wave micro-batch selection
+    const w0Batch = selectNextWaveBatch(refreshed, { squad: 'motor', wave: 0, batchSize: 1 });
+    assert.equal(w0Batch.wave, 0);
+    assert.equal(w0Batch.batch.length, 1);
+
+    // 3. Scaffold Wave-0 shared seeder/flow and verify SOLID audit passes
+    const built = scaffoldWave0Prereq(w0Batch.batch[0], tmpRoot);
+    assert.ok(fs.existsSync(path.join(tmpRoot, built.relPath)), `Expected scaffolded Wave-0 file at ${built.relPath}`);
+    const auditRes = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.equal(auditRes.status, 0, `Wave-0 scaffold failed audit:solid: ${auditRes.stderr}\n${auditRes.stdout}`);
+
+    // 4. Generate HTML Burn-Down & N:1 Parity Dashboard + security checks (XSS escape & path traversal)
+    const dash = generateMigrationDashboard(tmpRoot, 'reports/migration-dashboard.html');
+    const html = fs.readFileSync(path.join(tmpRoot, dash.outPath), 'utf8');
+    assert.match(html, /Cortex Legacy-to-SOLID Migration Burn-Down/);
+    assert.match(html, /N:1 Legacy-to-Playwright Parity Traceability/);
+    assert.match(html, /status-live-verified/);
+    assert.match(html, /status-consolidated/);
+
+    assert.throws(
+      () => generateMigrationDashboard(tmpRoot, '../outside.html'),
+      /Security Error/
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
 
 

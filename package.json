@@ -29,6 +29,7 @@
     "compile:tape": "node scripts/compile-tape.mjs",
     "heal": "node scripts/heal-drift.mjs",
     "migrate:skill": "node scripts/migrate-skill.mjs",
+    "migrate:wave": "node scripts/migration-wave-factory.mjs",
     "coverage:gaps": "node scripts/analyze-coverage.mjs",
     "orchestrate": "node scripts/orchestrate.mjs",
     "audit:solid": "node scripts/audit-solid.mjs",
