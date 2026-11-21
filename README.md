@@ -2,30 +2,30 @@
 
 > **Zero-API-key, token-efficient agent skill framework** bridging **Autonomous Live Exploration** (`agent-browser` + `cortex explore`), **Deterministic SOLID Playwright TypeScript Compilation** (`cortex compile`), **Live Drift Healing** (`cortex heal`), and **2,000-Test Enterprise Java/C# Legacy Migration** (`cortex wave`).
 >
-> Works natively across **Antigravity, Claude Code, GitHub Copilot, Cursor, and Windsurf** · **MIT Licensed** · **Current Release: `v0.44.0`**
+> Works natively across **Antigravity, Claude Code, GitHub Copilot, Cursor, and Windsurf** · **MIT Licensed** · **Current Release: `v0.45.0`**
 
 ---
 
 ## Why `agentic-solid-qe`?
 
-| Problem in Ad-Hoc AI Test Automation | `agentic-solid-qe` (`v0.44.0`) Solution |
+| Problem in Ad-Hoc AI Test Automation | `agentic-solid-qe` (`v0.45.0`) Solution |
 | :--- | :--- |
-| **Token Burn & Context Rot** (monolithic prompts, noisy DOM dumps, 10+ file-read turns) | **5-Pillar Token Efficiency:** `AGENTS.md` (533 tok), `≤ 500`-tok `SKILL.md`, `≤ 800`-tok topic references, `≤ 400`-tok single-call `cortex context` packs, `cortex tape` CLI, pruned `-i` browser deltas, and failure-only `verify:fast` reporting. |
+| **Token Burn & Context Rot** (monolithic prompts, noisy DOM dumps, 10+ file-read turns) | **5-Pillar Token Efficiency:** `AGENTS.md` (528 tok), `≤ 500`-tok `SKILL.md`, `≤ 800`-tok topic references, `≤ 400`-tok single-call `cortex context` packs, `cortex tape` CLI, pruned `-i` browser deltas, and failure-only `verify:fast` reporting. |
 | **Brittle, Unmaintainable Generated Specs** (inline selectors, `waitForTimeout`, `expect()` everywhere) | **Deterministic SOLID Compiler (`cortex compile`):** Enforces `≤ 150`-line SRP Components (`IdentifiableComponent`, `WizardStepContract`, `StateSeederContract`, `FlowContract`), zero `expect()` in `src/`, Data Builders (DIP), and business-domain `test.step()`. |
 | **Slow Re-Exploration of Deep Flows** | **Resume-First `cortex explore`:** Reuses existing specs (`--from-spec`), `<1s` browser checkpoints (`--checkpoint`), or API seeders (`--from-seed`) with batched actions and `--compile --verify --emit-seeder`. |
-| **Flaky CI vs. Real Bugs** | **Differential `cortex heal`:** Replays failing routes live to distinguish **Genuine Regressions** (drafting secret-redacted `defects/DEFECT-*.md` without weakening assertions) from **Safe Locator/Auth Drift**. |
+| **Flaky CI vs. Real Bugs** | **Differential `cortex heal`:** Replays failing routes live to distinguish **Genuine Regressions** (drafting secret-redacted `defects/DEFECT-*.md` without weakening assertions) from **Safe Locator/Auth Drift** with 3-Layer Shared-Module Blast-Radius Protection. |
 | **2,000+ Legacy Selenium / RestAssured / .NET Tests** | **Squad Wave Factory (`cortex wave`):** Multi-`.csproj`/Maven squad analyzer, Wave-0 Seeder/Flow rationalization, autonomous `--run --verify` micro-batches, and HTML N:1 Parity Dashboard. |
 
 ---
 
-## Measured Token-Efficiency Benchmarks (`v0.44.0`)
+## Measured Token-Efficiency Benchmarks (`v0.45.0`)
 
 Measured with the deterministic token estimator shared by [`audit:solid`](scripts/audit-solid.mjs) and [`scripts/lib/cli-output.mjs`](scripts/lib/cli-output.mjs):
 
-| Surface | Before | `v0.44.0` | Reduction |
+| Surface | Before | `v0.45.0` | Reduction |
 | :--- | ---: | ---: | ---: |
-| `AGENTS.md` *(injected on every turn)* | 2,477 tok | **533 tok** | **-78.5%** |
-| `.github/copilot-instructions.md` *(zero eager reference preloads)* | 922 tok | **435 tok** | **-52.8%** |
+| `AGENTS.md` *(injected on every turn)* | 2,477 tok | **528 tok** | **-78.7%** |
+| `.github/copilot-instructions.md` *(zero eager reference preloads)* | 922 tok | **460 tok** | **-50.1%** |
 | Worst-case `references/*.md` topic load | 4,019 tok | **774 tok** *(avg 602 tok across 23 chunks)* | **-80.7%** |
 | `cortex orchestrate` *(auto-compact in agent shells)* | 249 tok (17L) | **107 tok (5L)** | **-57.0%** |
 | `cortex gaps --compact` | 1,883 tok (242L) | **97 tok (4L)** | **-94.8%** |
@@ -39,20 +39,20 @@ Measured with the deterministic token estimator shared by [`audit:solid`](script
 
 ## Autonomous Closed-Loop QE Lifecycle
 
-**Operating Model:** **Human = Direction & Review** (states QE goals, approves scenario/triage/PR gates, completes interactive MFA/CAPTCHA). **Agent = Autonomous Executor** (runs `npx cortex orchestrate --loop --compact`, explores, compiles, heals, and verifies autonomously).
+**Operating Model:** **Human = Direction & Review** (states QE goals, approves scenario/triage/PR gates, completes interactive MFA/CAPTCHA). **Agent = Autonomous Executor** (routes all commands and structured `GATE_OPTIONS` questions through `npx cortex orchestrate`).
 
 ```mermaid
 flowchart LR
-  H["Human QE Goal"] --> M["/00-master-orchestrator<br/>cortex orchestrate --loop --compact"]
-  M --> CTX["cortex context<br/>(<=400 tok pack)"]
-  CTX --> E["01-cli-explorer<br/>cortex explore / agent-browser"]
-  E --> T["Session Tape v1<br/>(.exploratory/tapes/*.json)<br/>or cortex tape clone|patch"]
-  T --> C["02-solid-architect<br/>cortex compile --apply"]
-  C --> V["verify:fast -> verify<br/>(tsc + graph + audit + tests)"]
-  V -- "Fail" --> D["03-drift-healer<br/>cortex heal (--apply)"]
-  D -- "Real Bug" --> B["defects/DEFECT-*.md"]
+  H["Human QE Goal"] --> M["/00-master-orchestrator<br/>npx cortex orchestrate --loop --compact"]
+  M --> B["--bootstrap --discover-shards<br/>(Stage 0 Live Route Shards)"]
+  B --> CTX["--context<br/>(<=400 tok pack)"]
+  CTX --> E["--explore start|batch|finish<br/>(--compile --verify)"]
+  E --> T["--tape clone|patch<br/>(--set-data Builder overrides)"]
+  T --> V["--verify [--fast]<br/>(tsc + graph + audit + tests)"]
+  V -- "Fail" --> D["--heal-action dry-run|apply<br/>(--verify-affected)"]
+  D -- "Real Bug" --> B2["defects/DEFECT-*.md"]
   D -- "UI/Auth Drift" --> V
-  V -- "Pass" --> CI["04-ci-pipeline<br/>Sharded CI + cortex report"]
+  V -- "Pass" --> CI["--ci-init<br/>Sharded CI + cortex report"]
 ```
 
 ---
@@ -63,22 +63,22 @@ flowchart LR
 
 ```bash
 # Requires Node.js >= 20.12.0
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.44.0 init . \
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.45.0 init . \
   --url https://your-app-url.com \
   --name "Your App"
 
 npm install
 npx playwright install chromium
-npm run verify:fast
+npx cortex orchestrate --bootstrap --discover-shards
 ```
 
-- **Non-destructive:** Merges `package.json` scripts, `tsconfig.json` path aliases (`@contracts/*`, `@components/*`, `@pages/*`, `@data/*`, `@fixtures/*`, `@domains/*`, `@shared/*`), and `.gitignore` without overwriting existing `src/` or `tests/`.
+- **Non-destructive:** Merges `package.json` scripts & `bin.cortex`, `tsconfig.json` path aliases (`@contracts/*`, `@components/*`, `@pages/*`, `@data/*`, `@fixtures/*`, `@domains/*`, `@shared/*`), and `.gitignore` without overwriting existing `src/` or `tests/`.
 - **Legacy-safe:** Backs up pre-existing `AGENTS.md` / `.github/copilot-instructions.md` to `.agents/legacy-backups/`. Inside Java (`pom.xml`/`build.gradle`) or C# (`*.sln`/`*.csproj`) repos, auto-installs side-by-side in `e2e-playwright/`.
 - **Want the SauceDemo sandbox demo?** Pass `--demo` to `init`.
 
 ### 2. Copy-Paste Prompt for Your AI Coding Agent
 
-> *"Read `AGENTS.md` and invoke `/00-master-orchestrator`. Run `npx cortex orchestrate --loop --compact` to diagnose our repository maturity stage, auto-drain safe steps, and propose the single highest-value next scenario to automate."*
+> *"Read `AGENTS.md` and invoke `/00-master-orchestrator`. Route all commands and questions through `npx cortex orchestrate` (`--loop --compact`, `--bootstrap --discover-shards`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--verify`) to advance our E2E coverage 1 test at a time."*
 
 ### 3. Day-2 Non-Destructive Upgrades
 
@@ -97,18 +97,19 @@ npx cortex upgrade --apply-patches   # Opt-in config patch apply
 
 | Command | Purpose |
 | :--- | :--- |
-| `npx cortex orchestrate --loop --compact` | **Primary Entry Point:** Smart Auto-Drain loop (diagnostics, high-confidence drift heals, batch compile, wave micro-batches) stopping only at human gates. |
-| `npx cortex context [--route\|--squad\|--tape\|--spec]` | Builds a single `≤ 400`-token scoped Context Pack (matching shards, `src/` signatures, compact tape DSL, spec metadata). |
-| `npx cortex tape list\|show\|clone\|patch` | Inspects and mutates v1 Session Tapes without reading the 4.5k-tok JSON schema or hand-editing 240-line JSON; auto-validates before writing. |
-| `npx cortex explore start\|act\|batch\|capture\|checkpoint\|actor\|finish` | High-speed headless/headed `agent-browser` runner with CDP resume (`--from-spec`, `--checkpoint`, `--from-seed`), pruned `-i` deltas, secret redaction, inline assertions, and `--compile --verify --emit-seeder`. |
+| `npx cortex orchestrate [--loop --compact]` | **Unified Single Entry Point:** Smart Auto-Drain loop + structured `gatePayload`/`GATE_OPTIONS` + sub-workflow routing (`--bootstrap --discover-shards`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, `--verify`). |
+| `npx cortex context [--route\|--squad\|--tape\|--spec\|--file]` | Builds a single `≤ 400`-token scoped Context Pack (matching shards, `src/` signatures, compact tape DSL, spec metadata, and blast-radius `IMPACT`). |
+| `npx cortex impact [--file <p>\|--base <ref>\|--specs-only]` | Fixture-aware blast-radius & affected-spec analyzer distinguishing shared components/builders from isolated page fixtures. |
+| `npx cortex tape list\|show\|clone\|patch [--set-data]` | Inspects and mutates v1 Session Tapes and Data Builders (`--set-data <Builder.fn().prop=val>`) without reading raw JSON; auto-validates before writing. |
+| `npx cortex explore start\|act\|batch\|capture\|checkpoint\|actor\|finish` | High-speed headless/headed `agent-browser` runner with CDP resume (`--from-spec`, `--checkpoint`, `--from-seed`), pruned `-i` deltas, secret redaction, inline assertions, builder value hydration, and `--compile --verify --emit-seeder`. |
 | `npx cortex compile <id> [--squad <sq>] [--apply] [--compact]` | Deterministic Session-Tape-to-SOLID TypeScript compiler (Components, Wizard Steps, API Clients, Seeders, Flows, Builders, Fixtures, Specs, Shard capabilities). |
-| `npx cortex heal [--spec <path>] [--apply] [--compact]` | Differential failure triage: classifies Auth Drift vs. Genuine App Regression (`defects/DEFECT-*.md`) vs. high-confidence Locator Drift (`--apply` safe allowlisted patch). |
-| `npx cortex verify [--fast] [--specs <list>] [--with-engine]` | Parallel two-tier gate (`tsc` incremental + `domain:graph` + `audit:solid` + `validate:tapes` + targeted/smoke tests) with failure-only zero-ANSI output. |
+| `npx cortex heal [--spec <path>] [--apply] [--verify-affected]` | Differential failure triage: classifies Auth Drift vs. Genuine App Regression (`defects/DEFECT-*.md`) vs. high-confidence Locator Drift with transactional shared-module rollback. |
+| `npx cortex verify [--fast] [--affected] [--specs <list>] [--with-engine]` | Parallel two-tier gate (`tsc` incremental + `domain:graph` + `audit:solid` + `validate:tapes` + targeted/affected/smoke tests) with failure-only zero-ANSI output. |
 | `npx cortex wave [--scan <dir>] [--scaffold-wave0] [--run --verify] [--dashboard]` | 2,000-test enterprise Java/C#/.NET Squad Wave Factory with resume-safe ledger, Wave-0 Seeders/Flows, and HTML N:1 Parity Dashboard. |
 | `npx cortex migrate --discover \| <path> --name <id> [--apply]` | Discovers & decomposes `.cursorrules`, `CLAUDE.md`, custom prompts, helper scripts, and individual legacy Java/C# tests. |
 | `npx cortex graph` / `npx cortex map` | Compiles `.agents/domain/domain-graph.json` and renders interactive `reports/system-map.html` (including `StateSeederContract` nodes & KPI cards). |
 | `npx cortex gaps [--compact\|--summary\|--squad <sq>]` | Coverage, staleness, traceability, and `handoffRecommendations` analyzer. |
-| `npx cortex audit [--squad <sq>]` | Runs SOLID, Federated Brain, Token Budget, Release Version Sync, and Secret/Security gates. |
+| `npx cortex audit [--squad <sq>]` | Runs SOLID, Federated Brain, Cross-Squad Boundary, Token Budget, Release Version Sync, and Secret/Security gates. |
 | `npx cortex upgrade [--check\|--diff\|--apply-patches\|--to <tag>]` | Manifest-tracked incremental upgrader with stale-file pruning and `.agents/upgrade-patches/`. |
 | `npx cortex report [--dry-run\|--out <file>]` | Opt-in sanitized governance & `tokenFootprint` telemetry emitter for Cortex Cloud (zero telemetry by default). |
 

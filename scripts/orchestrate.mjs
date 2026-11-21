@@ -223,17 +223,46 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
 
   if (needsTargetUrlConfig || missingAuthSessions.length > 0) {
     maturityStage = 'Stage 0 — Foundation, Auth & Legacy Onboarding';
+    const gateOptions = needsTargetUrlConfig
+      ? [
+          {
+            id: 'bootstrap-live-url',
+            label: '(Recommended) Bootstrap target URL and auto-discover initial feature shards via 00-master-orchestrator',
+            command: 'npx cortex orchestrate --bootstrap --url <https://your-app.com> --name "<App Name>" --discover-shards',
+          },
+          {
+            id: 'bootstrap-url-only',
+            label: 'Configure target URL only (skip live route discovery)',
+            command: 'npx cortex orchestrate --bootstrap --url <https://your-app.com> --name "<App Name>"',
+          },
+        ]
+      : [
+          {
+            id: 'auth-session-save',
+            label: `(Recommended) Complete interactive login for ${missingAuthSessions.join(', ')}`,
+            command: `npx cortex orchestrate --explore start --url ${coverage.targetApp?.baseUrl || 'http://localhost:3000'} --headed`,
+          },
+        ];
     nextAction = {
       priority: 1,
       skill: '00-env-bootstrap',
       why: needsTargetUrlConfig
         ? 'Target Base URL is still using a placeholder in .agents/domain/domain-memory.md.'
         : `Missing reusable auth session(s): ${missingAuthSessions.join(', ')}.`,
-      command: 'npm run init:app',
+      command: needsTargetUrlConfig
+        ? 'npx cortex orchestrate --bootstrap --url <url> --name "<App Name>" --discover-shards'
+        : 'npm run init:app',
       autoRunnable: false,
       humanGate: needsTargetUrlConfig
         ? 'Confirm target application URL and credentials.'
         : 'Complete interactive SSO/MFA login to save .auth/<persona>.json.',
+      gatePayload: {
+        gateId: needsTargetUrlConfig ? 'stage0-target-url' : 'stage0-auth-session',
+        question: needsTargetUrlConfig
+          ? 'Provide the target application URL and name to bootstrap Stage 0 via 00-master-orchestrator:'
+          : `Authenticate missing persona session(s) (${missingAuthSessions.join(', ')}) to proceed:`,
+        options: gateOptions,
+      },
     };
   } else if (failingArtifacts.length > 0) {
     maturityStage = 'Stage 4 — Continuous Day-2 Drift Healing';
@@ -241,10 +270,26 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       priority: 2,
       skill: '03-drift-healer',
       why: `Detected ${failingArtifacts.length} failing test artifact(s) requiring live regression vs. drift triage.`,
-      command: 'npx cortex heal --dry-run',
+      command: 'npx cortex orchestrate --heal-action dry-run',
       runArgs: [path.join(__dirname, 'heal-drift.mjs'), '--dry-run'],
       autoRunnable: true,
       humanGate: 'Review triage classification (DEFECT-*.md vs. locator drift patch).',
+      gatePayload: {
+        gateId: 'stage4-drift-triage',
+        question: `How should 00-master-orchestrator resolve the ${failingArtifacts.length} failing test artifact(s)?`,
+        options: [
+          {
+            id: 'heal-apply',
+            label: '(Recommended) Auto-heal drifted component locator(s) and run targeted fast verification',
+            command: 'npx cortex orchestrate --heal-action apply',
+          },
+          {
+            id: 'heal-dry-run',
+            label: 'Inspect dry-run root-cause classification & blast-radius first',
+            command: 'npx cortex orchestrate --heal-action dry-run',
+          },
+        ],
+      },
     };
   } else if (uncompiledTapes.length > 0) {
     const firstTape = uncompiledTapes[0];
@@ -261,7 +306,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
           priority: 3,
           skill: '02-solid-architect',
           why: `${uncompiledTapes.length} recorded Session Tape(s) ready for deterministic SOLID compilation (next: ${scenarioId}).`,
-          command: `npx cortex compile ${scenarioId} --apply`,
+          command: `npx cortex orchestrate --loop --compact`,
           runArgs: [path.join(__dirname, 'compile-tape.mjs'), scenarioId, '--apply'],
           autoRunnable: true,
           humanGate: 'None — agent compiles & runs npm run verify autonomously.',
@@ -325,7 +370,17 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     }
   } else if (uncoveredShards.length > 0) {
     const nextShard = uncoveredShards[0];
-    const shardName = typeof nextShard === 'string' ? nextShard : nextShard.shard || nextShard.feature;
+    const rawShardPath = typeof nextShard === 'string' ? nextShard : nextShard.shard || nextShard.feature || 'main';
+    const shardSlug = path.basename(String(rawShardPath), '.md').replace(/[^a-z0-9-]/gi, '-').toLowerCase() || 'main';
+    let shardRoute = '/';
+    const shardFull = path.join(rootDir, String(rawShardPath));
+    if (fs.existsSync(shardFull)) {
+      const m = readTextSafe(shardFull).match(/`(\/[a-zA-Z0-9._/-]*)`/);
+      if (m) shardRoute = m[1];
+    }
+    const baseUrlClean = String(coverage.targetApp?.baseUrl || 'http://localhost:3000').replace(/\/$/, '');
+    const targetExploreUrl = shardRoute.startsWith('/') ? `${baseUrlClean}${shardRoute}` : baseUrlClean;
+
     maturityStage =
       (counts.automatedSpecs || 0) === 0
         ? 'Stage 1 — P0 Golden-Path Baseline (1 Test at a Time)'
@@ -333,10 +388,64 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     nextAction = {
       priority: 5,
       skill: '01-cli-explorer',
-      why: `${uncoveredShards.length} uncovered domain shard(s) remain (next: ${shardName}).`,
-      command: `npx agent-browser --session ${shardName} --headed open ${coverage.targetApp?.baseUrl || ''}`.trim(),
+      why: `${uncoveredShards.length} uncovered domain shard(s) remain (next: ${rawShardPath} -> ${shardRoute}).`,
+      command: `npx cortex orchestrate --explore start --shard ${shardSlug} --scenario ${shardSlug}-p0`,
       autoRunnable: false,
       humanGate: 'Approve 1 scenario from the Session Debrief Matrix.',
+      gatePayload: {
+        gateId: 'stage1-scenario-selection',
+        shard: shardSlug,
+        route: shardRoute,
+        targetUrl: targetExploreUrl,
+        question: `Select 1 scenario to explore and automate for shard '${shardSlug}' (${shardRoute}):`,
+        options: [
+          {
+            id: `${shardSlug}-p0`,
+            label: `(Recommended) @p0 Happy-Path Baseline on ${shardRoute} (happy-path-baseline)`,
+            charter: 'happy-path-baseline',
+            command: `npx cortex orchestrate --explore start --shard ${shardSlug} --scenario ${shardSlug}-p0`,
+          },
+          {
+            id: `${shardSlug}-negative`,
+            label: `@p1 Boundary & Validation Error Resilience on ${shardRoute} (boundary-analysis)`,
+            charter: 'boundary-analysis',
+            command: `npx cortex orchestrate --explore start --shard ${shardSlug} --scenario ${shardSlug}-negative`,
+          },
+          {
+            id: `${shardSlug}-a11y`,
+            label: `@p2 Accessibility & State Interruption Check on ${shardRoute} (accessibility-audit)`,
+            charter: 'accessibility-audit',
+            command: `npx cortex orchestrate --explore start --shard ${shardSlug} --scenario ${shardSlug}-a11y`,
+          },
+        ],
+      },
+    };
+  } else if ((counts.domainShards || 0) === 0 && (counts.automatedSpecs || 0) === 0 && (counts.recordedTapes || 0) === 0) {
+    maturityStage = 'Stage 0 — Initial Route & Feature Shard Discovery';
+    const baseUrlClean = coverage.targetApp?.baseUrl || 'http://localhost:3000';
+    nextAction = {
+      priority: 5,
+      skill: '00-env-bootstrap',
+      why: `Target URL (${baseUrlClean}) is configured, but 0 domain shards or specs exist yet. Discover top-level routes to seed feature shards.`,
+      command: `npx cortex orchestrate --bootstrap --discover-shards`,
+      autoRunnable: false,
+      humanGate: 'Run live route discovery or select initial route to explore.',
+      gatePayload: {
+        gateId: 'stage0-discover-shards',
+        question: `No feature shards exist yet for ${coverage.targetApp?.appName || 'Target App'} (${baseUrlClean}). How should 00-master-orchestrator initialize coverage?`,
+        options: [
+          {
+            id: 'discover-shards',
+            label: `(Recommended) Auto-discover top-level routes from ${baseUrlClean} and scaffold feature shards`,
+            command: 'npx cortex orchestrate --bootstrap --discover-shards',
+          },
+          {
+            id: 'explore-root',
+            label: `Start live exploratory session directly on ${baseUrlClean}`,
+            command: `npx cortex orchestrate --explore start --url ${baseUrlClean} --scenario main-p0`,
+          },
+        ],
+      },
     };
   } else if (staleShards.length > 0 || !ciConfigured) {
     maturityStage = 'Stage 4 — CI/CD Sharding & Freshness';
@@ -346,11 +455,26 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       why: !ciConfigured
         ? 'All current shards are covered, but no Playwright CI workflow was detected.'
         : `${staleShards.length} domain shard(s) are stale and due for re-verification.`,
-      command: 'npm run verify',
+      command: !ciConfigured ? 'npx cortex orchestrate --ci-init' : 'npx cortex orchestrate --verify',
       runArgs: null,
       npmScript: 'verify',
       autoRunnable: true,
       humanGate: !ciConfigured ? 'Review generated CI pipeline workflow.' : 'None.',
+      ...(!ciConfigured
+        ? {
+            gatePayload: {
+              gateId: 'stage4-ci-init',
+              question: 'All shards are covered, but CI is not configured. Generate sharded GitHub Actions Playwright CI workflow now?',
+              options: [
+                {
+                  id: 'ci-init-github',
+                  label: '(Recommended) Scaffold .github/workflows/playwright-ci.yml and run full verification gate',
+                  command: 'npx cortex orchestrate --ci-init',
+                },
+              ],
+            },
+          }
+        : {}),
     };
   } else {
     maturityStage = 'Stage 4 — Maintained & CI-Ready';
@@ -358,7 +482,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       priority: 7,
       skill: '00-master-orchestrator',
       why: 'All domain shards are covered, tapes compiled, zero drift detected, and CI is configured.',
-      command: 'npm run verify',
+      command: 'npx cortex orchestrate --verify',
       npmScript: 'verify',
       autoRunnable: true,
       humanGate: 'None — reporting verified results.',
@@ -419,13 +543,20 @@ export function computeBlueprintFingerprint(bp) {
 
 export function formatCompactBlueprint(bp) {
   const h = bp.healthSnapshot;
-  return [
+  const lines = [
     `CORTEX | ${bp.targetApp.appName} (${bp.targetApp.baseUrl || 'unconfigured'}) | ${bp.maturityStage}`,
     `HEALTH | shards:${h.domainShards} (uncovered:${h.uncoveredShards}, stale:${h.staleShards}) | tapes:${h.recordedTapes} (uncompiled:${h.uncompiledTapes}) | specs:${h.automatedSpecs} | legacy:${h.legacySkillsAndPrompts}r/${h.legacyCodeTestsPending}t | fails:${h.failingTestArtifacts} | ci:${h.ciConfigured ? 'ok' : 'missing'}`,
     `NEXT   | /${bp.nextAction.skill} -> ${bp.nextAction.command} [auto:${bp.nextAction.autoRunnable ? 'yes' : 'no'}]`,
     `WHY    | ${bp.nextAction.why}`,
     `GATE   | ${bp.nextAction.humanGate}`,
-  ].join('\n');
+  ];
+  const opts = bp.nextAction?.gatePayload?.options;
+  if (Array.isArray(opts) && opts.length > 0) {
+    lines.push(
+      `GATE_OPTIONS | ${opts.map((o, i) => `[${i + 1}] ${o.label} -> ${o.command}`).join(' | ')}`
+    );
+  }
+  return lines.join('\n');
 }
 
 function formatBlueprintMarkdown(bp) {
@@ -448,6 +579,14 @@ function formatBlueprintMarkdown(bp) {
     `3. **Human Review Gate:** ${bp.nextAction.humanGate}`,
     ``,
   ];
+  const opts = bp.nextAction?.gatePayload?.options;
+  if (Array.isArray(opts) && opts.length > 0) {
+    lines.push(`#### 🗳️ Gate Decision Options (Route via \`00-master-orchestrator\`)`);
+    opts.forEach((o, i) => {
+      lines.push(`${i + 1}. **${o.label}** — \`${o.command}\``);
+    });
+    lines.push(``);
+  }
   return lines.join('\n');
 }
 
@@ -475,6 +614,183 @@ function clearResolvedFailureArtifacts(rootDir) {
       /* ignore cleanup failure */
     }
   }
+}
+
+function slugifyShardId(raw) {
+  return (
+    String(raw || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'feature'
+  );
+}
+
+/**
+ * Discovers top-level routes from `baseUrl` (via HTML anchor parsing with agent-browser fallback)
+ * and scaffolds `.agents/domain/shards/<feature>.md` + registers them in `domain-memory.md`.
+ */
+export async function discoverAndSeedLiveShards(
+  rootDir = process.cwd(),
+  { baseUrl = '', maxShards = 6, filterPattern = '' } = {}
+) {
+  const graph = buildDomainGraph({ rootDir, writeToDisk: false });
+  const targetUrl = String(baseUrl || graph.targetApp?.baseUrl || '').trim();
+  if (!targetUrl || targetUrl.includes('localhost:3000') || targetUrl.includes('your-app-url')) {
+    throw new Error('Cannot discover live shards without a configured target URL. Pass --url <https://...>.');
+  }
+  const parsedBase = new URL(targetUrl);
+  if (parsedBase.protocol !== 'http:' && parsedBase.protocol !== 'https:') {
+    throw new Error(`Unsupported URL protocol '${parsedBase.protocol}'.`);
+  }
+
+  const discoveredLinks = [];
+  const seenRoutes = new Set();
+  const skipRoutes = new Set(['/', '/#', '/about', '/contact', '/privacy', '/terms', '/cdn-cgi']);
+
+  const addCandidate = (rawHref, rawText) => {
+    try {
+      const resolved = new URL(rawHref, parsedBase.origin);
+      if (resolved.origin !== parsedBase.origin) return;
+      const routePath = resolved.pathname.replace(/\/+$/, '') || '/';
+      if (routePath === '/' || skipRoutes.has(routePath)) return;
+      if (/\.(js|css|png|jpg|jpeg|svg|ico|pdf|zip|xml|json)$/i.test(routePath)) return;
+      if (seenRoutes.has(routePath)) return;
+      const cleanLabel = String(rawText || '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, '&')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!cleanLabel || /^skip to/i.test(cleanLabel)) return;
+      seenRoutes.add(routePath);
+      discoveredLinks.push({ routePath, title: cleanLabel });
+    } catch {
+      /* ignore invalid href */
+    }
+  };
+
+  try {
+    const res = await fetch(targetUrl, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+        addCandidate(m[1], m[2]);
+      }
+    }
+  } catch {
+    /* fallback to existing shards or root shard */
+  }
+
+  let selected = discoveredLinks;
+  if (filterPattern) {
+    const re = new RegExp(filterPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const filtered = selected.filter((l) => re.test(l.routePath) || re.test(l.title));
+    if (filtered.length > 0) selected = filtered;
+  } else {
+    // Prioritize high-value authentication, form, checkout, dynamic, table, and portal routes first
+    const priorityRe = /\b(login|auth|form|checkout|cart|account|profile|dynamic|table|control|dropdown|checkbox|upload|input|portal|claim|quote)\b/i;
+    selected.sort((a, b) => {
+      const aPri = priorityRe.test(`${a.routePath} ${a.title}`) ? 0 : 1;
+      const bPri = priorityRe.test(`${b.routePath} ${b.title}`) ? 0 : 1;
+      return aPri - bPri;
+    });
+  }
+
+  const safeMax = Math.max(1, Math.min(20, Number(maxShards) || 6));
+  const finalRoutes =
+    selected.length > 0
+      ? selected.slice(0, safeMax)
+      : [{ routePath: parsedBase.pathname || '/', title: `${graph.targetApp?.appName || 'Main'} Landing` }];
+
+  const shardsDir = path.join(rootDir, '.agents/domain/shards');
+  fs.mkdirSync(shardsDir, { recursive: true });
+  const today = new Date().toISOString().slice(0, 10);
+  const createdShards = [];
+  const domainMemoryPath = path.join(rootDir, '.agents/domain/domain-memory.md');
+  let memText = readTextSafe(domainMemoryPath);
+
+  for (const item of finalRoutes) {
+    const slug = slugifyShardId(item.title || item.routePath);
+    const shardRel = `.agents/domain/shards/${slug}.md`;
+    const shardAbs = path.join(rootDir, shardRel);
+    if (!fs.existsSync(shardAbs)) {
+      const shardContent = `# Feature Shard: ${item.title} (${item.routePath})
+
+- **Owner Squad:** \`@org/qe-core\`
+- **Last Verified:** \`${today}\`
+- **Routes:** \`${item.routePath}\`
+- **Published Capabilities:** *(none yet)*
+
+## 1. Discovered Business Rules & UI Contracts
+- Top-level route \`${item.routePath}\` (${item.title}) discovered during Stage 0 bootstrap.
+- Ready for 1-test-at-a-time exploration via \`npx cortex orchestrate --explore start --shard ${slug}\`.
+`;
+      fs.writeFileSync(shardAbs, shardContent, 'utf8');
+      createdShards.push({ shardId: slug, route: item.routePath, title: item.title, path: shardRel });
+    }
+    if (memText && !memText.includes(shardRel)) {
+      const tableHeader = '| :--- | :--- | :--- | :--- | :--- |';
+      const row = `| **${item.title}** | \`@org/qe-core\` | \`${item.routePath}\` | \`${shardRel}\` | Auto-discovered feature shard |`;
+      if (memText.includes(tableHeader)) {
+        memText = memText.replace(tableHeader, `${tableHeader}\n${row}`);
+      }
+    }
+  }
+
+  if (memText && fs.existsSync(domainMemoryPath)) {
+    fs.writeFileSync(domainMemoryPath, memText, 'utf8');
+  }
+  buildDomainGraph({ rootDir, writeToDisk: true });
+  return {
+    targetUrl,
+    discoveredTotal: discoveredLinks.length,
+    createdShards,
+  };
+}
+
+/**
+ * Ensures `.github/workflows/playwright-ci.yml` exists for Stage 4 CI readiness via `00-master-orchestrator`.
+ */
+export function ensureCiPipelineConfigured(rootDir = process.cwd()) {
+  const targetRel = '.github/workflows/playwright-ci.yml';
+  const targetAbs = path.join(rootDir, targetRel);
+  if (fs.existsSync(targetAbs)) {
+    return { status: 'already-configured', file: targetRel };
+  }
+  const templateAbs = path.resolve(__dirname, '..', targetRel);
+  fs.mkdirSync(path.dirname(targetAbs), { recursive: true });
+  if (fs.existsSync(templateAbs)) {
+    fs.copyFileSync(templateAbs, targetAbs);
+  } else {
+    fs.writeFileSync(
+      targetAbs,
+      `name: Playwright SOLID E2E CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  verify-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run verify
+`,
+      'utf8'
+    );
+  }
+  return { status: 'created', file: targetRel };
 }
 
 /**
@@ -784,15 +1100,173 @@ if (isMain) {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
     console.log(`
-🧠 Master Orchestrator CLI (npx cortex orchestrate)
+🧠 Master Orchestrator CLI — Unified Single Entry Point (npx cortex orchestrate)
 
 Usage:
   npx cortex orchestrate [--squad <squad>] [--json] [--compact] [--run]
   npx cortex orchestrate --loop [--max-steps 10] [--workers 4] [--fast-only] [--skip-tests] [--verify-waves] [--compact] [--json]
+  npx cortex orchestrate --bootstrap [--url <url>] [--name "<App Name>"] [--reset] [--discover-shards] [--max-shards 6] [--filter <pattern>]
+  npx cortex orchestrate --explore <start|act|batch|finish|status|actor|capture|checkpoint> [--shard <id>] [explore-args...]
+  npx cortex orchestrate --tape <list|show|clone|patch> [tape-args...]
+  npx cortex orchestrate --heal-action <dry-run|apply> [--spec <path>] [--to <locator>] [--verify-affected]
+  npx cortex orchestrate --ci-init [--verify]
+  npx cortex orchestrate --context [--route <r>|--squad <s>|--tape <t>|--spec <p>]
+  npx cortex orchestrate --verify [--fast]
 `);
     process.exit(0);
   }
 
+  const rootDir = process.cwd();
+
+  // 1. Unified Sub-Workflow Routing via 00-master-orchestrator
+  const exploreIdx = args.indexOf('--explore');
+  if (exploreIdx !== -1) {
+    const rest = args.slice(exploreIdx + 1);
+    const subCmd = rest[0] || 'status';
+    const subArgs = rest.slice(1);
+    if (subCmd === 'start') {
+      const shardIdx = subArgs.indexOf('--shard');
+      let targetShard = null;
+      if (shardIdx !== -1 && subArgs[shardIdx + 1]) {
+        targetShard = subArgs[shardIdx + 1];
+        subArgs.splice(shardIdx, 2);
+      }
+      const hasUrl = subArgs.includes('--url') || subArgs.includes('--from-spec') || subArgs.includes('--checkpoint') || subArgs.includes('--from-seed');
+      if (!hasUrl || targetShard) {
+        const bp = buildOrchestrationBlueprint(rootDir);
+        const baseUrl = String(bp.targetApp.baseUrl || 'http://localhost:3000').replace(/\/$/, '');
+        const rawCandidate = targetShard || bp.queuePreview.uncoveredShards[0] || 'main';
+        const shardSlug = path.basename(String(rawCandidate), '.md').replace(/[^a-z0-9-]/gi, '-').toLowerCase() || 'main';
+        let shardRoute = '/';
+        const shardFile = path.join(rootDir, '.agents/domain/shards', `${shardSlug}.md`);
+        if (fs.existsSync(shardFile)) {
+          const m = readTextSafe(shardFile).match(/`(\/[a-zA-Z0-9._/-]*)`/);
+          if (m) shardRoute = m[1];
+        }
+        if (!hasUrl) {
+          subArgs.push('--url', `${baseUrl}${shardRoute.startsWith('/') ? shardRoute : `/${shardRoute}`}`);
+        }
+        if (!subArgs.includes('--scenario')) {
+          subArgs.push('--scenario', `${shardSlug}-p0`);
+        }
+        const ctxRes = spawnSync(process.execPath, [path.join(__dirname, 'context-pack.mjs'), '--route', shardRoute], {
+          cwd: rootDir,
+          encoding: 'utf8',
+        });
+        if (ctxRes.status === 0 && ctxRes.stdout && !subArgs.includes('--json')) {
+          console.log(ctxRes.stdout.trim());
+        }
+      }
+    }
+    const res = spawnSync(process.execPath, [path.join(__dirname, 'explore-session.mjs'), subCmd, ...subArgs], {
+      cwd: rootDir,
+      stdio: 'inherit',
+    });
+    if (res.status === 0 && subCmd === 'finish' && subArgs.includes('--compile')) {
+      const updatedBp = buildOrchestrationBlueprint(rootDir);
+      console.log('\n' + formatCompactBlueprint(updatedBp));
+    }
+    process.exit(res.status ?? 0);
+  }
+
+  const tapeIdx = args.indexOf('--tape');
+  if (tapeIdx !== -1) {
+    const tapeArgs = args.slice(tapeIdx + 1);
+    const res = spawnSync(process.execPath, [path.join(__dirname, 'tape-cli.mjs'), ...tapeArgs], {
+      cwd: rootDir,
+      stdio: 'inherit',
+    });
+    process.exit(res.status ?? 0);
+  }
+
+  const ctxIdx = args.indexOf('--context');
+  if (ctxIdx !== -1) {
+    const ctxArgs = args.slice(ctxIdx + 1);
+    const res = spawnSync(process.execPath, [path.join(__dirname, 'context-pack.mjs'), ...ctxArgs], {
+      cwd: rootDir,
+      stdio: 'inherit',
+    });
+    process.exit(res.status ?? 0);
+  }
+
+  const healIdx = args.indexOf('--heal-action');
+  if (healIdx !== -1) {
+    const mode = args[healIdx + 1] || 'dry-run';
+    const extraHealArgs = args.slice(healIdx + 2);
+    const healCliArgs = mode === 'apply' ? ['--apply', ...extraHealArgs] : ['--dry-run', ...extraHealArgs];
+    const res = spawnSync(process.execPath, [path.join(__dirname, 'heal-drift.mjs'), ...healCliArgs], {
+      cwd: rootDir,
+      stdio: 'inherit',
+    });
+    if (res.status === 0 && mode === 'apply') {
+      clearResolvedFailureArtifacts(rootDir);
+      const updatedBp = buildOrchestrationBlueprint(rootDir);
+      console.log('\n' + formatCompactBlueprint(updatedBp));
+    }
+    process.exit(res.status ?? 0);
+  }
+
+  if (args.includes('--ci-init')) {
+    const ciRes = ensureCiPipelineConfigured(rootDir);
+    console.log(`CI     | ${ciRes.status} -> ${ciRes.file}`);
+    const updatedBp = buildOrchestrationBlueprint(rootDir);
+    console.log(formatCompactBlueprint(updatedBp));
+    process.exit(0);
+  }
+
+  if (args.includes('--verify')) {
+    const isFast = args.includes('--fast');
+    const vArgs = isFast ? ['--fast'] : [];
+    const res = spawnSync(process.execPath, [path.join(__dirname, 'verify-fast.mjs'), ...vArgs], {
+      cwd: rootDir,
+      stdio: 'inherit',
+    });
+    process.exit(res.status ?? 0);
+  }
+
+  if (args.includes('--bootstrap')) {
+    let url = '';
+    let name = '';
+    let reset = args.includes('--reset');
+    let discoverShards = args.includes('--discover-shards');
+    let maxShards = 6;
+    let filterPattern = '';
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--url' && args[i + 1]) url = args[++i];
+      else if (args[i].startsWith('--url=')) url = args[i].slice('--url='.length);
+      else if (args[i] === '--name' && args[i + 1]) name = args[++i];
+      else if (args[i].startsWith('--name=')) name = args[i].slice('--name='.length);
+      else if (args[i] === '--max-shards' && args[i + 1]) maxShards = Number(args[++i]);
+      else if (args[i] === '--filter' && args[i + 1]) filterPattern = args[++i];
+    }
+    if (url || name || reset) {
+      const initArgs = [path.join(__dirname, 'sync-skills.mjs'), 'init', rootDir];
+      if (reset) initArgs.push('--reset');
+      if (url) initArgs.push('--url', url);
+      if (name) initArgs.push('--name', name);
+      const initRes = spawnSync(process.execPath, initArgs, { cwd: rootDir, stdio: 'inherit' });
+      if (initRes.status !== 0) process.exit(initRes.status ?? 1);
+    }
+    if (discoverShards) {
+      discoverAndSeedLiveShards(rootDir, { baseUrl: url, maxShards, filterPattern })
+        .then((disc) => {
+          console.log(
+            `BOOT   | discovered:${disc.discoveredTotal} route(s) from ${disc.targetUrl} | seeded:${disc.createdShards.length} shard(s) (${disc.createdShards.map((s) => s.shardId).join(', ')})`
+          );
+          const updatedBp = buildOrchestrationBlueprint(rootDir);
+          console.log(formatCompactBlueprint(updatedBp));
+          process.exit(0);
+        })
+        .catch((err) => {
+          console.error(`❌ orchestrate --bootstrap failed: ${err.message}`);
+          process.exit(1);
+        });
+    } else {
+      const updatedBp = buildOrchestrationBlueprint(rootDir);
+      console.log(formatCompactBlueprint(updatedBp));
+      process.exit(0);
+    }
+  } else {
   let squad = null;
   let jsonOut = false;
   let compactOut = false;
@@ -828,8 +1302,6 @@ Usage:
       process.exit(1);
     }
   }
-
-  const rootDir = process.cwd();
 
   if (loopMode) {
     runOrchestratorLoop(rootDir, {
@@ -895,4 +1367,6 @@ Usage:
       }
     }
   }
+  }
 }
+

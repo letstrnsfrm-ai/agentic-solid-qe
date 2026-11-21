@@ -149,6 +149,73 @@ const ALLOWED_EXPECT_PATCH_FIELDS = new Set([
   'description',
 ]);
 
+export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = false } = {}) {
+  if (!Array.isArray(setData) || setData.length === 0) return [];
+  const dataDir = path.join(rootDir, 'src/data');
+  const builderFiles = fs.existsSync(dataDir)
+    ? fs
+        .readdirSync(dataDir)
+        .filter((f) => f.endsWith('.builder.ts'))
+        .map((f) => path.join(dataDir, f))
+    : [];
+  const applied = [];
+
+  for (const item of setData) {
+    const m = String(item.ref || '').match(/^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?:\(\))?\.([A-Za-z_][A-Za-z0-9_]*)$/);
+    if (!m) {
+      throw new Error(`Invalid --set-data reference '${item.ref}'. Expected 'BuilderClass.method().property=value'.`);
+    }
+    const [, builderClass, methodName, propName] = m;
+    if (/(?:password|passcode|secret|token|api[_-]?key|ssn|cvv|pin|otp)/i.test(propName)) {
+      throw new Error(`Security Error: Refusing to write sensitive property '${propName}' via --set-data. Use environment variables.`);
+    }
+    const serializedVal = JSON.stringify(String(item.value ?? ''));
+    let targetFile = builderFiles.find((f) => fs.readFileSync(f, 'utf8').includes(`class ${builderClass}`));
+    if (!targetFile) {
+      const kebab = builderClass
+        .replace(/Builder$/, '')
+        .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+        .toLowerCase();
+      targetFile = path.join(dataDir, `${kebab}.builder.ts`);
+      if (!dryRun) {
+        fs.mkdirSync(dataDir, { recursive: true });
+        fs.writeFileSync(
+          targetFile,
+          `/**\n * Typed Data Builder (DIP).\n */\nexport class ${builderClass} {\n  static ${methodName}() {\n    return {\n      ${propName}: ${serializedVal},\n    };\n  }\n}\n`,
+          'utf8'
+        );
+      }
+      applied.push({ builderClass, methodName, propName, file: path.relative(rootDir, targetFile) });
+      continue;
+    }
+
+    let content = fs.readFileSync(targetFile, 'utf8');
+    const methodRe = new RegExp(`(static\\s+${methodName}\\s*\\([^)]*\\)[^{]*\\{\\s*return\\s*\\{)([\\s\\S]*?)(\\n\\s*\\};)`);
+    const mm = content.match(methodRe);
+    if (mm) {
+      const propRe = new RegExp(`(\\b${propName}\\s*:\\s*)(?:'[^']*'|\"[^\"]*\")(,?)`);
+      if (propRe.test(mm[2])) {
+        const updatedBody = mm[2].replace(propRe, (_, p1, p2) => `${p1}${serializedVal}${p2}`);
+        content = content.replace(methodRe, (_, m1, _m2, m3) => `${m1}${updatedBody}${m3}`);
+      } else {
+        const sep = mm[2].trimEnd().endsWith(',') || mm[2].trim() === '' ? '' : ',';
+        content = content.replace(
+          methodRe,
+          (_, m1, m2, m3) => `${m1}${m2}${sep}\n      ${propName}: ${serializedVal},${m3}`
+        );
+      }
+    } else {
+      const newMethod = `\n  static ${methodName}() {\n    return {\n      ${propName}: ${serializedVal},\n    };\n  }\n`;
+      content = content.replace(/\}\s*$/, `${newMethod}}\n`);
+    }
+    if (!dryRun) {
+      fs.writeFileSync(targetFile, content, 'utf8');
+    }
+    applied.push({ builderClass, methodName, propName, file: path.relative(rootDir, targetFile) });
+  }
+  return applied;
+}
+
 export function patchTape(
   rootDir,
   scenarioId,
@@ -162,6 +229,7 @@ export function patchTape(
     setExpects = [],
     addExpects = [],
     removeExpects = [],
+    setData = [],
     dryRun = false,
   } = {}
 ) {
@@ -236,7 +304,8 @@ export function patchTape(
   }
 
   const res = writeValidatedTape(rootDir, safeId, updated, { dryRun });
-  return { ...res, tape: updated };
+  const dataUpdates = applyBuilderDataOverrides(rootDir, setData, { dryRun });
+  return { ...res, tape: updated, dataUpdates };
 }
 
 function parseKeyVal(raw) {
@@ -307,7 +376,7 @@ if (isMain) {
     } else if (sub === 'patch') {
       const id = args[1];
       if (!id) throw new Error('Usage: npx cortex tape patch <scenarioId> [options]');
-      const opts = {
+        const opts = {
         addTags: [],
         removeTags: [],
         setSteps: [],
@@ -315,6 +384,7 @@ if (isMain) {
         setExpects: [],
         addExpects: [],
         removeExpects: [],
+        setData: [],
         dryRun,
       };
       for (let i = 2; i < args.length; i++) {
@@ -324,7 +394,10 @@ if (isMain) {
         else if (a === '--add-tag' && args[i + 1]) opts.addTags.push(args[++i]);
         else if (a === '--remove-tag' && args[i + 1]) opts.removeTags.push(args[++i]);
         else if (a === '--remove-step' && args[i + 1]) opts.removeSteps.push(Number(args[++i]));
-        else if (a === '--set-step' && args[i + 1] && args[i + 2]) {
+        else if (a === '--set-data' && args[i + 1]) {
+          const kv = parseKeyVal(args[++i]);
+          opts.setData.push({ ref: kv.field, value: kv.value });
+        } else if (a === '--set-step' && args[i + 1] && args[i + 2]) {
           const stepIndex = Number(args[++i]);
           const kv = parseKeyVal(args[++i]);
           opts.setSteps.push({ stepIndex, ...kv });

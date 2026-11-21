@@ -107,7 +107,10 @@ const tapes = tapeFiles.map((f) => {
   try {
     const data = JSON.parse(fs.readFileSync(f, 'utf8'));
     const scenarioId = data.scenarioId || path.basename(f, '.json');
-    const matchingSpec = specsWithContent.find((s) => s.rawContent.includes(scenarioId));
+    const scenarioIdRe = new RegExp(`(?<![a-z0-9-])${String(scenarioId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9-])`);
+    const matchingSpec =
+      specsWithContent.find((s) => path.basename(s.file, '.spec.ts') === scenarioId) ||
+      specsWithContent.find((s) => scenarioIdRe.test(s.rawContent));
 
     const requiredSessions = [];
     if (data.persona?.storageStatePath) {
