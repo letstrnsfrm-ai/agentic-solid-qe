@@ -1,19 +1,50 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.45.0",
+  "latestVersion": "0.47.1",
   "releases": [
+    {
+      "version": "0.47.1",
+      "date": "2026-11-21",
+      "highlights": [
+        "Release Tag & Manifest Governance Gate (`audit-solid.mjs` + `CHANGELOG.json`): Aligned `package.json`, `CHANGELOG.json`, and `README.md` with Git tags (`v0.45.0` -> `v0.47.1`) and added a deterministic Git semver tag drift guard in `audit:solid` so `package.json` can never lag behind the highest repository semver tag.",
+        "Unified Stage 2/3/4 Orchestrator Maturity & Handoff Advisories (`orchestrate.mjs` + `analyze-coverage.mjs`): Synchronized Stage 2 (Persona, Boundary & Resilience) and Stage 3 (Enterprise Wizards, APIs & Handoffs) maturity progression in `npx cortex orchestrate` with non-blocking `gatePayload`/`GATE_OPTIONS` (including `--tape clone|patch` variants and `handoffRecommendations` for `>= 10`-step tapes) while keeping `--loop` auto-drain non-blocking.",
+        "Legacy Rename Pruning & Security Hardening (`tape-cli.mjs`, `orchestrate.mjs`, `sync-skills.mjs`): Removed duplicate legacy `.claude/commands/master-orchestrator.md` and `.github/prompts/master-orchestrator.prompt.md` so adopter upgrades auto-prune them, added `FORBIDDEN_IDENTIFIERS` prototype-pollution protection to `cortex tape patch --set-data`, switched `cortex tape list` to exact word-boundary spec matching, and hardened the `--ci-init` fallback workflow with SHA-pinned actions and `--ignore-scripts`.",
+        "Token Headroom & Environment-Resilient Verification (`02-solid-architect`, `agent-browser`, `03-drift-healer`, `self-test.mjs`): Trimmed near-ceiling `SKILL.md` files to comfortable `< 470`-token budgets and hardened `self-test.mjs` when `node_modules/.bin` is absent."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.47.1 unified Stage 2/3/4 orchestrator advisories, security hardening, and automatic pruning of legacy `master-orchestrator` command files.",
+        "Run `npx cortex orchestrate --loop --compact` to inspect Stage 2/3 variant and handoff recommendations via `GATE_OPTIONS`."
+      ]
+    },
+    {
+      "version": "0.47.0",
+      "date": "2026-11-21",
+      "highlights": [
+        "Renamed `00-master-orchestrator` Skill to `agentic-solid-qe` (`/agentic-solid-qe`): Unified the primary entry-point skill ID with the repository and CLI identity across `.agents/skills/agentic-solid-qe/`, `.claude/commands/agentic-solid-qe.md`, `.github/prompts/agentic-solid-qe.prompt.md`, `AGENTS.md`, and `.github/copilot-instructions.md`."
+      ],
+      "nextActions": [
+        "Invoke `/agentic-solid-qe` (or `npx cortex orchestrate --loop --compact`) as the single entry point for all QE workflows."
+      ]
+    },
+    {
+      "version": "0.46.0",
+      "date": "2026-11-21",
+      "highlights": [
+        "Unified Single-Entry-Point Orchestrator Routing (`npx cortex orchestrate`): Routed `--loop`, `--bootstrap --discover-shards`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, and `--verify` through `orchestrate.mjs` with structured `gatePayload` and `GATE_OPTIONS`.",
+        "Stage 0 Live Route Discovery & Explore-to-Compile Builder Hydration: Added `discoverAndSeedLiveShards` (`--bootstrap --discover-shards`), `--tape patch --set-data` Data Builder overrides, and automatic non-sensitive recorded value hydration during `compile-tape.mjs`."
+      ],
+      "nextActions": [
+        "Use `npx cortex orchestrate --bootstrap --discover-shards` on new target URLs to auto-discover top-level feature shards."
+      ]
+    },
     {
       "version": "0.45.0",
       "date": "2026-11-21",
       "highlights": [
-        "Unified `agentic-solid-qe` Single Entry Point Skill (`npx cortex orchestrate`): Renamed `00-master-orchestrator` to `agentic-solid-qe` (`/agentic-solid-qe`) and routed all lifecycle commands and human-gate questions through `npx cortex orchestrate` (`--loop`, `--bootstrap`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, `--verify`) with structured `gatePayload` and `GATE_OPTIONS`.",
-        "Stage 0 Live Route Discovery & Empty-Repo Guard (`--bootstrap --discover-shards`): Prevents empty initialized repos from prematurely claiming Stage 4 readiness, discovers live top-level application routes from `<url>`, and scaffolds `.agents/domain/shards/*.md` + `domain-memory.md`.",
-        "Live Explore-to-Compile Schema & Builder Hydration (`explore-session.mjs` + `compile-tape.mjs`): Auto-normalizes `inputDataRef`, prepends initial sub-route `goto` steps, converts literal assertion strings into Data Builder references, resolves bare Component class names in `expectedStates`, defaults P0 tags (`@p0`, `@smoke`), and hydrates synthesized `src/data/*.builder.ts` with non-sensitive recorded values.",
-        "Zero-Raw-JSON Data Builder Patching (`--tape patch --set-data`), Exact Spec Matching & Adopter `bin.cortex` Linking: Added `--set-data <Builder.fn().prop=val>` for Stage 2 boundary variants, eliminated substring spec collisions on cloned tapes, fixed Playwright diff-style assertion classification in `heal-drift.mjs`, and ensured `npx cortex` resolves locally in all adopter repos."
+        "3-Layer Shared-Module Blast-Radius Protection (`impact-graph.mjs`, `verify-fast.mjs`, `heal-drift.mjs`, `audit-solid.mjs`): Added fixture-aware TypeScript import & blast-radius analysis (`npx cortex impact`), auto-escalation of affected specs in `verify:fast`, transactional shared-component rollback in `cortex heal --apply --verify-affected`, and Cross-Squad Domain Isolation checks in `audit:solid`."
       ],
       "nextActions": [
-        "Run `npx cortex upgrade` to sync v0.45.0 unified `agentic-solid-qe` single-entry-point skill routing and structured human gates.",
-        "Drive every E2E lifecycle phase via `/agentic-solid-qe` (`npx cortex orchestrate` with `--loop --compact`, `--bootstrap --discover-shards`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--verify`)."
+        "Run `npx cortex impact --file <path>` or `npx cortex context --file <path>` before modifying shared components or builders."
       ]
     },
     {

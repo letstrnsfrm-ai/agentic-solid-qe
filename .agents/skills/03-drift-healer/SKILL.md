@@ -7,12 +7,12 @@ description: Diagnoses failing Playwright .spec.ts tests against live deployed e
 
 ## 1. Zero-Prompt Auto-Start: Compact Failure Isolation
 When invoked as `/03-drift-healer`:
-1. Run `npm run verify:fast -- --specs <spec>` (compact failure-only output) and `npx cortex context --spec <spec>` (`≤ 400` tok) to inspect the failing spec, its SOLID component locators, shard, and linked tape in 1 call.
-2. Run `npx cortex heal [--spec <spec>]` (compact dry-run triage card) to score live/error-context snapshot candidates before opening a browser.
+1. Run `npm run verify:fast -- --specs <spec>` and `npx cortex context --spec <spec>` (`≤ 400` tok) to inspect the failing spec, SOLID component locators, shard, and tape in 1 call.
+2. Run `npx cortex heal [--spec <spec>]` (compact dry-run triage card) to score snapshot candidates before opening a browser.
 
 ## 2. Live `agent-browser` Differential Inspection (If Needed)
 1. Attach to the failing route (`npm run test:explore -- <spec>`) via `npx agent-browser --session heal --cdp 9222 snapshot -i`, or `npx agent-browser --session heal open <baseUrl>`.
-2. Capture `.agent-browser/page-heal.yml`, `eval "location.href"`, `console`, and `errors`, then compare against the tape summary (`npx cortex tape show <id>`).
+2. Capture `.agent-browser/page-heal.yml`, `eval "location.href"`, `console`, and `errors`, then compare against `npx cortex tape show <id>`.
 
 ## 3. Root-Cause Classification & Action
 - **App Regression:** Never weaken `expect()`. Capture `screenshot defects/evidence.png --annotate`, log `defects/DEFECT-<timestamp>.md`, mark `test.fixme()`/`test.fail()`, pause for review.

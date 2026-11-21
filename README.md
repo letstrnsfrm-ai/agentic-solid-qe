@@ -2,13 +2,13 @@
 
 > **Zero-API-key, token-efficient agent skill framework** bridging **Autonomous Live Exploration** (`agent-browser` + `cortex explore`), **Deterministic SOLID Playwright TypeScript Compilation** (`cortex compile`), **Live Drift Healing** (`cortex heal`), and **2,000-Test Enterprise Java/C# Legacy Migration** (`cortex wave`).
 >
-> Works natively across **Antigravity, Claude Code, GitHub Copilot, Cursor, and Windsurf** · **MIT Licensed** · **Current Release: `v0.45.0`**
+> Works natively across **Antigravity, Claude Code, GitHub Copilot, Cursor, and Windsurf** · **MIT Licensed** · **Current Release: `v0.47.1`**
 
 ---
 
 ## Why `agentic-solid-qe`?
 
-| Problem in Ad-Hoc AI Test Automation | `agentic-solid-qe` (`v0.45.0`) Solution |
+| Problem in Ad-Hoc AI Test Automation | `agentic-solid-qe` (`v0.47.1`) Solution |
 | :--- | :--- |
 | **Token Burn & Context Rot** (monolithic prompts, noisy DOM dumps, 10+ file-read turns) | **5-Pillar Token Efficiency:** `AGENTS.md` (528 tok), `≤ 500`-tok `SKILL.md`, `≤ 800`-tok topic references, `≤ 400`-tok single-call `cortex context` packs, `cortex tape` CLI, pruned `-i` browser deltas, and failure-only `verify:fast` reporting. |
 | **Brittle, Unmaintainable Generated Specs** (inline selectors, `waitForTimeout`, `expect()` everywhere) | **Deterministic SOLID Compiler (`cortex compile`):** Enforces `≤ 150`-line SRP Components (`IdentifiableComponent`, `WizardStepContract`, `StateSeederContract`, `FlowContract`), zero `expect()` in `src/`, Data Builders (DIP), and business-domain `test.step()`. |
@@ -18,11 +18,11 @@
 
 ---
 
-## Measured Token-Efficiency Benchmarks (`v0.45.0`)
+## Measured Token-Efficiency Benchmarks (`v0.47.1`)
 
 Measured with the deterministic token estimator shared by [`audit:solid`](scripts/audit-solid.mjs) and [`scripts/lib/cli-output.mjs`](scripts/lib/cli-output.mjs):
 
-| Surface | Before | `v0.45.0` | Reduction |
+| Surface | Before | `v0.47.1` | Reduction |
 | :--- | ---: | ---: | ---: |
 | `AGENTS.md` *(injected on every turn)* | 2,477 tok | **528 tok** | **-78.7%** |
 | `.github/copilot-instructions.md` *(zero eager reference preloads)* | 922 tok | **460 tok** | **-50.1%** |
@@ -63,7 +63,7 @@ flowchart LR
 
 ```bash
 # Requires Node.js >= 20.12.0
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.45.0 init . \
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.47.1 init . \
   --url https://your-app-url.com \
   --name "Your App"
 

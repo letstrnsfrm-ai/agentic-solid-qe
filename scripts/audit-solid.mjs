@@ -114,6 +114,32 @@ if (fs.existsSync(changelogFile)) {
           `[Release Version Drift] package.json version (${rootPkg.version}) !== CHANGELOG.json latestVersion (${changelog.latestVersion}). Keep framework manifests aligned.`
         );
       }
+      if (rootPkg?.name === 'agentic-solid-qe' && rootPkg?.version && fs.existsSync(path.join(ROOT, '.git'))) {
+        try {
+          const tagRes = spawnSync('git', ['tag', '--list', 'v*'], { cwd: ROOT, encoding: 'utf8', timeout: 3000 });
+          if (tagRes.status === 0 && tagRes.stdout) {
+            const parseSemver = (v) => {
+              const m = String(v || '').trim().match(/^v?(\d+)\.(\d+)\.(\d+)$/);
+              return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+            };
+            const cmpSemver = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+            const pkgVer = parseSemver(rootPkg.version);
+            if (pkgVer) {
+              for (const rawTag of tagRes.stdout.split(/\r?\n/)) {
+                const tagVer = parseSemver(rawTag);
+                if (tagVer && cmpSemver(tagVer, pkgVer) > 0) {
+                  violations.push(
+                    `[Release Version Drift] Git tag '${rawTag.trim()}' is newer than package.json version (${rootPkg.version}). Bump package.json and CHANGELOG.json before or when tagging releases.`
+                  );
+                  break;
+                }
+              }
+            }
+          }
+        } catch {
+          /* ignore if git tag query unavailable */
+        }
+      }
     }
   } catch {
     violations.push('[Release Version Drift] CHANGELOG.json is invalid JSON.');
