@@ -56,6 +56,7 @@ const MAX_SKILL_TOKENS = 500;
 const MAX_DOMAIN_LINES = 150;
 
 const CORE_SKILL_IDS = new Set([
+  'agentic-solid-qe',
   '00-master-orchestrator',
   'master-orchestrator',
   '00-env-bootstrap',

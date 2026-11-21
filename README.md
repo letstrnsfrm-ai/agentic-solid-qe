@@ -43,7 +43,7 @@ Measured with the deterministic token estimator shared by [`audit:solid`](script
 
 ```mermaid
 flowchart LR
-  H["Human QE Goal"] --> M["/00-master-orchestrator<br/>npx cortex orchestrate --loop --compact"]
+  H["Human QE Goal"] --> M["/agentic-solid-qe<br/>npx cortex orchestrate --loop --compact"]
   M --> B["--bootstrap --discover-shards<br/>(Stage 0 Live Route Shards)"]
   B --> CTX["--context<br/>(<=400 tok pack)"]
   CTX --> E["--explore start|batch|finish<br/>(--compile --verify)"]
@@ -78,7 +78,7 @@ npx cortex orchestrate --bootstrap --discover-shards
 
 ### 2. Copy-Paste Prompt for Your AI Coding Agent
 
-> *"Read `AGENTS.md` and invoke `/00-master-orchestrator`. Route all commands and questions through `npx cortex orchestrate` (`--loop --compact`, `--bootstrap --discover-shards`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--verify`) to advance our E2E coverage 1 test at a time."*
+> *"Read `AGENTS.md` and invoke `/agentic-solid-qe`. Route all commands and questions through `npx cortex orchestrate` (`--loop --compact`, `--bootstrap --discover-shards`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--verify`) to advance our E2E coverage 1 test at a time."*
 
 ### 3. Day-2 Non-Destructive Upgrades
 
@@ -117,7 +117,7 @@ npx cortex upgrade --apply-patches   # Opt-in config patch apply
 
 | Skill ID | Slash Command | Responsibility |
 | :--- | :--- | :--- |
-| `00-master-orchestrator` | `/00-master-orchestrator` | Single entry point, Smart Auto-Drain loop, 5-Stage Coverage Ladder, onboarding/upgrades & optional subagent isolation. |
+| `agentic-solid-qe` | `/agentic-solid-qe` | Single entry point, Smart Auto-Drain loop, 5-Stage Coverage Ladder, onboarding/upgrades & optional subagent isolation. |
 | `00-env-bootstrap` | `/00-env-bootstrap` | Configures `baseUrl`, captures reusable `.auth/<persona>.json` (`storageState`) for SSO/MFA apps, and seeds route shards. |
 | `01-cli-explorer` | `/01-cli-explorer` | Live `cortex explore` / `agent-browser` recon, multi-oracle checks (functional, API, boundary, a11y, visual), defects & Session Tapes. |
 | `02-solid-architect` | `/02-solid-architect` | Compiles 1 Session Tape at a time into SOLID TypeScript (`src/` + `tests/`) and heals until `verify:fast` / `verify` is green. |
@@ -131,7 +131,7 @@ npx cortex upgrade --apply-patches   # Opt-in config patch apply
 ## 4 Onboarding Tracks
 
 ### Track 1: Greenfield / Single-App Coverage (5-Stage Ladder)
-Advance coverage **1 test at a time** via `/00-master-orchestrator`:
+Advance coverage **1 test at a time** via `/agentic-solid-qe`:
 - **Stage 0 (Foundation):** `init` + `00-env-bootstrap` (`baseUrl`, `.auth/<persona>.json`, route shards).
 - **Stage 1 (`@p0` Baseline):** 1 `happy-path-baseline` vertical slice per uncovered shard (`cortex explore` ➔ `cortex compile --apply` ➔ `verify:fast`).
 - **Stage 2 (`@smoke`/`@regression`):** Reuse existing Pages/Components/Builders for `multi-persona-auth`, `boundary-analysis`, `state-interruption`, and `accessibility` via `cortex tape clone|patch`.

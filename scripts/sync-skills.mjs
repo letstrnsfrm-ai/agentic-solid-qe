@@ -1564,5 +1564,5 @@ const configDrift = command === 'sync' ? detectCustomizableConfigDrift() : [];
 printUpgradeSummary(configDrift);
 
 console.log(
-  `\n✅ Agentic-SOLID-QE (${command}${dryRun ? ' --dry-run' : ''}) complete! Next steps: run 'npm install && npx playwright install chromium', then invoke '/00-master-orchestrator' (or 'npx cortex orchestrate').\n`
+  `\n✅ Agentic-SOLID-QE (${command}${dryRun ? ' --dry-run' : ''}) complete! Next steps: run 'npm install && npx playwright install chromium', then invoke '/agentic-solid-qe' (or 'npx cortex orchestrate').\n`
 );

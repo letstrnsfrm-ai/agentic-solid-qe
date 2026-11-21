@@ -1,6 +1,6 @@
 # GitHub Copilot Instructions — `agentic-solid-qe`
 
-Route all Quality Engineering tasks through `.agents/skills/00-master-orchestrator/SKILL.md` (`/00-master-orchestrator`).
+Route all Quality Engineering tasks through `.agents/skills/agentic-solid-qe/SKILL.md` (`/agentic-solid-qe`).
 
 ## Token-Efficient Execution Rules
 1. **Single Entry Point (`npx cortex orchestrate`):** Run `npx cortex orchestrate --loop --compact` to diagnose Stage 0–4 maturity, auto-drain safe steps, and surface structured gates (`GATE_OPTIONS`). Route all commands via `npx cortex orchestrate` (`--bootstrap`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, `--verify`).
@@ -8,7 +8,7 @@ Route all Quality Engineering tasks through `.agents/skills/00-master-orchestrat
 3. **Lazy-load skills & references:** Read only the active `SKILL.md` (`≤ 500` tok) and open `references/*.md` (`≤ 800` tok) *only* when needed.
 
 ## Skill Map (`.agents/skills/`)
-- `00-master-orchestrator/SKILL.md`: Unified entry point, Smart Auto-Drain, structured gates, onboarding & upgrades.
+- `agentic-solid-qe/SKILL.md`: Unified entry point, Smart Auto-Drain, structured gates, onboarding & upgrades.
 - `00-env-bootstrap/SKILL.md`: `baseUrl`, `.auth/<persona>.json`, route shards (`--bootstrap --discover-shards`).
 - `01-cli-explorer/SKILL.md`: `--explore` / `agent-browser` recon, oracles, defects, Session Tapes.
 - `02-solid-architect/SKILL.md`: `--loop` / `cortex compile <id> --apply` (`≤ 150`-line components, zero `expect()` in `src/`, builders + fixtures + `test.step()`).

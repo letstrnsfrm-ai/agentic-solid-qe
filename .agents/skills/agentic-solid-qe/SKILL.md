@@ -1,9 +1,9 @@
 ---
-name: 00-master-orchestrator
+name: agentic-solid-qe
 description: Autonomous single entry point for Agentic-SOLID-QE. Human gives direction and reviews; the agent executes diagnostics, test runs, coverage growth, compilation, drift healing, and CI setup via sub-skills.
 ---
 
-# Skill 00-Master: Autonomous QE Orchestrator
+# Skill `agentic-solid-qe`: Autonomous QE Orchestrator
 
 > **Contract:** Human = **direction & review**. Agent = **autonomous executor**, pausing only at human gates (`references/human-gates-and-reporting.md`).
 

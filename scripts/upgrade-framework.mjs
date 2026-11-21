@@ -323,7 +323,7 @@ function runApplyPatches(targetRoot, { dryRun = false, force = false } = {}) {
     } else {
       remaining++;
       console.log(
-        `⏭️  Skipped manual/AI-merge patch: ${p.targetRel} (run 'npx cortex upgrade --diff' to inspect, '--apply-patches --force' to replace, or ask /00-master-orchestrator to merge)`
+        `⏭️  Skipped manual/AI-merge patch: ${p.targetRel} (run 'npx cortex upgrade --diff' to inspect, '--apply-patches --force' to replace, or ask /agentic-solid-qe to merge)`
       );
     }
   }
