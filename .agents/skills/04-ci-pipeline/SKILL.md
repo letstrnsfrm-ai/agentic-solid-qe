@@ -19,5 +19,5 @@ When invoked as `/04-ci-pipeline`, immediately execute:
 ## 3. Sharded CI/CD Pipeline Generation & Verification
 1. Inspect or scaffold `.github/workflows/playwright-ci.yml` or `.azure-pipelines/playwright-ci.yml` (`references/ci-templates.md`) with:
    - Pre-flight quality gates (`npm run typecheck`, `npm run audit:solid`, `npm run validate:tapes`).
-   - Affected-PR smoke routing (`--only-changed`), sharded `--shard` matrix with `PW_BLOB_REPORT=1`, and `playwright merge-reports --reporter=html`.
+   - Fixture-aware affected-PR routing (`npx cortex impact --base origin/main --specs-only` / `npx cortex verify --affected --base origin/main`), sharded `--shard` matrix with `PW_BLOB_REPORT=1`, and `playwright merge-reports --reporter=html`.
 2. Run `npm run verify` autonomously and present the CI workflow summary for human review.

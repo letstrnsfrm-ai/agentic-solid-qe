@@ -4138,3 +4138,167 @@ test('38. Token-Efficiency 5-Pillar Suite: static budgets, compact CLI/failure s
   }
 });
 
+test('3-Layer Shared-Module Protection: fixture-aware impact graph, transactional heal rollback & cross-squad boundary audit', async () => {
+  const { buildImpactGraph, analyzeImpact, formatCompactImpact } = await import('./impact-graph.mjs');
+  const { buildContextPack, formatContextPack } = await import('./context-pack.mjs');
+  const { analyzeAndHealDrift, healDriftWithGuardrail } = await import('./heal-drift.mjs');
+
+  // 1. Fixture-aware precision on the real repo (no false-positive explosion via app.fixture.ts)
+  const repoGraph = buildImpactGraph(REPO_ROOT);
+  const checkoutImpact = analyzeImpact(REPO_ROOT, { files: ['src/pages/checkout.page.ts'], graph: repoGraph });
+  assert.deepEqual(checkoutImpact.affectedSpecs, ['tests/e2e-checkout.spec.ts']);
+
+  const overlayImpact = analyzeImpact(REPO_ROOT, { files: ['src/shared/ui/overlay-handler.ts'], graph: repoGraph });
+  assert.equal(overlayImpact.highestRisk, 'high');
+  assert.ok(overlayImpact.affectedSpecs.includes('tests/auth-and-inventory.spec.ts'));
+  assert.ok(overlayImpact.affectedSpecs.includes('tests/e2e-checkout.spec.ts'));
+  assert.match(formatCompactImpact(overlayImpact), /SHARED fanIn=2/);
+
+  // 2. Context pack surfaces IMPACT | line for --file and --spec within token budget
+  const filePack = buildContextPack(REPO_ROOT, { file: 'src/pages/login.page.ts' });
+  const filePackTxt = formatContextPack(filePack, { maxTokens: 400 });
+  assert.match(filePackTxt, /IMPACT \| src\/pages\/login\.page\.ts/);
+
+  // 3. Isolated sandbox: test smart cap, @regression detection, transactional rollback & cross-squad boundary
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-impact-guard-'));
+  try {
+    const syncRes = runNode(path.join(REPO_ROOT, 'scripts/sync-skills.mjs'), ['init', tmpRoot, '--demo'], REPO_ROOT);
+    assert.equal(syncRes.status, 0, syncRes.stderr);
+
+    // Add a shared header component consumed by 3 specs (1 @smoke, 2 @regression-only)
+    fs.mkdirSync(path.join(tmpRoot, 'src/shared/components'), { recursive: true });
+    const sharedNavPath = path.join(tmpRoot, 'src/shared/components/global-nav.component.ts');
+    const origSharedNav = `import type { Locator, Page } from '@playwright/test';
+import type { IdentifiableComponent } from '@contracts/component.contract';
+
+export class GlobalNavComponent implements IdentifiableComponent {
+  readonly root: Locator;
+  readonly checkoutBtn: Locator;
+
+  constructor(page: Page) {
+    this.root = page.locator('nav');
+    this.checkoutBtn = this.root.getByRole('button', { name: 'Old Checkout' });
+  }
+}
+`;
+    fs.writeFileSync(sharedNavPath, origSharedNav, 'utf8');
+
+    // Create 3 specs consuming GlobalNavComponent (1 smoke, 2 regression)
+    for (const [name, tag] of [
+      ['nav-smoke.spec.ts', '@smoke'],
+      ['nav-reg-a.spec.ts', '@regression'],
+      ['nav-reg-b.spec.ts', '@regression'],
+    ]) {
+      fs.writeFileSync(
+        path.join(tmpRoot, 'tests', name),
+        `import { test, expect } from '@fixtures/app.fixture';
+import { UserBuilder } from '@data/user.builder';
+import { GlobalNavComponent } from '@shared/components/global-nav.component';
+
+test('nav check ${tag}', async ({ page }) => {
+  await test.step('Verify nav', async () => {
+    const nav = new GlobalNavComponent(page);
+    expect(UserBuilder.standardUser().username).toBeTruthy();
+    await expect(nav.checkoutBtn).toBeVisible();
+  });
+});
+`,
+        'utf8'
+      );
+    }
+
+    // Impact analysis separates smoke vs regression and enforces maxFastSpecs cap
+    const capImpact = analyzeImpact(tmpRoot, {
+      files: ['src/shared/components/global-nav.component.ts'],
+      maxFastSpecs: 2,
+    });
+    assert.equal(capImpact.affectedSpecs.length, 3);
+    assert.deepEqual(capImpact.affectedSmokeSpecs, ['tests/nav-smoke.spec.ts']);
+    assert.deepEqual(capImpact.affectedRegressionSpecs, ['tests/nav-reg-a.spec.ts', 'tests/nav-reg-b.spec.ts']);
+    assert.equal(capImpact.exceedsFastCap, true);
+    assert.equal(capImpact.deferredSpecs.length, 2);
+    assert.match(formatCompactImpact(capImpact), /HIGH BLAST RADIUS/);
+
+    // Drift healer: dry-run reports blastRadius; --apply without --verify-affected/--force-shared blocks shared mutation
+    const snapDir = path.join(tmpRoot, '.agent-browser');
+    fs.mkdirSync(snapDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(snapDir, 'page-heal.yml'),
+      `- button "Checkout Now" [ref=e5]\n`,
+      'utf8'
+    );
+    const errMsg = `TimeoutError: locator.click: Timeout 5000ms exceeded.\nCall log:\n  - waiting for getByRole('button', { name: 'Old Checkout' })`;
+
+    const blockedRes = analyzeAndHealDrift(tmpRoot, {
+      spec: 'tests/nav-smoke.spec.ts',
+      error: errMsg,
+      apply: true,
+    });
+    assert.equal(blockedRes.status, 'blocked-shared-blast-radius');
+    assert.equal(blockedRes.blastRadius?.isShared, true);
+    assert.equal(blockedRes.blastRadius?.fanIn, 3);
+    assert.equal(fs.readFileSync(sharedNavPath, 'utf8'), origSharedNav, 'Shared component must remain untouched when blocked');
+
+    // Transactional heal with --verify-affected: fails verification -> automatically rolls back!
+    const rolledBackRes = await healDriftWithGuardrail(tmpRoot, {
+      spec: 'tests/nav-smoke.spec.ts',
+      error: errMsg,
+      apply: true,
+      verifyAffected: true,
+      verifyFn: async ({ specs }) => {
+        assert.equal(specs.length, 3, 'Transactional heal must verify all 3 affected specs');
+        return { ok: false, failedStage: { stage: 'playwrightTests', output: 'nav-reg-a.spec.ts failed' } };
+      },
+    });
+    assert.equal(rolledBackRes.status, 'rolled-back-regression');
+    assert.equal(rolledBackRes.rolledBack, true);
+    assert.equal(fs.readFileSync(sharedNavPath, 'utf8'), origSharedNav, 'Shared component must be restored on rollback');
+
+    // Transactional heal with passing verifier -> commits patch!
+    const healedRes = await healDriftWithGuardrail(tmpRoot, {
+      spec: 'tests/nav-smoke.spec.ts',
+      error: errMsg,
+      apply: true,
+      verifyAffected: true,
+      verifyFn: async () => ({ ok: true }),
+    });
+    assert.equal(healedRes.status, 'healed');
+    assert.equal(healedRes.rolledBack, false);
+    assert.match(fs.readFileSync(sharedNavPath, 'utf8'), /Checkout Now/);
+
+    // Cross-squad boundary violation in audit-solid.mjs
+    fs.mkdirSync(path.join(tmpRoot, 'src/domains/checkout/components'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'src/domains/billing/pages'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, 'src/domains/checkout/components/cart-total.component.ts'),
+      `import type { Locator, Page } from '@playwright/test';
+import type { IdentifiableComponent } from '@contracts/component.contract';
+
+export class CartTotalComponent implements IdentifiableComponent {
+  readonly root: Locator;
+  constructor(page: Page) { this.root = page.locator('.cart-total'); }
+}
+`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'src/domains/billing/pages/invoice.page.ts'),
+      `import type { Page } from '@playwright/test';
+import { CartTotalComponent } from '@domains/checkout/components/cart-total.component';
+
+export class InvoicePage {
+  readonly cartTotal: CartTotalComponent;
+  constructor(page: Page) { this.cartTotal = new CartTotalComponent(page); }
+}
+`,
+      'utf8'
+    );
+    const crossSquadAudit = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.notEqual(crossSquadAudit.status, 0, 'Expected audit-solid to fail on cross-squad import');
+    assert.match(crossSquadAudit.stdout + crossSquadAudit.stderr, /Cross-Squad Boundary/);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+

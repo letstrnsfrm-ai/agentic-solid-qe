@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { estimateTokens, TOKEN_BUDGETS } from './lib/cli-output.mjs';
+import { buildImpactGraph, inferSquadFromPath } from './impact-graph.mjs';
 
 const ROOT = process.cwd();
 const MAX_COMPONENT_LINES = 150;
@@ -875,6 +876,42 @@ if (fs.existsSync(pkgJsonPath)) {
   } catch {
     /* ignore malformed package.json */
   }
+}
+
+// 9. Audit Cross-Squad Domain Isolation & Shared-Module Promotion Advisories
+try {
+  const impactGraph = buildImpactGraph(ROOT);
+  for (const [consumerRel, imports] of impactGraph.fileImports.entries()) {
+    const consumerSquad = inferSquadFromPath(consumerRel);
+    if (!consumerSquad || consumerSquad === 'root' || consumerSquad === 'shared') continue;
+    if (filterSquad && consumerSquad !== filterSquad) continue;
+    for (const imp of imports) {
+      const targetSquad = inferSquadFromPath(imp.resolvedRel);
+      if (
+        targetSquad &&
+        targetSquad !== 'root' &&
+        targetSquad !== 'shared' &&
+        targetSquad !== consumerSquad
+      ) {
+        violations.push(
+          `[Cross-Squad Boundary] ${consumerRel} (squad '${consumerSquad}') imports internal module '${imp.resolvedRel}' from squad '${targetSquad}'. Promote shared modules to src/shared/ or src/contracts/ to prevent knock-on regressions.`
+        );
+      }
+    }
+  }
+
+  for (const node of Object.values(impactGraph.nodes)) {
+    if (node.file.startsWith('src/shared/') || node.file.startsWith('src/contracts/')) continue;
+    if (node.file.startsWith('src/fixtures/')) continue;
+    const domainSquads = node.affectedSquads.filter((s) => s !== 'root' && s !== 'shared');
+    if (domainSquads.length >= 2) {
+      warnings.push(
+        `[Shared Promotion Advisory] ${node.file} is consumed across ${domainSquads.length} squads (${domainSquads.join(', ')}, fanIn=${node.fanIn}). Consider promoting it to src/shared/ with explicit ownership.`
+      );
+    }
+  }
+} catch {
+  /* non-fatal if impact graph cannot be built */
 }
 
 if (warnings.length > 0) {

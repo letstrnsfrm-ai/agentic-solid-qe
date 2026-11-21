@@ -51,7 +51,8 @@ Usage:
   cortex wave [options]        2,000-test Squad Wave Factory, Wave-0 Seeders/Flows & HTML Parity Dashboard
   cortex graph                 Compile 3-Tier Federated Brain (.agents/domain/domain-graph.json)
   cortex map [--out <path>]    Generate interactive HTML System & Business Flow Map (reports/system-map.html)
-  cortex context [options]     Build single-call <=400-token Context Pack (--route/--squad/--tape/--spec)
+  cortex context [options]     Build single-call <=400-token Context Pack (--route/--squad/--tape/--spec/--file)
+  cortex impact [options]      Fixture-aware blast-radius & affected-spec analyzer (--file/--base/--specs-only)
   cortex tape <cmd> [args]     Compact Session Tape CLI (list | show | clone | patch) with v1 validation
   cortex gaps                  Run Coverage, Staleness & Traceability Analyzer
   cortex audit                 Run SOLID, Token Budget & Domain Shard Gate
@@ -63,6 +64,7 @@ const subcommandDelegateMap = {
   orchestrate: 'orchestrate.mjs',
   status: 'orchestrate.mjs',
   context: 'context-pack.mjs',
+  impact: 'impact-graph.mjs',
   tape: 'tape-cli.mjs',
   verify: 'verify-fast.mjs',
   upgrade: 'upgrade-framework.mjs',
@@ -1127,6 +1129,7 @@ const coreEnginePaths = [
   'CHANGELOG.json',
   'scripts/lib/cli-output.mjs',
   'scripts/context-pack.mjs',
+  'scripts/impact-graph.mjs',
   'scripts/tape-cli.mjs',
   'scripts/build-domain-graph.mjs',
   'scripts/build-system-map.mjs',

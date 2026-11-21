@@ -15,6 +15,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isCompactMode } from './lib/cli-output.mjs';
+import { getFileImpact } from './impact-graph.mjs';
+import { runFastVerify } from './verify-fast.mjs';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const HIGH_CONFIDENCE_THRESHOLD = 0.65;
@@ -576,6 +578,7 @@ export function scoreSnapshotCandidates(failingLocator, propertyName, snapshotNo
 function findMatchingComponentProperty(projectRoot, failingLocator, specPath) {
   const componentFiles = [
     ...walkFiles(path.join(projectRoot, 'src/components'), (n) => n.endsWith('.component.ts')),
+    ...walkFiles(path.join(projectRoot, 'src/shared/components'), (n) => n.endsWith('.component.ts') || n.endsWith('.ts')),
     ...walkFiles(path.join(projectRoot, 'src/domains'), (n) => n.endsWith('.component.ts')),
   ];
 
@@ -681,6 +684,11 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
 
   const componentMatch = findMatchingComponentProperty(projectRoot, failingLocator, specPath);
   const tapeMatch = findMatchingTape(projectRoot, specPath, failingLocator);
+  const blastRadius = componentMatch
+    ? getFileImpact(projectRoot, componentMatch.relPath, {
+        sharedThreshold: options.sharedThreshold,
+      })
+    : null;
 
   const candidates =
     rootCause.category === 'locator-drift'
@@ -703,6 +711,7 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
     componentMatch: componentMatch
       ? { file: componentMatch.relPath, property: componentMatch.propertyName, currentExpr: componentMatch.currentExpr }
       : null,
+    blastRadius,
     tapeMatch: tapeMatch ? { file: tapeMatch.relPath, scenarioId: tapeMatch.tape.scenarioId } : null,
     candidates: candidates.slice(0, 3).map((c) => ({
       role: c.node.role,
@@ -771,6 +780,17 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
 
   const cleanExpr = assertSafePlaywrightLocatorExpr(replacementExpr);
 
+  // Blast-radius protection: refuse blind in-place mutation of high-fan-in / shared modules
+  if (componentMatch && blastRadius?.isShared && !options.forceShared) {
+    const specFlag = specPath ? ` --spec ${specPath}` : '';
+    result.status = 'blocked-shared-blast-radius';
+    result.nextCommands = [
+      `npx cortex heal${specFlag} --apply --verify-affected`,
+      `npx cortex heal${specFlag} --apply --force-shared`,
+    ];
+    return result;
+  }
+
   if (componentMatch) {
     if (!isWithinDir(componentMatch.filePath, projectRoot)) {
       throw new Error(`Refusing to patch component outside project root: ${componentMatch.filePath}`);
@@ -816,21 +836,113 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
   return result;
 }
 
+/**
+ * Transactional drift healer with automatic rollback on knock-on regression.
+ * When `apply && verifyAffected` is set, snapshots touched files before patching,
+ * runs all affected specs (including @regression), and restores exact original
+ * file contents if any affected spec fails.
+ */
+export async function healDriftWithGuardrail(projectRoot, options = {}) {
+  if (!options.apply || !options.verifyAffected) {
+    return analyzeAndHealDrift(projectRoot, options);
+  }
+
+  const dryRun = analyzeAndHealDrift(projectRoot, { ...options, apply: false });
+  const backupFiles = new Map();
+  const snapshotIfExists = (relPath) => {
+    if (!relPath) return;
+    const abs = path.resolve(projectRoot, relPath);
+    if (isWithinDir(abs, projectRoot) && fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+      backupFiles.set(abs, fs.readFileSync(abs, 'utf8'));
+    }
+  };
+
+  if (dryRun.componentMatch?.file) snapshotIfExists(dryRun.componentMatch.file);
+  if (dryRun.tapeMatch?.file) snapshotIfExists(dryRun.tapeMatch.file);
+
+  const applied = analyzeAndHealDrift(projectRoot, {
+    ...options,
+    apply: true,
+    forceShared: true,
+  });
+
+  if (applied.status !== 'healed' || applied.appliedChanges.length === 0) {
+    return applied;
+  }
+
+  const affectedSpecs = new Set(applied.blastRadius?.affectedSpecs || []);
+  if (applied.specPath && applied.specPath.endsWith('.spec.ts')) {
+    affectedSpecs.add(applied.specPath.replace(/\\/g, '/').replace(/^\.\//, ''));
+  }
+  const targetSpecs = [...affectedSpecs].sort();
+
+  const verifyRes =
+    typeof options.verifyFn === 'function'
+      ? await options.verifyFn({ rootDir: projectRoot, specs: targetSpecs, applied })
+      : await runFastVerify({
+          rootDir: projectRoot,
+          fast: true,
+          specs: targetSpecs,
+          noAffected: true,
+          quiet: true,
+          compact: true,
+        });
+
+  if (!verifyRes?.ok) {
+    for (const [absPath, originalContent] of backupFiles.entries()) {
+      fs.writeFileSync(absPath, originalContent, 'utf8');
+    }
+    return {
+      ...applied,
+      status: 'rolled-back-regression',
+      rolledBack: true,
+      rolledBackFiles: [...applied.appliedChanges],
+      appliedChanges: [],
+      verifiedAffectedSpecs: targetSpecs,
+      verification: verifyRes,
+    };
+  }
+
+  return {
+    ...applied,
+    rolledBack: false,
+    verifiedAffectedSpecs: targetSpecs,
+    verification: verifyRes,
+  };
+}
+
 export function formatCompactHealResult(res) {
+  const cls = res.rootCause?.category || res.classification || 'unknown';
+  const spec = res.specPath || res.spec || '';
   const lines = [
-    `HEAL   | status=${res.status} | class=${res.classification || 'unknown'}${res.spec ? ` | spec=${res.spec}` : ''}`,
+    `HEAL   | status=${res.status} | class=${cls}${spec ? ` | spec=${spec}` : ''}`,
   ];
   if (res.failingLocator) lines.push(`BROKEN | ${res.failingLocator}`);
-  if (res.componentMatch?.relPath) {
-    lines.push(`COMP   | ${res.componentMatch.relPath}:${(res.componentMatch.lineIndex ?? 0) + 1} (${res.componentMatch.propertyName || '?'})`);
+  const compFile = res.componentMatch?.file || res.componentMatch?.relPath;
+  if (compFile) {
+    const prop = res.componentMatch.property || res.componentMatch.propertyName || '?';
+    lines.push(`COMP   | ${compFile} (${prop})`);
   }
-  if (res.topCandidate) {
+  if (res.blastRadius) {
+    const br = res.blastRadius;
     lines.push(
-      `TOP    | score=${res.topCandidate.score} | ${res.topCandidate.suggestedExpr || '?'}`
+      `BLAST  | fanIn=${br.fanIn} | risk=${br.riskTier}${br.isShared ? ' [SHARED]' : ''} | specs=${br.affectedSpecs.slice(0, 4).join(', ') || 'none'}${br.affectedSpecs.length > 4 ? ` (+${br.affectedSpecs.length - 4} more)` : ''}`
+    );
+  }
+  const top = res.topCandidate || res.candidates?.[0];
+  if (top) {
+    lines.push(
+      `TOP    | score=${top.confidence ?? top.score ?? '?'} | ${top.suggestedExpr || '?'}`
     );
   }
   if (Array.isArray(res.appliedChanges) && res.appliedChanges.length > 0) {
     lines.push(`PATCH  | ${res.appliedChanges.join(', ')}`);
+  }
+  if (res.rolledBack) {
+    lines.push(`ROLLBK | Restored ${(res.rolledBackFiles || []).join(', ')} after regression in affected specs`);
+  }
+  if (Array.isArray(res.nextCommands) && res.nextCommands.length > 0) {
+    lines.push(`NEXT   | ${res.nextCommands.join(' OR ')}`);
   }
   if (res.defectFile) lines.push(`DEFECT | ${res.defectFile}`);
   return lines.join('\n');
@@ -845,7 +957,7 @@ if (isMain) {
 🩹 Cortex Drift-Healer CLI (npx cortex heal)
 
 Usage:
-  npx cortex heal [--spec <path>] [--error <msg>] [--snapshot <yml>] [--to <locator>] [--apply] [--compact|--verbose|--json]
+  npx cortex heal [--spec <path>] [--error <msg>] [--snapshot <yml>] [--to <locator>] [--apply] [--verify-affected] [--force-shared] [--compact|--verbose|--json]
 `);
     process.exit(0);
   }
@@ -855,20 +967,30 @@ Usage:
     return idx >= 0 && args[idx + 1] ? args[idx + 1] : undefined;
   };
 
-  const res = analyzeAndHealDrift(process.cwd(), {
+  healDriftWithGuardrail(process.cwd(), {
     spec: getArg('--spec'),
     error: getArg('--error'),
     snapshot: getArg('--snapshot'),
     to: getArg('--to'),
     apply: args.includes('--apply'),
-  });
-
-  if (args.includes('--json')) {
-    console.log(JSON.stringify(res, null, 2));
-  } else if (isCompactMode(args)) {
-    console.log(formatCompactHealResult(res));
-  } else {
-    console.log(`\n🩹 Cortex Drift-Healer (${res.status}):\n`);
-    console.log(JSON.stringify(res, null, 2));
-  }
+    verifyAffected: args.includes('--verify-affected'),
+    forceShared: args.includes('--force-shared'),
+  })
+    .then((res) => {
+      if (args.includes('--json')) {
+        console.log(JSON.stringify(res, null, 2));
+      } else if (isCompactMode(args)) {
+        console.log(formatCompactHealResult(res));
+      } else {
+        console.log(`\n🩹 Cortex Drift-Healer (${res.status}):\n`);
+        console.log(JSON.stringify(res, null, 2));
+      }
+      if (res.status === 'blocked-shared-blast-radius' || res.status === 'rolled-back-regression') {
+        process.exit(1);
+      }
+    })
+    .catch((err) => {
+      console.error(`❌ heal error: ${err.message}`);
+      process.exit(1);
+    });
 }

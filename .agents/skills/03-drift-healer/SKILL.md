@@ -17,8 +17,8 @@ When invoked as `/03-drift-healer`:
 ## 3. Root-Cause Classification & Action
 - **App Regression:** Never weaken `expect()`. Capture `screenshot defects/evidence.png --annotate`, log `defects/DEFECT-<timestamp>.md`, mark `test.fixme()`/`test.fail()`, pause for review.
 - **Expired `.auth/<persona>.json` (`401/403`):** Refresh via `00-env-bootstrap` before editing code.
-- **UI/Wizard/API/Sandbox Drift:** Run `npx cortex heal --apply` (or `npx cortex tape patch` + `src/` patch), update shard `**Last Verified:**`, and run `npm run verify:fast -- --specs <spec>` ➔ `npm run verify`.
+- **UI/Wizard/API/Sandbox Drift:** Run `npx cortex heal --apply` (`--verify-affected` for shared modules), refresh shard `**Last Verified:**`, run `npm run verify:fast -- --specs <spec>` ➔ `npm run verify`.
 
 ## 4. Lazy Reference Index (Read ONLY When Needed)
 - `references/healing-playbook.md` — 8-Way Differential Diagnosis Matrix (Bug vs. Drift vs. Auth/Sandbox).
-- `references/drift-patch-and-verify.md` — Safe healing protocol, tape/component patch rules & verification flow.
+- `references/drift-patch-and-verify.md` — Safe healing, shared-module rollback, patch & verify flow.

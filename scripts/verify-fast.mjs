@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { buildDomainGraph } from './build-domain-graph.mjs';
 import { buildSystemMap } from './build-system-map.mjs';
 import { resolveLocalBin } from './explore-session.mjs';
+import { analyzeImpact } from './impact-graph.mjs';
 import {
   capLines,
   isCompactMode,
@@ -93,6 +94,11 @@ export async function runFastVerify({
   rootDir = process.cwd(),
   fast = false,
   specs = [],
+  affected = false,
+  noAffected = false,
+  baseRef = '',
+  maxAffected = 10,
+  changedFiles = null,
   skipTests = false,
   withEngine = false,
   skipMap = fast,
@@ -103,9 +109,41 @@ export async function runFastVerify({
   const tStart = performance.now();
   const safeSpecs = sanitizeSpecList(specs, rootDir);
   const safeWorkers = Math.max(1, Math.min(32, Number.isFinite(Number(workers)) ? Math.floor(Number(workers)) : 4));
+  const safeMaxAffected = Math.max(1, Number.isFinite(Number(maxAffected)) ? Math.floor(Number(maxAffected)) : 10);
   const captureTests = quiet || compact;
 
   const stages = {};
+  const warnings = [];
+
+  // Resolve fixture-aware git-diff blast radius (unless explicitly disabled via --no-affected)
+  let impact = null;
+  if (!noAffected) {
+    try {
+      impact = analyzeImpact(rootDir, {
+        files: changedFiles,
+        baseRef,
+        maxFastSpecs: safeMaxAffected,
+      });
+    } catch {
+      /* non-fatal if git/graph unavailable */
+    }
+  }
+
+  // Merge explicit --specs with git-diff affected specs (capped by safeMaxAffected)
+  const effectiveSpecs = [...safeSpecs];
+  if (impact && (affected || (fast && safeSpecs.length > 0))) {
+    for (const sp of impact.recommendedFastSpecs) {
+      if (!effectiveSpecs.includes(sp)) effectiveSpecs.push(sp);
+    }
+    if (impact.exceedsFastCap && impact.deferredSpecs.length > 0) {
+      const warnMsg =
+        `HIGH BLAST RADIUS: ${impact.affectedSpecs.length} specs affected (cap=${safeMaxAffected}). ` +
+        `Running ${effectiveSpecs.length} prioritized spec(s); ${impact.deferredSpecs.length} deferred. ` +
+        `Run 'npx cortex verify --affected --max-affected ${impact.affectedSpecs.length}' or CI to verify all.`;
+      warnings.push(warnMsg);
+      if (!quiet) console.warn(`⚠️  ${warnMsg}`);
+    }
+  }
 
   // 1. Run all static gates concurrently (tsc + in-process domainGraph + audit:solid + validate:tapes)
   const tscPromise = (async () => {
@@ -191,11 +229,13 @@ export async function runFastVerify({
       mode: fast ? 'fast' : 'full',
       failedStage,
       stages,
+      impact,
+      warnings,
       totalMs: Math.round(performance.now() - tStart),
     };
   }
 
-  // 2. Test Execution Tier (targeted specs in --fast mode, full engine + smoke in full mode)
+  // 2. Test Execution Tier (targeted + affected specs in --fast/--affected mode, full engine + smoke + affected @regression in full mode)
   if (!skipTests) {
     if (withEngine && !fast && fs.existsSync(path.join(rootDir, 'scripts/self-test.mjs'))) {
       const engRes = await spawnAsync(process.execPath, ['--test', 'scripts/self-test.mjs'], {
@@ -224,17 +264,19 @@ export async function runFastVerify({
             output: failureExcerpt.slice(0, 2000),
           },
           stages,
+          impact,
+          warnings,
           totalMs: Math.round(performance.now() - tStart),
         };
       }
     }
 
-    const shouldRunPlaywright = !fast || safeSpecs.length > 0;
+    const shouldRunPlaywright = !fast || effectiveSpecs.length > 0;
     if (shouldRunPlaywright) {
       const pwBin = resolveLocalBin('playwright', rootDir);
       const pwArgs = [...pwBin.prefixArgs, 'test'];
-      if (safeSpecs.length > 0) {
-        pwArgs.push(...safeSpecs, '--project=chromium', `--workers=${safeWorkers}`, '--pass-with-no-tests');
+      if (effectiveSpecs.length > 0) {
+        pwArgs.push(...effectiveSpecs, '--project=chromium', `--workers=${safeWorkers}`, '--pass-with-no-tests');
       } else {
         pwArgs.push('--project=chromium', '--grep', '@smoke|@p0', '--pass-with-no-tests');
       }
@@ -249,7 +291,7 @@ export async function runFastVerify({
       stages.playwrightTests = {
         status: pwRes.status,
         durationMs: pwRes.durationMs,
-        specs: safeSpecs.length > 0 ? safeSpecs : ['@smoke|@p0'],
+        specs: effectiveSpecs.length > 0 ? effectiveSpecs : ['@smoke|@p0'],
         ...(pwSummary ? { summary: pwSummary.summaryLine } : {}),
       };
       if (pwRes.status !== 0) {
@@ -272,8 +314,62 @@ export async function runFastVerify({
             output: failureExcerpt.slice(0, 2000),
           },
           stages,
+          impact,
+          warnings,
           totalMs: Math.round(performance.now() - tStart),
         };
+      }
+
+      // In full verify mode without explicit --specs, also run git-diff affected @regression specs (closing the @smoke|@p0 blind spot)
+      if (!fast && effectiveSpecs.length === 0 && impact && impact.affectedRegressionSpecs.length > 0) {
+        const regSpecs = impact.affectedRegressionSpecs.slice(0, safeMaxAffected);
+        if (impact.affectedRegressionSpecs.length > safeMaxAffected) {
+          const warnMsg =
+            `HIGH BLAST RADIUS: ${impact.affectedRegressionSpecs.length} affected @regression specs exceed cap (${safeMaxAffected}); running first ${regSpecs.length}.`;
+          warnings.push(warnMsg);
+          if (!quiet) console.warn(`⚠️  ${warnMsg}`);
+        }
+        const regArgs = [
+          ...pwBin.prefixArgs,
+          'test',
+          ...regSpecs,
+          '--project=chromium',
+          `--workers=${safeWorkers}`,
+          '--pass-with-no-tests',
+          ...(captureTests ? ['--reporter=line'] : []),
+        ];
+        const regRes = await spawnAsync(pwBin.command, regArgs, {
+          cwd: rootDir,
+          inherit: !captureTests,
+        });
+        const regSummary = captureTests ? summarizePlaywrightRun(regRes.stdout, regRes.stderr) : null;
+        stages.affectedRegressionTests = {
+          status: regRes.status,
+          durationMs: regRes.durationMs,
+          specs: regSpecs,
+          ...(regSummary ? { summary: regSummary.summaryLine } : {}),
+        };
+        if (regRes.status !== 0) {
+          const blocks = regSummary?.failureBlocks?.length
+            ? regSummary.failureBlocks.join('\n')
+            : capLines(regRes.stderr || regRes.stdout || '', { maxLines: 25 });
+          if (!quiet && compact) {
+            console.error(`❌ verify failed at 'affectedRegressionTests' (${regSummary?.summaryLine || `exit ${regRes.status}`}):\n${blocks}`);
+          }
+          return {
+            ok: false,
+            mode: 'full',
+            failedStage: {
+              stage: 'affectedRegressionTests',
+              status: regRes.status,
+              output: blocks.slice(0, 2000),
+            },
+            stages,
+            impact,
+            warnings,
+            totalMs: Math.round(performance.now() - tStart),
+          };
+        }
       }
     }
   }
@@ -282,6 +378,8 @@ export async function runFastVerify({
     ok: true,
     mode: fast ? 'fast' : 'full',
     stages,
+    impact,
+    warnings,
     totalMs: Math.round(performance.now() - tStart),
   };
 }
@@ -297,12 +395,14 @@ if (isMain) {
 ⚡ Cortex Parallel Two-Tier Verify Gate (npx cortex verify)
 
 Usage:
-  npx cortex verify [--fast] [--specs tests/a.spec.ts,tests/b.spec.ts] [--skip-tests] [--with-engine] [--skip-map] [--workers N] [--compact|--verbose|--json]
+  npx cortex verify [--fast] [--specs tests/a.spec.ts,tests/b.spec.ts] [--affected] [--no-affected] [--base <git-ref>] [--max-affected <N>] [--skip-tests] [--with-engine] [--skip-map] [--workers N] [--compact|--verbose|--json]
 `);
     process.exit(0);
   }
 
   const fast = args.includes('--fast');
+  const affected = args.includes('--affected');
+  const noAffected = args.includes('--no-affected');
   const skipTests = args.includes('--skip-tests');
   const withEngine = args.includes('--with-engine');
   const skipMap = args.includes('--skip-map') || fast;
@@ -311,6 +411,8 @@ Usage:
 
   const specs = [];
   let workers = 4;
+  let baseRef = '';
+  let maxAffected = 10;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--specs' && args[i + 1]) {
@@ -323,6 +425,14 @@ Usage:
       workers = Number(args[++i]);
     } else if (a.startsWith('--workers=')) {
       workers = Number(a.slice('--workers='.length));
+    } else if (a === '--base' && args[i + 1]) {
+      baseRef = args[++i];
+    } else if (a.startsWith('--base=')) {
+      baseRef = a.slice('--base='.length);
+    } else if (a === '--max-affected' && args[i + 1]) {
+      maxAffected = Number(args[++i]);
+    } else if (a.startsWith('--max-affected=')) {
+      maxAffected = Number(a.slice('--max-affected='.length));
     }
   }
 
@@ -330,6 +440,10 @@ Usage:
     rootDir: process.cwd(),
     fast,
     specs,
+    affected,
+    noAffected,
+    baseRef,
+    maxAffected,
     skipTests,
     withEngine,
     skipMap,
