@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { capToTokens, estimateTokens } from './lib/cli-output.mjs';
+import { buildImpactGraph, getFileImpact } from './impact-graph.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -273,7 +274,7 @@ function inspectSpec(rootDir, specArg) {
 
 export function buildContextPack(
   rootDir = process.cwd(),
-  { route = '', squad = '', tape = '', spec = '' } = {}
+  { route = '', squad = '', tape = '', spec = '', file = '' } = {}
 ) {
   const domainMemory = readTextSafe(path.join(rootDir, '.agents/domain/domain-memory.md'));
   const baseUrlMatch = domainMemory.match(/Base URL[^`]*`([^`]+)`/i) || domainMemory.match(/https?:\/\/[^\s)>`]+/);
@@ -291,6 +292,7 @@ export function buildContextPack(
   const keywords = [];
   if (route) keywords.push(...route.split(/[/?=&_-]+/).filter(Boolean));
   if (squad) keywords.push(squad);
+  if (file) keywords.push(...path.basename(file, '.ts').split(/[.-]+/).filter(Boolean));
   if (effectiveTape?.data) {
     keywords.push(...String(effectiveTape.data.scenarioId || '').split('-'));
     for (const st of effectiveTape.data.semanticSteps || []) {
@@ -304,6 +306,28 @@ export function buildContextPack(
 
   const shards = collectShards(rootDir, { route, squad });
   const arch = collectArchitecture(rootDir, { squad, keywords });
+
+  // Compute reverse-dependency blast radius for --file or shared modules consumed by --spec
+  let impact = null;
+  if (file || specInfo) {
+    try {
+      const graph = buildImpactGraph(rootDir);
+      if (file) {
+        const fileImpact = getFileImpact(rootDir, file, { graph });
+        impact = { target: fileImpact, sharedModules: fileImpact.isShared || fileImpact.fanIn >= 2 ? [fileImpact] : [] };
+      } else if (specInfo) {
+        const sharedModules = Object.values(graph.nodes)
+          .filter((n) => n.affectedSpecs.includes(specInfo.rel) && (n.isShared || n.fanIn >= 2))
+          .sort((a, b) => b.fanIn - a.fanIn)
+          .slice(0, 6);
+        if (sharedModules.length > 0) {
+          impact = { target: null, sharedModules };
+        }
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }
 
   const allTapes = walkFiles(path.join(rootDir, '.exploratory/tapes'), (f) => f.endsWith('.json')).map((f) => {
     const d = readJsonSafe(f);
@@ -324,10 +348,12 @@ export function buildContextPack(
       squad: squad || null,
       tape: tape || null,
       spec: spec || null,
+      file: file || null,
     },
     app: { baseUrl, authSessions },
     shards,
     architecture: arch,
+    impact,
     tapeSummary: effectiveTape?.data ? summarizeTapeCompact(effectiveTape.data) : null,
     tapeData: effectiveTape?.data || null,
     specInfo,
@@ -350,6 +376,20 @@ export function formatContextPack(pack, { maxTokens = 400 } = {}) {
     if (pack.specInfo.steps.length > 0) {
       lines.push(`BSTEPS | ${pack.specInfo.steps.join(' -> ')}`);
     }
+  }
+
+  if (pack.impact?.target) {
+    const t = pack.impact.target;
+    const tag = t.isShared ? `SHARED risk=${t.riskTier}` : `risk=${t.riskTier}`;
+    lines.push(
+      `IMPACT | ${t.file} [${tag} fanIn=${t.fanIn}] -> ${t.affectedSpecs.slice(0, 5).join(', ') || 'none'}${t.affectedSpecs.length > 5 ? ` (+${t.affectedSpecs.length - 5} more)` : ''}`
+    );
+  } else if (pack.impact?.sharedModules?.length) {
+    const items = pack.impact.sharedModules
+      .slice(0, 4)
+      .map((m) => `${path.basename(m.file)}(${m.fanIn}s${m.isShared ? ',SHARED' : ''})`)
+      .join(', ');
+    lines.push(`IMPACT | Shared deps (prefer additive OCP or run affected): ${items}`);
   }
 
   if (pack.tapeSummary) {
@@ -392,7 +432,7 @@ export function formatContextPack(pack, { maxTokens = 400 } = {}) {
     lines.push(`SPECS  | ${pack.specs.slice(0, 8).join(', ')}`);
   }
 
-  return capToTokens(lines.join('\n'), maxTokens, 'narrow --route/--squad/--tape/--spec or raise --max-tokens');
+  return capToTokens(lines.join('\n'), maxTokens, 'narrow --route/--squad/--tape/--spec/--file or raise --max-tokens');
 }
 
 const isMain =
@@ -402,7 +442,7 @@ const isMain =
 if (isMain) {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
-    console.log(`Usage: npx cortex context [--route <path>] [--squad <squad>] [--tape <id>] [--spec <path>] [--max-tokens <n>] [--json]`);
+    console.log(`Usage: npx cortex context [--route <path>] [--squad <squad>] [--tape <id>] [--spec <path>] [--file <src-path>] [--max-tokens <n>] [--json]`);
     process.exit(0);
   }
   const getVal = (flag) => {
@@ -415,10 +455,11 @@ if (isMain) {
   const squad = getVal('--squad');
   const tape = getVal('--tape');
   const spec = getVal('--spec');
+  const file = getVal('--file');
   const maxTokens = Math.max(120, Math.min(2000, Number(getVal('--max-tokens')) || 400));
   const jsonOnly = args.includes('--json');
 
-  const pack = buildContextPack(process.cwd(), { route, squad, tape, spec });
+  const pack = buildContextPack(process.cwd(), { route, squad, tape, spec, file });
   if (jsonOnly) {
     const out = { ...pack, tapeData: undefined, estimatedTokens: estimateTokens(formatContextPack(pack, { maxTokens })) };
     console.log(JSON.stringify(out));
