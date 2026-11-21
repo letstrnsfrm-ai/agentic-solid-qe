@@ -85,8 +85,9 @@ export function listTapes(rootDir = process.cwd()) {
     .map((f) => {
       const data = JSON.parse(fs.readFileSync(path.join(tapesDir, f), 'utf8'));
       const id = data.scenarioId || path.basename(f, '.json');
+      const idRe = new RegExp(`(?<![a-z0-9-])${String(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9-])`);
       const compiled = specSources.some(
-        (s) => s.file.includes(id) || s.content.includes(id) || s.content.includes(`${id}.json`)
+        (s) => path.basename(s.file, '.spec.ts') === id || idRe.test(s.content)
       );
       return {
         scenarioId: id,
@@ -149,6 +150,23 @@ const ALLOWED_EXPECT_PATCH_FIELDS = new Set([
   'description',
 ]);
 
+const FORBIDDEN_BUILDER_IDENTIFIERS = new Set([
+  '__proto__',
+  'prototype',
+  'constructor',
+  'toString',
+  'valueOf',
+  'hasOwnProperty',
+  'eval',
+  'arguments',
+  'default',
+  'class',
+  'function',
+  'return',
+  'import',
+  'export',
+]);
+
 export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = false } = {}) {
   if (!Array.isArray(setData) || setData.length === 0) return [];
   const dataDir = path.join(rootDir, 'src/data');
@@ -166,6 +184,11 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
       throw new Error(`Invalid --set-data reference '${item.ref}'. Expected 'BuilderClass.method().property=value'.`);
     }
     const [, builderClass, methodName, propName] = m;
+    for (const ident of [builderClass, methodName, propName]) {
+      if (FORBIDDEN_BUILDER_IDENTIFIERS.has(ident)) {
+        throw new Error(`Security Error: Disallowed identifier '${ident}' in --set-data reference '${item.ref}'.`);
+      }
+    }
     if (/(?:password|passcode|secret|token|api[_-]?key|ssn|cvv|pin|otp)/i.test(propName)) {
       throw new Error(`Security Error: Refusing to write sensitive property '${propName}' via --set-data. Use environment variables.`);
     }

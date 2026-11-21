@@ -5,7 +5,7 @@ description: High-speed Rust-backed CLI reference for live browser automation, i
 
 # Skill: `agent-browser` Command Reference
 
-Use `npx agent-browser --session <name>` for fast daemon-backed browser automation and token-lean snapshots (`-i`). Detailed flags live in `references/commands-reference.md`.
+Use `npx agent-browser --session <name>` for daemon-backed browser automation and token-lean snapshots (`-i`). Full flags: `references/commands-reference.md`.
 
 ## 1. Session Lifecycle & CDP Attach
 - `[--headed] open <url>` — Launch browser (`--headed` before `open` for visible UI) & navigate.
@@ -13,7 +13,7 @@ Use `npx agent-browser --session <name>` for fast daemon-backed browser automati
 - `close [--all]` — Close current or all sessions.
 
 ## 2. Snapshot & Interaction (`@e<N>` refs from `snapshot -i`)
-- `snapshot [-i] [--json]` — ARIA tree (`-i` filters to interactive elements only; re-snapshot after Shadow DOM/dynamic re-renders as `@e<N>` refs invalidate).
+- `snapshot [-i] [--json]` — ARIA tree (`-i` interactive only; re-snapshot after Shadow DOM/dynamic re-renders as `@e<N>` refs invalidate).
 - `click <@ref|sel>` / `dblclick` / `hover` / `press <key>` — Pointer & keyboard.
 - `fill <@ref|sel> <text>` / `type` / `select <@ref> <val>` / `check` / `uncheck` / `upload` — Forms.
 - `find role <role> <action> --name <n>` / `find <text|label|testid> <val> <action>` — Semantic locators.

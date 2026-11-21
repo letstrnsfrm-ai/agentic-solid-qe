@@ -477,15 +477,73 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
         : {}),
     };
   } else {
-    maturityStage = 'Stage 4 — Maintained & CI-Ready';
+    const rawStage = coverage.coverageMaturityStage;
+    const stageNum = typeof rawStage === 'object' && rawStage ? rawStage.stage : 4;
+    const handoffs = coverage.topHandoffRecommendations || coverage.handoffRecommendations || [];
+    const tapeFiles = walkFiles(path.join(rootDir, '.exploratory/tapes'), (name) => name.endsWith('.json'));
+    const firstTapeSlug =
+      tapeFiles.length > 0 ? path.basename(tapeFiles[0], '.json') : 'baseline-flow';
+
+    if (stageNum === 2) {
+      maturityStage = 'Stage 2 — Persona, Boundary & Resilience Expansion (@smoke / @regression)';
+    } else if (stageNum === 3) {
+      maturityStage = 'Stage 3 — Complex Wizards, Backend API Seeding & Cross-Portal Handoffs';
+    } else {
+      maturityStage = 'Stage 4 — Maintained & CI-Ready';
+    }
+
+    const stageOptions = [];
+    if (stageNum === 2) {
+      stageOptions.push({
+        id: 'stage2-clone-negative',
+        label: `(Recommended) Clone '${firstTapeSlug}' into a @p1 boundary/negative variant via cortex tape clone`,
+        command: `npx cortex orchestrate --tape clone ${firstTapeSlug} ${firstTapeSlug}-negative --charter boundary-analysis --tags @p1,@regression`,
+      });
+    }
+    if (handoffs.length > 0) {
+      const topH = handoffs[0];
+      stageOptions.push({
+        id: 'stage3-handoff-split',
+        label: `Segment ${topH.stepCount}-step tape '${topH.scenarioId}' at step ${topH.suggestedSplitStep} (${topH.recommendedHandoffStrategy})`,
+        command: `npx cortex orchestrate --tape show ${topH.scenarioId}`,
+      });
+    }
+    stageOptions.push({
+      id: 'verify-suite',
+      label: 'Run full verification gate (tsc + domain:graph + audit:solid + validate:tapes + smoke)',
+      command: 'npx cortex orchestrate --verify',
+    });
+
+    const whyParts = ['All domain shards are covered, tapes compiled, zero drift detected, and CI is configured.'];
+    if (stageNum === 2) {
+      whyParts.push('Ready for Stage 2 persona/boundary variant expansion.');
+    } else if (stageNum === 3) {
+      whyParts.push('Ready for Stage 3 enterprise wizard/API/seeder expansion.');
+    }
+    if (handoffs.length > 0) {
+      whyParts.push(`${handoffs.length} long tape(s) eligible for Point-to-Point handoff segmentation.`);
+    }
+
     nextAction = {
       priority: 7,
       skill: 'agentic-solid-qe',
-      why: 'All domain shards are covered, tapes compiled, zero drift detected, and CI is configured.',
+      why: whyParts.join(' '),
       command: 'npx cortex orchestrate --verify',
       npmScript: 'verify',
       autoRunnable: true,
-      humanGate: 'None — reporting verified results.',
+      humanGate:
+        stageNum < 4 || handoffs.length > 0
+          ? 'None — reporting verified results (optional Stage 2/3 expansion options available in GATE_OPTIONS).'
+          : 'None — reporting verified results.',
+      ...(stageNum < 4 || handoffs.length > 0
+        ? {
+            gatePayload: {
+              gateId: `stage${stageNum}-expansion-advisory`,
+              question: `All ${counts.domainShards || 0} shard(s) have baseline coverage (${maturityStage}). Select next optional expansion or verify:`,
+              options: stageOptions,
+            },
+          }
+        : {}),
     };
   }
 
@@ -517,12 +575,14 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       legacyCodeTestsPending: legacyCodeTests.length,
       failingTestArtifacts: failingArtifacts.length,
       openDefects: openDefects.length,
+      handoffRecommendations: counts.handoffRecommendations || 0,
       ciConfigured,
     },
     queuePreview: {
       uncompiledTapes: uncompiledTapes.slice(0, 10),
       uncoveredShards: uncoveredShards.slice(0, 10),
       failingArtifacts: failingArtifacts.slice(0, 5),
+      handoffRecommendations: (coverage.topHandoffRecommendations || coverage.handoffRecommendations || []).slice(0, 5),
     },
     nextAction,
   };
@@ -771,15 +831,20 @@ export function ensureCiPipelineConfigured(rootDir = process.cwd()) {
       `name: Playwright SOLID E2E CI
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
+
+permissions:
+  contents: read
+
 jobs:
   verify-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 22
           cache: npm

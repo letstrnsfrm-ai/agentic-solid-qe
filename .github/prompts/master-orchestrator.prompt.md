@@ -1,5 +1,0 @@
----
-mode: agent
-description: Agentic-SOLID-QE entry point alias to diagnose project state, auto-drain safe deterministic QE steps, and incrementally increase automation coverage
----
-Activate `.agents/skills/agentic-solid-qe/SKILL.md` and execute its **Fast Single-Call Auto-Start** workflow (`npx cortex orchestrate --loop --compact` — draining safe deterministic steps in-process with two-tier verify, reading `references/master-orchestration-playbook.md` only on-demand, and pausing only at true human gates).
