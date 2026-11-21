@@ -94,7 +94,7 @@ function detectLegacySkillArtifacts(rootDir) {
   const promptDir = path.join(rootDir, '.github/prompts');
   for (const f of walkFiles(promptDir, (name) => name.endsWith('.prompt.md'))) {
     const base = path.basename(f);
-    if (!/^(?:0[0-5]|agent-browser|playwright-cli|master-orchestrator)/.test(base)) {
+    if (!/^(?:0[0-5]|agent-browser|playwright-cli|agentic-solid-qe|master-orchestrator)/.test(base)) {
       artifacts.push(path.relative(rootDir, f).replace(/\\/g, '/'));
     }
   }
@@ -227,7 +227,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       ? [
           {
             id: 'bootstrap-live-url',
-            label: '(Recommended) Bootstrap target URL and auto-discover initial feature shards via 00-master-orchestrator',
+            label: '(Recommended) Bootstrap target URL and auto-discover initial feature shards via agentic-solid-qe',
             command: 'npx cortex orchestrate --bootstrap --url <https://your-app.com> --name "<App Name>" --discover-shards',
           },
           {
@@ -259,7 +259,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       gatePayload: {
         gateId: needsTargetUrlConfig ? 'stage0-target-url' : 'stage0-auth-session',
         question: needsTargetUrlConfig
-          ? 'Provide the target application URL and name to bootstrap Stage 0 via 00-master-orchestrator:'
+          ? 'Provide the target application URL and name to bootstrap Stage 0 via agentic-solid-qe:'
           : `Authenticate missing persona session(s) (${missingAuthSessions.join(', ')}) to proceed:`,
         options: gateOptions,
       },
@@ -276,7 +276,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       humanGate: 'Review triage classification (DEFECT-*.md vs. locator drift patch).',
       gatePayload: {
         gateId: 'stage4-drift-triage',
-        question: `How should 00-master-orchestrator resolve the ${failingArtifacts.length} failing test artifact(s)?`,
+        question: `How should agentic-solid-qe resolve the ${failingArtifacts.length} failing test artifact(s)?`,
         options: [
           {
             id: 'heal-apply',
@@ -432,7 +432,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       humanGate: 'Run live route discovery or select initial route to explore.',
       gatePayload: {
         gateId: 'stage0-discover-shards',
-        question: `No feature shards exist yet for ${coverage.targetApp?.appName || 'Target App'} (${baseUrlClean}). How should 00-master-orchestrator initialize coverage?`,
+        question: `No feature shards exist yet for ${coverage.targetApp?.appName || 'Target App'} (${baseUrlClean}). How should agentic-solid-qe initialize coverage?`,
         options: [
           {
             id: 'discover-shards',
@@ -480,7 +480,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     maturityStage = 'Stage 4 — Maintained & CI-Ready';
     nextAction = {
       priority: 7,
-      skill: '00-master-orchestrator',
+      skill: 'agentic-solid-qe',
       why: 'All domain shards are covered, tapes compiled, zero drift detected, and CI is configured.',
       command: 'npx cortex orchestrate --verify',
       npmScript: 'verify',
@@ -490,7 +490,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
   }
 
   return {
-    masterOrchestratorSkill: '/00-master-orchestrator',
+    masterOrchestratorSkill: '/agentic-solid-qe',
     targetApp: {
       appName: coverage.targetApp?.appName || 'Target App',
       baseUrl: coverage.targetApp?.baseUrl || '',
@@ -581,7 +581,7 @@ function formatBlueprintMarkdown(bp) {
   ];
   const opts = bp.nextAction?.gatePayload?.options;
   if (Array.isArray(opts) && opts.length > 0) {
-    lines.push(`#### 🗳️ Gate Decision Options (Route via \`00-master-orchestrator\`)`);
+    lines.push(`#### 🗳️ Gate Decision Options (Route via \`agentic-solid-qe\`)`);
     opts.forEach((o, i) => {
       lines.push(`${i + 1}. **${o.label}** — \`${o.command}\``);
     });
@@ -753,7 +753,7 @@ export async function discoverAndSeedLiveShards(
 }
 
 /**
- * Ensures `.github/workflows/playwright-ci.yml` exists for Stage 4 CI readiness via `00-master-orchestrator`.
+ * Ensures `.github/workflows/playwright-ci.yml` exists for Stage 4 CI readiness via `agentic-solid-qe`.
  */
 export function ensureCiPipelineConfigured(rootDir = process.cwd()) {
   const targetRel = '.github/workflows/playwright-ci.yml';
@@ -1118,7 +1118,7 @@ Usage:
 
   const rootDir = process.cwd();
 
-  // 1. Unified Sub-Workflow Routing via 00-master-orchestrator
+  // 1. Unified Sub-Workflow Routing via agentic-solid-qe
   const exploreIdx = args.indexOf('--explore');
   if (exploreIdx !== -1) {
     const rest = args.slice(exploreIdx + 1);

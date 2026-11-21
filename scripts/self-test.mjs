@@ -170,17 +170,17 @@ export class CustomQuoteWidgetComponent implements IdentifiableComponent {
       customComponent
     );
 
-    // Verify new foundational contracts, shared utilities & 00-master-orchestrator were seeded
+    // Verify new foundational contracts, shared utilities & agentic-solid-qe were seeded
     for (const seededRel of [
       'src/contracts/api-client.contract.ts',
       'src/contracts/wizard-step.contract.ts',
       'src/shared/api/auth-token.bridge.ts',
       'src/shared/data/relative-date.helper.ts',
-      '.agents/skills/00-master-orchestrator/SKILL.md',
-      '.agents/skills/00-master-orchestrator/references/master-orchestration-playbook.md',
-      '.claude/commands/00-master-orchestrator.md',
+      '.agents/skills/agentic-solid-qe/SKILL.md',
+      '.agents/skills/agentic-solid-qe/references/master-orchestration-playbook.md',
+      '.claude/commands/agentic-solid-qe.md',
       '.claude/commands/master-orchestrator.md',
-      '.github/prompts/00-master-orchestrator.prompt.md',
+      '.github/prompts/agentic-solid-qe.prompt.md',
       '.github/prompts/master-orchestrator.prompt.md',
       '.agents/skills/02-solid-architect/references/complex-orchestration-guide.md',
       '.npmrc',
@@ -192,7 +192,7 @@ export class CustomQuoteWidgetComponent implements IdentifiableComponent {
     // Verify 'cortex orchestrate --json' CLI subcommand returns masterOrchestratorSkill & coverageMaturityStage
     const orchRes = runNode(SYNC_SCRIPT, ['orchestrate', '--json'], tmpDir);
     assert.equal(orchRes.status, 0, `cortex orchestrate failed: ${orchRes.stderr}`);
-    assert.match(orchRes.stdout, /"masterOrchestratorSkill": "\/00-master-orchestrator"/);
+    assert.match(orchRes.stdout, /"masterOrchestratorSkill": "\/agentic-solid-qe"/);
     assert.match(orchRes.stdout, /"coverageMaturityStage":/);
 
     // Verify JSONC tsconfig.json was parsed and merged with @domains/* and @shared/*
@@ -4045,8 +4045,8 @@ test('38. Token-Efficiency 5-Pillar Suite: static budgets, compact CLI/failure s
       'scripts/lib/cli-output.mjs',
       'scripts/context-pack.mjs',
       'scripts/tape-cli.mjs',
-      '.agents/skills/00-master-orchestrator/references/subagent-isolation.md',
-      '.agents/skills/00-master-orchestrator/references/onboarding-and-upgrade.md',
+      '.agents/skills/agentic-solid-qe/references/subagent-isolation.md',
+      '.agents/skills/agentic-solid-qe/references/onboarding-and-upgrade.md',
     ]) {
       assert.equal(fs.existsSync(path.join(tmpRoot, relFile)), true, `Missing synced file: ${relFile}`);
     }
@@ -4116,7 +4116,7 @@ test('38. Token-Efficiency 5-Pillar Suite: static budgets, compact CLI/failure s
     assert.match(bloatAgentsRes.stdout + bloatAgentsRes.stderr, /NFR Always-On Token Budget/);
     fs.writeFileSync(path.join(tmpRoot, 'AGENTS.md'), origAgents, 'utf8');
 
-    const refPath = path.join(tmpRoot, '.agents/skills/00-master-orchestrator/references/subagent-isolation.md');
+    const refPath = path.join(tmpRoot, '.agents/skills/agentic-solid-qe/references/subagent-isolation.md');
     const origRef = fs.readFileSync(refPath, 'utf8');
     fs.writeFileSync(refPath, origRef + '\n' + 'verbose '.repeat(800), 'utf8');
     const bloatRefRes = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
@@ -4301,7 +4301,7 @@ export class InvoicePage {
   }
 });
 
-test('39. Unified 00-master-orchestrator Single Entry Point: gatePayload/GATE_OPTIONS, --bootstrap, --explore, --tape --set-data, --heal-action, --ci-init & explore-to-compile roundtrip', async () => {
+test('39. Unified agentic-solid-qe Single Entry Point: gatePayload/GATE_OPTIONS, --bootstrap, --explore, --tape --set-data, --heal-action, --ci-init & explore-to-compile roundtrip', async () => {
   const {
     buildOrchestrationBlueprint,
     formatCompactBlueprint,

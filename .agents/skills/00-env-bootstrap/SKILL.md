@@ -22,4 +22,4 @@ For SSO, MFA, or multi-step login (invoke `/agent-browser` for full CLI command 
 ## 3. Unfamiliar App Navigation & Mandatory Shard Seeding
 1. After SPA load, run `npx agent-browser --session auth snapshot -i` (or `snapshot > .agent-browser/page-landing.yml`) and inspect landmarks/links.
 2. Scaffold initial shards in `.agents/domain/shards/<feature>.md` (≤ 150 lines; `**Published Capabilities:** *(none yet)*` until compiled), register in `domain-memory.md`, and run `npm run domain:graph`.
-3. Close session (`npx agent-browser --session auth close`) and ask which feature to explore next via `01-cli-explorer` (or `00-master-orchestrator`).
+3. Close session (`npx agent-browser --session auth close`) and ask which feature to explore next via `01-cli-explorer` (or `agentic-solid-qe`).

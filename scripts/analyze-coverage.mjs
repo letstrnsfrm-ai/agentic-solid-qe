@@ -348,7 +348,7 @@ if (missingAuthSessions.length > 0) {
 } else if (staleShards.length > 0) {
   recommendedNextAction = `Invoke /03-drift-healer or /01-cli-explorer to re-verify stale domain shard(s): ${staleShards.join(', ')}`;
 } else {
-  recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /00-master-orchestrator to plan the next incremental coverage stage, /01-cli-explorer for the next single P1/P2 business scenario or backend API contract, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
+  recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /agentic-solid-qe to plan the next incremental coverage stage, /01-cli-explorer for the next single P1/P2 business scenario or backend API contract, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
 }
 
 const matchSquad = (p) =>
@@ -427,7 +427,7 @@ const isCompact = !forceFull && (forceSummary || scopedSpecs.length + scopedTape
 
 const report = isCompact
   ? {
-      masterOrchestratorSkill: '/00-master-orchestrator',
+      masterOrchestratorSkill: '/agentic-solid-qe',
       mode: 'compact-summary',
       ...(filterSquad ? { squadFilter: filterSquad } : {}),
       coverageMaturityStage,
@@ -464,7 +464,7 @@ const report = isCompact
       recommendedNextAction,
     }
   : {
-      masterOrchestratorSkill: '/00-master-orchestrator',
+      masterOrchestratorSkill: '/agentic-solid-qe',
       ...(filterSquad ? { squadFilter: filterSquad } : {}),
       coverageMaturityStage,
       upgradeStatus,

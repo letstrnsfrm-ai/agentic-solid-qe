@@ -19,4 +19,4 @@ Never batch-generate 10 unverified specs on complex apps. Execute one business s
 
 ## 3. Multi-Squad Layout (`src/domains/<squad>/`)
 Partition teams via `npx cortex sync --squad <squad>` so each squad owns isolated `api/`, `components/`, `pages/`, `steps/`, `seeders/`, `data/`, `fixtures/` under `src/domains/<squad>/` and shards under `.agents/domain/domains/<squad>/`.
-*(For consumer upgrade details, see `00-master-orchestrator/references/onboarding-and-upgrade.md`.)*
+*(For consumer upgrade details, see `agentic-solid-qe/references/onboarding-and-upgrade.md`.)*
