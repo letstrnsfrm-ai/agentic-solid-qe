@@ -37,49 +37,120 @@ const FORBIDDEN_HOSTS = new Set([
   'instance-data',
 ]);
 
-function isForbiddenIpv4(ip, { allowLoopback = false } = {}) {
+function isForbiddenIpv4(ip, { allowLoopback = false, allowPrivateNet = false } = {}) {
   const parts = ip.split('.').map(Number);
   if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
     return true;
   }
   const [a, b] = parts;
   if (a === 0) return true; // 0.0.0.0/8
-  if (a === 10) return true; // RFC1918 10.0.0.0/8
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
+  if (a === 169 && b === 254) return true; // Link-local / cloud metadata 169.254.0.0/16 (always forbidden)
+  if (a === 100 && b === 100 && parts[2] === 100 && parts[3] === 200) return true; // Alibaba Cloud metadata 100.100.100.200 (always forbidden)
+  if (a >= 224) return true; // Multicast & reserved (always forbidden)
   if (a === 127) return !allowLoopback; // Loopback 127.0.0.0/8
-  if (a === 169 && b === 254) return true; // Link-local / cloud metadata 169.254.0.0/16
-  if (a === 172 && b >= 16 && b <= 31) return true; // RFC1918 172.16.0.0/12
-  if (a === 192 && b === 168) return true; // RFC1918 192.168.0.0/16
-  if (a >= 224) return true; // Multicast & reserved
+  if (a === 10) return !allowPrivateNet; // RFC1918 10.0.0.0/8
+  if (a === 100 && b >= 64 && b <= 127) return !allowPrivateNet; // CGNAT 100.64.0.0/10
+  if (a === 172 && b >= 16 && b <= 31) return !allowPrivateNet; // RFC1918 172.16.0.0/12
+  if (a === 192 && b === 168) return !allowPrivateNet; // RFC1918 192.168.0.0/16
   return false;
 }
 
-export function isForbiddenIpAddress(rawIp, { allowLoopback = false } = {}) {
+export function isForbiddenIpAddress(rawIp, { allowLoopback = false, allowPrivateNet = false } = {}) {
   const ip = String(rawIp || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
   if (!ip) return true;
+  // Catch NAT64 well-known prefix 64:ff9b::/96 (both dotted-quad and hex forms, even if net.isIP rejects mixed form)
+  if (/^64:ff9b:/i.test(ip)) return true;
   const family = net.isIP(ip);
   if (family === 4) {
-    return isForbiddenIpv4(ip, { allowLoopback });
+    return isForbiddenIpv4(ip, { allowLoopback, allowPrivateNet });
   }
   if (family === 6) {
     if (ip === '::' || ip === '0:0:0:0:0:0:0:0') return true;
     if (ip === '::1' || ip === '0:0:0:0:0:0:0:1') return !allowLoopback;
     if (/^fe[89ab][0-9a-f]:/.test(ip)) return true; // Link-local fe80::/10
-    if (/^f[cd][0-9a-f]{2}:/.test(ip)) return true; // ULA fc00::/7 (includes fd00:ec2::254)
-    if (/^64:ff9b::/.test(ip)) return true; // NAT64 well-known prefix
+    if (/^fd00:ec2::/.test(ip)) return true; // AWS EC2 IMDSv2 IPv6 metadata (always forbidden)
+    if (/^f[cd][0-9a-f]{2}:/.test(ip)) return !allowPrivateNet; // ULA fc00::/7
     // IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:a9fe:a9fe)
     const v4Dotted = ip.match(/^(?:0*:)*ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-    if (v4Dotted) return isForbiddenIpv4(v4Dotted[1], { allowLoopback });
+    if (v4Dotted) return isForbiddenIpv4(v4Dotted[1], { allowLoopback, allowPrivateNet });
     const v4Hex = ip.match(/^(?:0*:)*ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
     if (v4Hex) {
       const hi = parseInt(v4Hex[1], 16);
       const lo = parseInt(v4Hex[2], 16);
       const dotted = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
-      return isForbiddenIpv4(dotted, { allowLoopback });
+      return isForbiddenIpv4(dotted, { allowLoopback, allowPrivateNet });
     }
     return false;
   }
   return false;
+}
+
+/**
+ * Validates a target application HTTP/HTTPS URL against SSRF, cloud metadata endpoints,
+ * link-local/NAT64/multicast ranges, and RFC1918/CGNAT private networks (unless localhost
+ * or explicitly permitted by CORTEX_ALLOW_PRIVATE_NET=1 or ALLOWED_TARGET_HOSTS).
+ */
+export function assertSafeTargetHttpUrl(rawUrl, { label = 'URL', env = process.env, allowPrivateNet } = {}) {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw new Error(`Security Error: Invalid ${label} '${rawUrl}'.`);
+  }
+  // Reject non-standard integer/hex/octal IP representations before URL normalization converts them
+  const rawHostMatch = rawUrl.trim().match(/^https?:\/\/([^/?#]+)/i);
+  if (rawHostMatch) {
+    const rawHostOnly = rawHostMatch[1].split('@').pop().split(':')[0].toLowerCase();
+    if (/^(?:0x[0-9a-f]+|\d+|0[0-7]+)(?:\.(?:0x[0-9a-f]+|0[0-7]+|\d+)){0,3}$/i.test(rawHostOnly)) {
+      if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(rawHostOnly) || /(?:^|\.)0\d+/.test(rawHostOnly)) {
+        throw new Error(`Security Error: Non-canonical numeric/octal/hex IP host '${rawHostOnly}' in ${label} is forbidden (SSRF protection).`);
+      }
+    }
+  }
+  let parsed;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    throw new Error(`Security Error: Invalid ${label} '${rawUrl}'.`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Security Error: Disallowed ${label} protocol '${parsed.protocol}'. Only http: and https: are permitted.`
+    );
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`Security Error: Embedded credentials in ${label} are forbidden.`);
+  }
+  const host = parsed.hostname.toLowerCase();
+  const bareHost = host.replace(/^\[|\]$/g, '');
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  const allowedHosts = new Set(
+    String(env.ALLOWED_TARGET_HOSTS || '')
+      .split(',')
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const effectiveAllowPrivate =
+    allowPrivateNet !== undefined
+      ? Boolean(allowPrivateNet)
+      : env.CORTEX_ALLOW_PRIVATE_NET === '1' ||
+        env.CORTEX_ALLOW_PRIVATE_NET === 'true' ||
+        allowedHosts.has(host) ||
+        allowedHosts.has(bareHost);
+
+  if (
+    FORBIDDEN_HOSTS.has(host) ||
+    FORBIDDEN_HOSTS.has(bareHost) ||
+    /^169\.254\./.test(host) ||
+    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(host) ||
+    /^\[?64:ff9b:/i.test(host) ||
+    /^\[fe[89ab][0-9a-f]:/i.test(host) ||
+    /^\[fd00:ec2::/i.test(host) ||
+    (net.isIP(bareHost) !== 0 &&
+      isForbiddenIpAddress(bareHost, { allowLoopback: isLocalHost, allowPrivateNet: effectiveAllowPrivate }))
+  ) {
+    throw new Error(
+      `Security Error: Cloud metadata / link-local address or private host '${parsed.hostname}' in ${label} is forbidden (SSRF protection).`
+    );
+  }
+  return parsed.toString();
 }
 
 export function assertSafeCloudUrl(rawUrl, env = process.env) {
@@ -93,31 +164,14 @@ export function assertSafeCloudUrl(rawUrl, env = process.env) {
       'Security Policy: Outbound Cortex Cloud telemetry is disabled when CORTEX_OFFLINE=1 or CORTEX_NO_NETWORK=1.'
     );
   }
-  let parsed;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error(`Invalid CORTEX_CLOUD_URL '${rawUrl}'.`);
-  }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new Error(`Unsupported CORTEX_CLOUD_URL protocol '${parsed.protocol}'.`);
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error('Embedded credentials in CORTEX_CLOUD_URL are forbidden.');
-  }
+  const validated = assertSafeTargetHttpUrl(rawUrl, {
+    label: 'CORTEX_CLOUD_URL',
+    env,
+    allowPrivateNet: false,
+  });
+  const parsed = new URL(validated);
   const host = parsed.hostname.toLowerCase();
-  const bareHost = host.replace(/^\[|\]$/g, '');
   const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
-  if (
-    FORBIDDEN_HOSTS.has(host) ||
-    FORBIDDEN_HOSTS.has(bareHost) ||
-    /^169\.254\./.test(host) ||
-    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(host) ||
-    /^\[fe80:/i.test(host) ||
-    (net.isIP(bareHost) !== 0 && isForbiddenIpAddress(bareHost, { allowLoopback: isLocalHost }))
-  ) {
-    throw new Error(`Cloud metadata / private / link-local host '${parsed.hostname}' is forbidden (SSRF protection).`);
-  }
   if (parsed.protocol === 'http:' && !isLocalHost) {
     throw new Error('CORTEX_CLOUD_URL must use https:// for non-localhost endpoints.');
   }
@@ -138,22 +192,25 @@ export function assertSafeCloudUrl(rawUrl, env = process.env) {
   return parsed.toString();
 }
 
-export async function assertSafeResolvedCloudTarget(safeUrl) {
+export async function assertSafeResolvedCloudTarget(safeUrl, { allowPrivateNet = false } = {}) {
   const parsed = new URL(safeUrl);
   const host = parsed.hostname.toLowerCase();
   const bareHost = host.replace(/^\[|\]$/g, '');
   const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
   if (isLocalHost || net.isIP(bareHost) !== 0) {
-    if (net.isIP(bareHost) !== 0 && isForbiddenIpAddress(bareHost, { allowLoopback: isLocalHost })) {
+    if (
+      net.isIP(bareHost) !== 0 &&
+      isForbiddenIpAddress(bareHost, { allowLoopback: isLocalHost, allowPrivateNet })
+    ) {
       throw new Error(`Security Error: Target IP '${bareHost}' is forbidden (SSRF protection).`);
     }
     return;
   }
   const records = await dns.lookup(bareHost, { all: true });
   for (const rec of records) {
-    if (isForbiddenIpAddress(rec.address, { allowLoopback: false })) {
+    if (isForbiddenIpAddress(rec.address, { allowLoopback: false, allowPrivateNet })) {
       throw new Error(
-        `Security Error: CORTEX_CLOUD_URL host '${bareHost}' resolves to private/internal IP '${rec.address}' (SSRF protection).`
+        `Security Error: Host '${bareHost}' resolves to private/internal IP '${rec.address}' (SSRF protection).`
       );
     }
   }

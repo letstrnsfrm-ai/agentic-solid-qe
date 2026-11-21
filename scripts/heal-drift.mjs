@@ -644,10 +644,50 @@ function findMatchingTape(projectRoot, specPath, failingLocator) {
   return null;
 }
 
+function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedTarget = path.resolve(targetPath);
+  if (!isWithinDir(resolvedTarget, resolvedRoot)) {
+    throw new Error(`Security Error: Path traversal detected for ${label}: '${targetPath}'.`);
+  }
+  let cur = resolvedTarget;
+  while (cur !== resolvedRoot) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      throw new Error(
+        `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
+      );
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolvedTarget;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(`Security Error: Realpath escapes workspace root for ${label}.`);
+    }
+  }
+  return resolvedTarget;
+}
+
 function findLatestSnapshot(projectRoot, explicitSnapshot) {
   if (explicitSnapshot) {
     const resolved = path.resolve(projectRoot, explicitSnapshot);
-    return isWithinDir(resolved, projectRoot) && fs.existsSync(resolved) ? resolved : null;
+    if (!isWithinDir(resolved, projectRoot) || !fs.existsSync(resolved)) return null;
+    try {
+      assertNoSymlinkEscape(projectRoot, resolved, 'snapshot file');
+      return resolved;
+    } catch {
+      return null;
+    }
   }
   const candidates = [];
   for (const dirName of ['.agent-browser', '.playwright-cli']) {
@@ -741,10 +781,7 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const slug = slugifyKebab(specPath ? path.basename(specPath, '.spec.ts') : 'app-regression');
     const defectRel = `defects/DEFECT-${ts}-${slug}.md`;
-    const defectFull = path.join(projectRoot, defectRel);
-    if (!isWithinDir(defectFull, projectRoot)) {
-      throw new Error(`Refusing to write defect outside project root: ${defectFull}`);
-    }
+    const defectFull = assertNoSymlinkEscape(projectRoot, path.join(projectRoot, defectRel), 'defect report');
     const safeExcerpt = sanitizeDefectErrorExcerpt(errorText.slice(0, 1200));
     fs.mkdirSync(path.dirname(defectFull), { recursive: true });
     fs.writeFileSync(
@@ -794,9 +831,7 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
   }
 
   if (componentMatch) {
-    if (!isWithinDir(componentMatch.filePath, projectRoot)) {
-      throw new Error(`Refusing to patch component outside project root: ${componentMatch.filePath}`);
-    }
+    assertNoSymlinkEscape(projectRoot, componentMatch.filePath, 'component file');
     const compLines = fs.readFileSync(componentMatch.filePath, 'utf8').split('\n');
     compLines[componentMatch.lineIndex] = `    this.${componentMatch.propertyName} = ${componentMatch.prefix}${cleanExpr};`;
     fs.writeFileSync(componentMatch.filePath, compLines.join('\n'), 'utf8');
@@ -804,9 +839,7 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
   }
 
   if (tapeMatch && topCandidate && !options.to) {
-    if (!isWithinDir(tapeMatch.filePath, projectRoot)) {
-      throw new Error(`Refusing to patch tape outside project root: ${tapeMatch.filePath}`);
-    }
+    assertNoSymlinkEscape(projectRoot, tapeMatch.filePath, 'Session Tape');
     const locTokens = tokenize(failingLocator);
     const updated = { ...tapeMatch.tape };
     let patchedStep = false;

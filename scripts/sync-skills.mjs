@@ -237,50 +237,16 @@ function assertSafeTargetDirectory(resolvedTarget, label = 'target directory') {
   }
 }
 
-const FORBIDDEN_METADATA_HOSTS = new Set([
-  '0.0.0.0',
-  '[::]',
-  '169.254.169.254',
-  '169.254.170.2',
-  '100.100.100.200',
-  '[fd00:ec2::254]',
-  'metadata.google.internal',
-  'metadata.azure.com',
-  'metadata',
-  'instance-data',
-]);
+import { assertSafeTargetHttpUrl } from './report-cloud.mjs';
 
 function assertSafeHttpUrl(rawUrl) {
-  let parsed;
   try {
-    parsed = new URL(rawUrl);
-  } catch {
-    console.error(`❌ Invalid URL '${rawUrl}'. Must be a valid http:// or https:// URL.`);
+    const validated = assertSafeTargetHttpUrl(rawUrl, { label: 'URL' });
+    return validated.replace(/\/$/, '') || rawUrl;
+  } catch (err) {
+    console.error(`❌ ${err.message}`);
     process.exit(1);
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    console.error(`❌ Unsupported URL protocol '${parsed.protocol}' in '${rawUrl}'. Only http: and https: are allowed.`);
-    process.exit(1);
-  }
-  if (parsed.username || parsed.password) {
-    console.error(
-      `❌ Security Error: Embedded credentials in URL '${rawUrl}' are forbidden. Inject credentials via environment variables and UserBuilder.`
-    );
-    process.exit(1);
-  }
-  const hostLower = parsed.hostname.toLowerCase();
-  if (
-    FORBIDDEN_METADATA_HOSTS.has(hostLower) ||
-    /^169\.254\./.test(hostLower) ||
-    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(hostLower) ||
-    /^\[fe80:/i.test(hostLower)
-  ) {
-    console.error(
-      `❌ Security Error: Cloud metadata / link-local address '${parsed.hostname}' is forbidden (SSRF protection).`
-    );
-    process.exit(1);
-  }
-  return parsed.toString().replace(/\/$/, '') || rawUrl;
 }
 
 function assertSafeSlug(value, flagName) {
@@ -1036,6 +1002,8 @@ const REQUIRED_GITIGNORE_ENTRIES = [
   '.agent-browser/',
   '.playwright/',
   '.auth/',
+  '.exploratory/checkpoints/',
+  '.exploratory/live-*',
   '.agents/legacy-backups/',
   '.env',
   '.env.*',

@@ -5,8 +5,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-
 import { fileURLToPath } from 'node:url';
+import { assertSafeTargetHttpUrl } from './report-cloud.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -73,19 +73,6 @@ export const FORBIDDEN_IDENTIFIERS = new Set([
 ]);
 const MAX_TAPE_FILE_BYTES = 1024 * 1024; // 1 MB cap
 
-const FORBIDDEN_METADATA_HOSTS = new Set([
-  '0.0.0.0',
-  '[::]',
-  '169.254.169.254',
-  '169.254.170.2',
-  '100.100.100.200',
-  '[fd00:ec2::254]',
-  'metadata.google.internal',
-  'metadata.azure.com',
-  'metadata',
-  'instance-data',
-]);
-
 export function hasForbiddenIdentifierSegment(rawExpr) {
   if (typeof rawExpr !== 'string') return true;
   const cleaned = rawExpr.replace(/^capturedVariable:/, '').replace(/\(\)/g, '');
@@ -118,21 +105,10 @@ export function hasQuerySecretParam(rawUrlOrPath) {
   return typeof rawUrlOrPath === 'string' && QUERY_SECRET_PARAM_REGEX.test(rawUrlOrPath);
 }
 
-export function isValidHttpUrl(rawUrl) {
+export function isValidHttpUrl(rawUrl, env = process.env) {
   try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    if (parsed.username || parsed.password) return false;
     if (hasQuerySecretParam(rawUrl)) return false;
-    const hostLower = parsed.hostname.toLowerCase();
-    if (
-      FORBIDDEN_METADATA_HOSTS.has(hostLower) ||
-      /^169\.254\./.test(hostLower) ||
-      /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(hostLower) ||
-      /^\[fe80:/i.test(hostLower)
-    ) {
-      return false;
-    }
+    assertSafeTargetHttpUrl(rawUrl, { label: 'Session Tape URL', env });
     return true;
   } catch {
     return false;

@@ -1056,11 +1056,46 @@ export function loadMigrationManifest(projectRoot) {
   }
 }
 
-export function saveMigrationManifest(projectRoot, manifest) {
-  const manifestPath = path.join(projectRoot, MIGRATION_MANIFEST_REL_PATH);
-  if (!isWithinDir(manifestPath, projectRoot)) {
-    throw new Error(`Refusing to write manifest outside project root: ${manifestPath}`);
+function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedTarget = path.resolve(targetPath);
+  if (!isWithinDir(resolvedTarget, resolvedRoot)) {
+    throw new Error(`Security Error: Path traversal detected for ${label}: '${targetPath}'.`);
   }
+  let cur = resolvedTarget;
+  while (cur !== resolvedRoot) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      throw new Error(
+        `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
+      );
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolvedTarget;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(`Security Error: Realpath escapes workspace root for ${label}.`);
+    }
+  }
+  return resolvedTarget;
+}
+
+export function saveMigrationManifest(projectRoot, manifest) {
+  const manifestPath = assertNoSymlinkEscape(
+    projectRoot,
+    path.join(projectRoot, MIGRATION_MANIFEST_REL_PATH),
+    'migration manifest'
+  );
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
   return manifestPath;
@@ -1757,22 +1792,14 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
  */
 export function applyLegacyMigrationPlan(projectRoot, plan, legacySourceRoot = '..', options = {}) {
   const tapeDir = path.join(projectRoot, '.exploratory/tapes');
-  fs.mkdirSync(tapeDir, { recursive: true });
   const tapeRelPath = `.exploratory/tapes/${plan.draftTape.scenarioId}.json`;
-  const tapeFullPath = path.join(projectRoot, tapeRelPath);
-
-  if (!isWithinDir(tapeFullPath, projectRoot)) {
-    throw new Error(`Refusing to write tape outside project root: ${tapeFullPath}`);
-  }
-
+  const tapeFullPath = assertNoSymlinkEscape(projectRoot, path.join(projectRoot, tapeRelPath), 'Session Tape');
+  fs.mkdirSync(tapeDir, { recursive: true });
   fs.writeFileSync(tapeFullPath, JSON.stringify(plan.draftTape, null, 2) + '\n', 'utf8');
 
   const writtenScaffoldFiles = [];
   for (const sf of plan.scaffoldedFiles || []) {
-    const destPath = path.join(projectRoot, sf.path);
-    if (!isWithinDir(destPath, projectRoot)) {
-      throw new Error(`Refusing to write scaffold file outside project root: ${destPath}`);
-    }
+    const destPath = assertNoSymlinkEscape(projectRoot, path.join(projectRoot, sf.path), sf.path);
     if (!fs.existsSync(destPath) || options.force) {
       fs.mkdirSync(path.dirname(destPath), { recursive: true });
       fs.writeFileSync(destPath, sf.content, 'utf8');

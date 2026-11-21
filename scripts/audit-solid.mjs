@@ -850,9 +850,9 @@ for (const targetFile of allCodeAndArtifactFiles) {
   }
 }
 
-// 7. Audit Git Index & Staged Files for accidentally tracked .env, .auth/*.json, .agent-browser/, .playwright-cli/, .playwright/, or .agents/legacy-backups/
+// 7. Audit Git Index & Staged Files for accidentally tracked .env, .auth/*.json, .exploratory/checkpoints/*, .exploratory/live-*, .agent-browser/, .playwright-cli/, .playwright/, or .agents/legacy-backups/
 const FORBIDDEN_GIT_TRACKED_FILE_REGEX =
-  /^(?:\.env|\..*\.env|\.env\.(?!example$)[^/]+|\.auth\/.*\.json|\.agent-browser\/.*|\.playwright-cli\/.*|\.playwright\/.*|\.agents\/legacy-backups\/.*)$/;
+  /^(?:\.env|\..*\.env|\.env\.(?!example$)[^/]+|\.auth\/.*\.json|\.exploratory\/checkpoints\/.*|\.exploratory\/live-[^/]+|\.agent-browser\/.*|\.playwright-cli\/.*|\.playwright\/.*|\.agents\/legacy-backups\/.*)$/;
 
 if (fs.existsSync(path.join(ROOT, '.git'))) {
   const trackedSet = new Set();
