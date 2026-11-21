@@ -43,8 +43,9 @@ export function assertSafeAuthOutputPath(outPath, root = process.cwd()) {
       `Security Error: Output path '${outPath}' must match '.auth/<persona>.json' inside the repository.`
     );
   }
-  const authDir = path.resolve(root, '.auth');
-  const resolvedOut = path.resolve(root, normalized);
+  const resolvedRoot = path.resolve(root);
+  const authDir = path.resolve(resolvedRoot, '.auth');
+  const resolvedOut = path.resolve(resolvedRoot, normalized);
   const relToAuth = path.relative(authDir, resolvedOut);
   if (relToAuth.startsWith('..') || path.isAbsolute(relToAuth)) {
     throw new Error(`Security Error: Output path '${outPath}' resolves outside '.auth/'.`);
@@ -54,6 +55,20 @@ export function assertSafeAuthOutputPath(outPath, root = process.cwd()) {
   }
   if (fs.existsSync(resolvedOut) && fs.lstatSync(resolvedOut).isSymbolicLink()) {
     throw new Error(`Security Error: Refusing to overwrite symbolic link '${outPath}'.`);
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolvedOut;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(`Security Error: Output realpath escapes repository root: '${outPath}'.`);
+    }
   }
   return { authDir, resolvedOut };
 }

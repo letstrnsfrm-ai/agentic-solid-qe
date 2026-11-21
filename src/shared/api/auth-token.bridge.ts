@@ -45,12 +45,35 @@ function isForbiddenTargetUrl(parsed: URL): boolean {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true;
   if (parsed.username || parsed.password) return true;
   const hostLower = parsed.hostname.toLowerCase();
-  return (
+  const bare = hostLower.replace(/^\[|\]$/g, '');
+  const isLocal = hostLower === 'localhost' || hostLower === '127.0.0.1' || hostLower === '[::1]';
+  if (isLocal) return false;
+  if (
     FORBIDDEN_METADATA_HOSTS.has(hostLower) ||
+    FORBIDDEN_METADATA_HOSTS.has(bare) ||
     /^169\.254\./.test(hostLower) ||
-    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(hostLower) ||
-    /^\[fe80:/i.test(hostLower)
-  );
+    /^\[?64:ff9b:/i.test(hostLower) ||
+    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|127\.|0\.)/i.test(hostLower) ||
+    /^\[fe[89ab][0-9a-f]:/i.test(hostLower) ||
+    /^\[fd00:ec2::/i.test(hostLower)
+  ) {
+    return true;
+  }
+  const allowPrivate =
+    process.env.CORTEX_ALLOW_PRIVATE_NET === '1' || process.env.CORTEX_ALLOW_PRIVATE_NET === 'true';
+  if (!allowPrivate) {
+    if (
+      /^10\./.test(bare) ||
+      /^192\.168\./.test(bare) ||
+      /^172\.(?:1[6-9]|2\d|3[01])\./.test(bare) ||
+      /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(bare) ||
+      /^0\./.test(bare) ||
+      /^f[cd][0-9a-f]{2}:/i.test(bare)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function sanitizeHeaderValue(raw: string): string {
@@ -99,6 +122,24 @@ export class AuthTokenBridge {
     }
     if (fs.existsSync(resolved) && fs.lstatSync(resolved).isSymbolicLink()) {
       return null;
+    }
+    if (fs.existsSync(workspaceRoot)) {
+      try {
+        const realRoot = fs.realpathSync(workspaceRoot);
+        let existing = resolved;
+        while (!fs.existsSync(existing) && existing !== workspaceRoot) {
+          const parent = path.dirname(existing);
+          if (parent === existing) break;
+          existing = parent;
+        }
+        const realExisting = fs.realpathSync(existing);
+        const realRel = path.relative(realRoot, realExisting);
+        if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+          return null;
+        }
+      } catch {
+        return null;
+      }
     }
     return resolved;
   }

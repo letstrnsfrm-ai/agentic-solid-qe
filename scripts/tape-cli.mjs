@@ -35,6 +35,45 @@ export function assertSafeScenarioId(id) {
   return clean;
 }
 
+function escapeRegExp(str) {
+  return String(str ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedTarget = path.resolve(targetPath);
+  const rel = path.relative(resolvedRoot, resolvedTarget);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Security Error: Path traversal detected for ${label}: '${targetPath}'.`);
+  }
+  let cur = resolvedTarget;
+  while (cur !== resolvedRoot) {
+    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
+      throw new Error(
+        `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
+      );
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolvedTarget;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(`Security Error: Realpath escapes workspace root for ${label}.`);
+    }
+  }
+  return resolvedTarget;
+}
+
 function resolveTapePath(rootDir, scenarioId) {
   const safeId = assertSafeScenarioId(scenarioId);
   const tapesDir = path.resolve(rootDir, '.exploratory/tapes');
@@ -42,6 +81,7 @@ function resolveTapePath(rootDir, scenarioId) {
   if (!full.startsWith(tapesDir + path.sep)) {
     throw new Error(`Refusing path outside .exploratory/tapes: ${full}`);
   }
+  assertNoSymlinkEscape(rootDir, full, 'Session Tape');
   return { safeId, tapesDir, full };
 }
 
@@ -61,6 +101,7 @@ function writeValidatedTape(rootDir, scenarioId, tapeObj, { dryRun = false } = {
     throw new Error(`Tape validation failed (${errors.length}):\n- ${errors.slice(0, 6).join('\n- ')}`);
   }
   if (!dryRun) {
+    assertNoSymlinkEscape(rootDir, full, 'Session Tape');
     fs.mkdirSync(tapesDir, { recursive: true });
     fs.writeFileSync(full, JSON.stringify(tapeObj, null, 2) + '\n', 'utf8');
   }
@@ -69,23 +110,25 @@ function writeValidatedTape(rootDir, scenarioId, tapeObj, { dryRun = false } = {
 
 export function listTapes(rootDir = process.cwd()) {
   const tapesDir = path.join(rootDir, '.exploratory/tapes');
-  if (!fs.existsSync(tapesDir)) return [];
+  if (!fs.existsSync(tapesDir) || fs.lstatSync(tapesDir).isSymbolicLink()) return [];
   const specsDir = path.join(rootDir, 'tests');
-  const specSources = fs.existsSync(specsDir)
-    ? fs
-        .readdirSync(specsDir)
-        .filter((f) => f.endsWith('.spec.ts'))
-        .map((f) => ({ file: f, content: fs.readFileSync(path.join(specsDir, f), 'utf8') }))
-    : [];
+  const specSources =
+    fs.existsSync(specsDir) && !fs.lstatSync(specsDir).isSymbolicLink()
+      ? fs
+          .readdirSync(specsDir, { withFileTypes: true })
+          .filter((e) => !e.isSymbolicLink() && e.isFile() && e.name.endsWith('.spec.ts'))
+          .map((e) => ({ file: e.name, content: fs.readFileSync(path.join(specsDir, e.name), 'utf8') }))
+      : [];
 
   return fs
-    .readdirSync(tapesDir)
-    .filter((f) => f.endsWith('.json'))
+    .readdirSync(tapesDir, { withFileTypes: true })
+    .filter((e) => !e.isSymbolicLink() && e.isFile() && e.name.endsWith('.json'))
+    .map((e) => e.name)
     .sort()
     .map((f) => {
       const data = JSON.parse(fs.readFileSync(path.join(tapesDir, f), 'utf8'));
       const id = data.scenarioId || path.basename(f, '.json');
-      const idRe = new RegExp(`(?<![a-z0-9-])${String(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9-])`);
+      const idRe = new RegExp(`(?<![a-z0-9-])${escapeRegExp(id)}(?![a-z0-9-])`);
       const compiled = specSources.some(
         (s) => path.basename(s.file, '.spec.ts') === id || idRe.test(s.content)
       );
@@ -170,11 +213,12 @@ const FORBIDDEN_BUILDER_IDENTIFIERS = new Set([
 export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = false } = {}) {
   if (!Array.isArray(setData) || setData.length === 0) return [];
   const dataDir = path.join(rootDir, 'src/data');
+  assertNoSymlinkEscape(rootDir, dataDir, 'src/data directory');
   const builderFiles = fs.existsSync(dataDir)
     ? fs
-        .readdirSync(dataDir)
-        .filter((f) => f.endsWith('.builder.ts'))
-        .map((f) => path.join(dataDir, f))
+        .readdirSync(dataDir, { withFileTypes: true })
+        .filter((e) => !e.isSymbolicLink() && e.isFile() && e.name.endsWith('.builder.ts'))
+        .map((e) => path.join(dataDir, e.name))
     : [];
   const applied = [];
 
@@ -199,7 +243,7 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
         .replace(/Builder$/, '')
         .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
         .toLowerCase();
-      targetFile = path.join(dataDir, `${kebab}.builder.ts`);
+      targetFile = assertNoSymlinkEscape(rootDir, path.join(dataDir, `${kebab}.builder.ts`), 'Data Builder file');
       if (!dryRun) {
         fs.mkdirSync(dataDir, { recursive: true });
         fs.writeFileSync(
@@ -212,11 +256,14 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
       continue;
     }
 
+    assertNoSymlinkEscape(rootDir, targetFile, 'Data Builder file');
     let content = fs.readFileSync(targetFile, 'utf8');
-    const methodRe = new RegExp(`(static\\s+${methodName}\\s*\\([^)]*\\)[^{]*\\{\\s*return\\s*\\{)([\\s\\S]*?)(\\n\\s*\\};)`);
+    const safeMethodRe = escapeRegExp(methodName);
+    const safePropRe = escapeRegExp(propName);
+    const methodRe = new RegExp(`(static\\s+${safeMethodRe}\\s*\\([^)]*\\)[^{]*\\{\\s*return\\s*\\{)([\\s\\S]*?)(\\n\\s*\\};)`);
     const mm = content.match(methodRe);
     if (mm) {
-      const propRe = new RegExp(`(\\b${propName}\\s*:\\s*)(?:'[^']*'|\"[^\"]*\")(,?)`);
+      const propRe = new RegExp(`(\\b${safePropRe}\\s*:\\s*)(?:'[^']*'|\"[^\"]*\")(,?)`);
       if (propRe.test(mm[2])) {
         const updatedBody = mm[2].replace(propRe, (_, p1, p2) => `${p1}${serializedVal}${p2}`);
         content = content.replace(methodRe, (_, m1, _m2, m3) => `${m1}${updatedBody}${m3}`);
@@ -229,7 +276,7 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
       }
     } else {
       const newMethod = `\n  static ${methodName}() {\n    return {\n      ${propName}: ${serializedVal},\n    };\n  }\n`;
-      content = content.replace(/\}\s*$/, `${newMethod}}\n`);
+      content = content.replace(/\}\s*$/, () => `${newMethod}}\n`);
     }
     if (!dryRun) {
       fs.writeFileSync(targetFile, content, 'utf8');

@@ -1541,6 +1541,12 @@ export { expect };
           `Security Error: Unsafe expectedStates target reference '${state.targetComponent}.${state.targetProperty}'.`
         );
       }
+      for (const seg of String(state.targetComponent || '').split('.')) {
+        assertSafeJsIdentifier(seg.replace(/\(\)$/, ''), 'expectedStates.targetComponent segment');
+      }
+      for (const seg of String(state.targetProperty || '').split('.')) {
+        assertSafeJsIdentifier(seg.replace(/\(\)$/, ''), 'expectedStates.targetProperty segment');
+      }
       let resolvedTargetComponent = state.targetComponent;
       if (
         primaryPageFixture &&
@@ -1775,6 +1781,20 @@ ${specBody}
       const parent = path.dirname(cur);
       if (parent === cur) break;
       cur = parent;
+    }
+    if (fs.existsSync(resolvedRoot)) {
+      const realRoot = fs.realpathSync(resolvedRoot);
+      let existing = resolvedTarget;
+      while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+        const parent = path.dirname(existing);
+        if (parent === existing) break;
+        existing = parent;
+      }
+      const realExisting = fs.realpathSync(existing);
+      const realRel = path.relative(realRoot, realExisting);
+      if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+        throw new Error(`Security Error: Target realpath escapes repository workspace: ${label}`);
+      }
     }
     return resolvedTarget;
   };

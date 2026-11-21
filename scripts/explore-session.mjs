@@ -12,6 +12,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { assertSafeTargetHttpUrl } from './report-cloud.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,18 +57,6 @@ const ALLOWED_EXPLORE_CLI_ACTIONS = new Set([
   'hover',
   'wait',
 ]);
-const FORBIDDEN_EXPLORE_HOSTS = new Set([
-  '0.0.0.0',
-  '[::]',
-  '169.254.169.254',
-  '169.254.170.2',
-  '100.100.100.200',
-  '[fd00:ec2::254]',
-  'metadata.google.internal',
-  'metadata.azure.com',
-  'metadata',
-  'instance-data',
-]);
 
 // ─── Pure Exported Helpers (Unit-Testable) ──────────────────────────────────
 
@@ -78,32 +67,8 @@ export function validateSafeId(val, label = 'id') {
   return val;
 }
 
-export function assertSafeExploreUrl(rawUrl, label = 'URL') {
-  let parsed;
-  try {
-    parsed = new URL(String(rawUrl || '').trim());
-  } catch {
-    throw new Error(`Security Error: Invalid ${label} '${rawUrl}'.`);
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(
-      `Security Error: Disallowed ${label} protocol '${parsed.protocol}'. Only http: and https: are permitted.`
-    );
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error(`Security Error: Embedded credentials in ${label} are forbidden.`);
-  }
-  const host = parsed.hostname.toLowerCase();
-  if (
-    FORBIDDEN_EXPLORE_HOSTS.has(host) ||
-    /^169\.254\./.test(host) ||
-    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(host) ||
-    /^\[fe80:/i.test(host) ||
-    /^\[fd00:ec2::/i.test(host)
-  ) {
-    throw new Error(`Security Error: Cloud metadata / link-local host '${parsed.hostname}' is forbidden (SSRF protection).`);
-  }
-  return parsed.toString();
+export function assertSafeExploreUrl(rawUrl, label = 'URL', env = process.env) {
+  return assertSafeTargetHttpUrl(rawUrl, { label, env });
 }
 
 export function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
@@ -1108,6 +1073,11 @@ export function validateExploreActionTuple(tuple, variables = {}) {
       `Security Error: Action target '${interpolatedTarget}' cannot begin with '-' (CLI flag injection blocked).`
     );
   }
+  if (interpolatedVal !== undefined && /^--?[a-zA-Z]/.test(interpolatedVal)) {
+    throw new Error(
+      `Security Error: Action value '${interpolatedVal}' cannot begin with a CLI flag prefix ('-' / '--').`
+    );
+  }
   if (action === 'goto') {
     if (!interpolatedTarget) {
       throw new Error('Security Error: goto action requires a target URL.');
@@ -1116,6 +1086,61 @@ export function validateExploreActionTuple(tuple, variables = {}) {
     return { action, interpolatedTarget: safeUrl, interpolatedVal: undefined };
   }
   return { action, interpolatedTarget, interpolatedVal };
+}
+
+const FORBIDDEN_CAPTURE_EVAL_TOKENS_RE =
+  /\b(?:cookie|cookies|localStorage|sessionStorage|indexedDB|fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource|eval|Function|constructor|__proto__|prototype|import|require|process|globalThis|window\.open|document\.write|innerHTML|outerHTML)\b/i;
+
+const SAFE_READONLY_DOM_EVAL_RE =
+  /^(?:location\.(?:href|pathname|search|hash|origin)|document\.title|document\.(?:querySelector|getElementById)\(\s*(?:'[^'\\]{1,120}'|"[^"\\]{1,120}")\s*\)\??\.(?:textContent|innerText|value|getAttribute\(\s*(?:'[a-zA-Z0-9_-]{1,64}'|"[a-zA-Z0-9_-]{1,64}")\s*\))(?:\??\.trim\(\))?)$/;
+
+export function validateSafeCaptureRequest({ varName, from = 'url', expr = '' } = {}) {
+  if (!varName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(varName) || FORBIDDEN_IDENTIFIERS.has(varName)) {
+    throw new Error(`Security Error: Invalid capture variable name '${varName}'.`);
+  }
+  if (SENSITIVE_FIELD_RE.test(varName)) {
+    throw new Error(
+      `Security Error: Refusing to capture sensitive credential/token variable '${varName}'.`
+    );
+  }
+  const allowedSources = new Set(['url', 'text', 'value', 'eval']);
+  if (!allowedSources.has(from)) {
+    throw new Error(`Security Error: Invalid --from '${from}'. Expected 'url', 'text', 'value', or 'eval'.`);
+  }
+  const cleanExpr = String(expr || '').trim();
+  if (cleanExpr.length > 256) {
+    throw new Error('Security Error: Capture --expr exceeds 256-character safety limit.');
+  }
+  if (from === 'url') {
+    if (cleanExpr && /\([^)]*[+*][^)]*\)[+*?{]/.test(cleanExpr)) {
+      throw new Error('Security Error: Capture regex rejected due to nested quantifier (ReDoS protection).');
+    }
+    return { varName, from, expr: cleanExpr };
+  }
+  if (from === 'text' || from === 'value') {
+    if (!cleanExpr || cleanExpr.startsWith('-')) {
+      throw new Error(`Security Error: Capture --from ${from} requires a non-flag element ref or selector in --expr.`);
+    }
+    return { varName, from, expr: cleanExpr };
+  }
+  // --from eval: permit ONLY @eN ref shorthand or strictly allowlisted read-only DOM expressions
+  if (!cleanExpr) {
+    throw new Error("Security Error: Capture --from eval requires a read-only DOM expression or '@eN' ref.");
+  }
+  if (FORBIDDEN_CAPTURE_EVAL_TOKENS_RE.test(cleanExpr)) {
+    throw new Error(
+      `Security Error: Disallowed token in capture --expr '${cleanExpr}' (storage/cookie/network/code-execution access is forbidden).`
+    );
+  }
+  if (/^@e\d+$/.test(cleanExpr)) {
+    return { varName, from: 'text', expr: cleanExpr };
+  }
+  if (!SAFE_READONLY_DOM_EVAL_RE.test(cleanExpr)) {
+    throw new Error(
+      `Security Error: Unsafe capture eval expression '${cleanExpr}'. Use --from text --expr "@eN" or a read-only document.querySelector('...')?.textContent expression.`
+    );
+  }
+  return { varName, from: 'eval', expr: cleanExpr };
 }
 
 async function executeActions(actionTuples, { stepTitle, scope = '', json = false, skipNetwork = false }) {
@@ -1291,18 +1316,13 @@ async function cmdActor(args) {
 }
 
 async function cmdCapture(args) {
-  const varName = args[0];
-  if (!varName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(varName) || FORBIDDEN_IDENTIFIERS.has(varName)) {
-    throw new Error(`Invalid variable name '${varName}'.`);
-  }
-  const from = getFlagValue(args, '--from', 'url');
-  if (from !== 'url' && from !== 'eval') {
-    throw new Error(`Invalid --from '${from}'. Expected 'url' or 'eval'.`);
-  }
-  const expr = getFlagValue(args, '--expr', '');
-  if (expr.length > 256) {
-    throw new Error('Capture --expr exceeds 256-character safety limit.');
-  }
+  const rawFrom = getFlagValue(args, '--from', 'url');
+  const rawExpr = getFlagValue(args, '--expr', '');
+  const { varName, from, expr } = validateSafeCaptureRequest({
+    varName: args[0],
+    from: rawFrom,
+    expr: rawExpr,
+  });
   const state = readJsonOrNull(LIVE_STATE_FILE);
   const draftTape = readJsonOrNull(LIVE_DRAFT_TAPE_FILE);
   if (!state || !draftTape) throw new Error('No active explore session.');
@@ -1312,16 +1332,19 @@ async function cmdCapture(args) {
   if (from === 'url') {
     const url = (runAgentBrowser(session, ['eval', 'location.href'], { allowFail: true }) || state.url).replace(/^"|"$/g, '');
     if (expr) {
-      if (/\([^)]*[+*][^)]*\)[+*?]/.test(expr)) {
-        throw new Error('Security Error: Capture regex rejected due to nested quantifier (ReDoS protection).');
-      }
       const m = url.match(new RegExp(expr));
       value = m ? m[1] || m[0] : url;
     } else {
       value = url;
     }
+  } else if (from === 'text' || from === 'value') {
+    const sub = from === 'value' ? 'value' : 'text';
+    value = runAgentBrowser(session, ['get', sub, expr], { allowFail: true }).replace(/^"|"$/g, '');
   } else {
     value = runAgentBrowser(session, ['eval', expr], { allowFail: true }).replace(/^"|"$/g, '');
+  }
+  if (SENSITIVE_VALUE_RE.test(String(value || '').trim())) {
+    throw new Error(`Security Error: Captured value for '${varName}' matches a sensitive credential/token pattern.`);
   }
   state.variables[varName] = value;
   draftTape.capturedVariables.push({

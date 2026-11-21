@@ -694,15 +694,17 @@ export async function discoverAndSeedLiveShards(
   rootDir = process.cwd(),
   { baseUrl = '', maxShards = 6, filterPattern = '' } = {}
 ) {
+  const { assertSafeTargetHttpUrl, assertSafeResolvedCloudTarget } = await import('./report-cloud.mjs');
   const graph = buildDomainGraph({ rootDir, writeToDisk: false });
-  const targetUrl = String(baseUrl || graph.targetApp?.baseUrl || '').trim();
-  if (!targetUrl || targetUrl.includes('localhost:3000') || targetUrl.includes('your-app-url')) {
+  const rawTargetUrl = String(baseUrl || graph.targetApp?.baseUrl || '').trim();
+  if (!rawTargetUrl || rawTargetUrl.includes('localhost:3000') || rawTargetUrl.includes('your-app-url')) {
     throw new Error('Cannot discover live shards without a configured target URL. Pass --url <https://...>.');
   }
+  const targetUrl = assertSafeTargetHttpUrl(rawTargetUrl, { label: 'live shard discovery URL' });
+  const allowPrivateNet =
+    process.env.CORTEX_ALLOW_PRIVATE_NET === '1' || process.env.CORTEX_ALLOW_PRIVATE_NET === 'true';
+  await assertSafeResolvedCloudTarget(targetUrl, { allowPrivateNet });
   const parsedBase = new URL(targetUrl);
-  if (parsedBase.protocol !== 'http:' && parsedBase.protocol !== 'https:') {
-    throw new Error(`Unsupported URL protocol '${parsedBase.protocol}'.`);
-  }
 
   const discoveredLinks = [];
   const seenRoutes = new Set();
@@ -731,15 +733,29 @@ export async function discoverAndSeedLiveShards(
   };
 
   try {
-    const res = await fetch(targetUrl, {
-      redirect: 'follow',
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (res.ok) {
-      const html = await res.text();
-      for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
-        addCandidate(m[1], m[2]);
+    let fetchUrl = targetUrl;
+    for (let hop = 0; hop < 3; hop++) {
+      const res = await fetch(fetchUrl, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get('location');
+        if (!loc) break;
+        const nextUrl = assertSafeTargetHttpUrl(new URL(loc, fetchUrl).toString(), {
+          label: 'redirected discovery URL',
+        });
+        await assertSafeResolvedCloudTarget(nextUrl, { allowPrivateNet });
+        fetchUrl = nextUrl;
+        continue;
       }
+      if (res.ok) {
+        const html = await res.text();
+        for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+          addCandidate(m[1], m[2]);
+        }
+      }
+      break;
     }
   } catch {
     /* fallback to existing shards or root shard */
