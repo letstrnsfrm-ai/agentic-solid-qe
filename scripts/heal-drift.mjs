@@ -466,7 +466,9 @@ export function classifyFailureRootCause({
     /(?:HTTP|status|statusCode|responded with)\s*:?\s*50[0-4]\b/i.test(err) ||
     httpStatuses.some((s) => s >= 500 && s < 600);
   const isAssertionMismatch =
-    /\b(?:Expected|Received):/i.test(err) &&
+    (/\b(?:Expected|Received):/i.test(err) ||
+      /-\s*Expected\s+(?:substring|string|pattern|value)/i.test(err) ||
+      /\bexpect\(locator\)\.(?:toContainText|toHaveText|toHaveValue|toHaveURL)\b.*failed/i.test(err)) &&
     !/TimeoutError.*waiting for/i.test(err);
 
   if (has5xx || (consoleErrors.length > 0 && isAssertionMismatch) || isAssertionMismatch) {

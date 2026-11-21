@@ -4301,4 +4301,198 @@ export class InvoicePage {
   }
 });
 
+test('39. Unified 00-master-orchestrator Single Entry Point: gatePayload/GATE_OPTIONS, --bootstrap, --explore, --tape --set-data, --heal-action, --ci-init & explore-to-compile roundtrip', async () => {
+  const {
+    buildOrchestrationBlueprint,
+    formatCompactBlueprint,
+    ensureCiPipelineConfigured,
+  } = await import('./orchestrate.mjs');
+  const {
+    createDraftTape,
+    appendRecordedAction,
+    appendRecordedAssertion,
+    finalizeDraftTape,
+    parseSnapshotRefs,
+  } = await import('./explore-session.mjs');
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const { classifyFailureRootCause } = await import('./heal-drift.mjs');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-single-entry-'));
+  try {
+    // 1. Stage 0 placeholder URL emits structured gatePayload + GATE_OPTIONS
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpRoot, '--reset'], REPO_ROOT);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    const pkg = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'package.json'), 'utf8'));
+    assert.equal(pkg.bin?.cortex, './scripts/sync-skills.mjs', 'Expected adopter package.json to include bin.cortex');
+
+    const bpStage0 = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(bpStage0.nextAction.skill, '00-env-bootstrap');
+    assert.equal(bpStage0.nextAction.gatePayload?.gateId, 'stage0-target-url');
+    assert.ok(Array.isArray(bpStage0.nextAction.gatePayload?.options));
+    assert.match(formatCompactBlueprint(bpStage0), /GATE_OPTIONS \|/);
+
+    // 2. Stage 0 configured URL with 0 shards/tapes/specs prompts stage0-discover-shards instead of prematurely claiming Stage 4
+    const bootRes = runNode(
+      path.join(tmpRoot, 'scripts/orchestrate.mjs'),
+      ['--bootstrap', '--url', 'https://the-internet.herokuapp.com', '--name', 'The Internet'],
+      tmpRoot
+    );
+    assert.equal(bootRes.status, 0, bootRes.stderr);
+    const bpNoShards = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(bpNoShards.nextAction.skill, '00-env-bootstrap');
+    assert.equal(bpNoShards.nextAction.gatePayload?.gateId, 'stage0-discover-shards');
+    assert.match(bpNoShards.maturityStage, /Stage 0/);
+
+    // 3. Seed a shard -> Stage 1 uncovered shard emits stage1-scenario-selection gatePayload with --explore start command
+    const shardDir = path.join(tmpRoot, '.agents/domain/shards');
+    fs.mkdirSync(shardDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(shardDir, 'form-authentication.md'),
+      `# Feature Shard: Form Authentication (/login)\n\n- **Owner Squad:** \`@org/qe-core\`\n- **Last Verified:** \`2026-11-21\`\n- **Routes:** \`/login\`\n- **Published Capabilities:** *(none yet)*\n`,
+      'utf8'
+    );
+    const bpStage1 = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(bpStage1.nextAction.skill, '01-cli-explorer');
+    assert.equal(bpStage1.nextAction.gatePayload?.gateId, 'stage1-scenario-selection');
+    assert.match(
+      bpStage1.nextAction.command,
+      /npx cortex orchestrate --explore start --shard form-authentication --scenario form-authentication-p0/
+    );
+
+    // 4. Explore draft tape -> finalizeDraftTape emits schema-valid inputDataRef, auto-prepends goto /login, and converts literal assertion strings into DataBuilder refs
+    const snap = '- region "Messages" [ref=e3]\n- textbox "Username" [ref=e8]\n- textbox "Password" [ref=e10]\n- button "Login" [ref=e6]';
+    const refMap = parseSnapshotRefs(snap);
+    const draft = createDraftTape({
+      scenarioId: 'form-authentication-p0',
+      title: 'Form Authentication P0',
+      baseUrl: 'https://the-internet.herokuapp.com/login',
+    });
+    assert.deepEqual(draft.tags, ['@p0', '@smoke']);
+    appendRecordedAction(draft, {
+      action: 'fill',
+      refOrSelector: '@e8',
+      value: 'tomsmith',
+      refMap,
+      pageRoute: '/login',
+      businessStep: 'Authenticate user',
+    });
+    appendRecordedAction(draft, {
+      action: 'fill',
+      refOrSelector: '@e10',
+      value: 'SuperSecretPassword!',
+      refMap,
+      pageRoute: '/login',
+      businessStep: 'Authenticate user',
+    });
+    appendRecordedAction(draft, {
+      action: 'click',
+      refOrSelector: '@e6',
+      refMap,
+      pageRoute: '/login',
+      businessStep: 'Authenticate user',
+    });
+    appendRecordedAssertion(draft, {
+      refOrSelector: '@e3',
+      assertionType: 'toContainText',
+      expectedValue: 'You logged into a secure area!',
+      refMap,
+      pageRoute: '/secure',
+      businessStep: 'Verify secure area message',
+    });
+
+    const finalized = finalizeDraftTape(draft, 'form-authentication-p0');
+    assert.equal(finalized.baseUrl, 'https://the-internet.herokuapp.com');
+    assert.equal(finalized.semanticSteps[0].action, 'goto');
+    assert.equal(finalized.semanticSteps[0].locatorContract.value, '/login');
+    assert.equal(finalized.semanticSteps[1].inputDataRef, 'FormAuthenticationP0DataBuilder.standard().username');
+    assert.equal(finalized.semanticSteps[1].dataBuilderRef, undefined);
+    assert.equal(
+      finalized.expectedStates[0].expectedValueRef,
+      'FormAuthenticationP0DataBuilder.standard().expectedMessagesText'
+    );
+    const valErrors = validateTapeObject(finalized, 'form-authentication-p0.json');
+    assert.deepEqual(valErrors, [], `Expected finalized explore tape to pass schema validation: ${valErrors.join('; ')}`);
+
+    // Write tape & compile via orchestrate
+    const tapesDir = path.join(tmpRoot, '.exploratory/tapes');
+    fs.mkdirSync(tapesDir, { recursive: true });
+    fs.writeFileSync(path.join(tapesDir, 'form-authentication-p0.json'), JSON.stringify(finalized, null, 2), 'utf8');
+    const compRes = runNode(path.join(tmpRoot, 'scripts/compile-tape.mjs'), ['form-authentication-p0', '--apply'], tmpRoot);
+    assert.equal(compRes.status, 0, compRes.stderr);
+
+    // 5. Route --tape clone & --tape patch --set-data through orchestrate.mjs and verify no spec substring collision
+    const cloneViaOrch = runNode(
+      path.join(tmpRoot, 'scripts/orchestrate.mjs'),
+      [
+        '--tape',
+        'clone',
+        'form-authentication-p0',
+        'form-authentication-p0-negative',
+        '--title',
+        'Negative Login Boundary',
+        '--charter',
+        'boundary-analysis',
+      ],
+      tmpRoot
+    );
+    assert.equal(cloneViaOrch.status, 0, cloneViaOrch.stderr);
+
+    const patchViaOrch = runNode(
+      path.join(tmpRoot, 'scripts/orchestrate.mjs'),
+      [
+        '--tape',
+        'patch',
+        'form-authentication-p0-negative',
+        '--set-step',
+        '2',
+        'inputDataRef=FormAuthenticationP0DataBuilder.invalidUser().username',
+        '--set-expect',
+        '1',
+        'expectedValueRef=FormAuthenticationP0DataBuilder.invalidUser().expectedMessagesText',
+        '--set-data',
+        'FormAuthenticationP0DataBuilder.invalidUser().username=invalid_user',
+        '--set-data',
+        'FormAuthenticationP0DataBuilder.invalidUser().expectedMessagesText=Your username is invalid!',
+      ],
+      tmpRoot
+    );
+    assert.equal(patchViaOrch.status, 0, patchViaOrch.stderr);
+
+    const compNeg = runNode(
+      path.join(tmpRoot, 'scripts/compile-tape.mjs'),
+      ['form-authentication-p0-negative', '--apply'],
+      tmpRoot
+    );
+    assert.equal(compNeg.status, 0, compNeg.stderr);
+    assert.ok(fs.existsSync(path.join(tmpRoot, 'tests/form-authentication-p0.spec.ts')));
+    assert.ok(fs.existsSync(path.join(tmpRoot, 'tests/form-authentication-p0-negative.spec.ts')));
+    const builderCode = fs.readFileSync(
+      path.join(tmpRoot, 'src/data/form-authentication-p0-data.builder.ts'),
+      'utf8'
+    );
+    assert.match(builderCode, /invalid_user/);
+    assert.match(builderCode, /Your username is invalid!/);
+
+    // 6. Playwright diff-style assertion failure (- Expected substring / + Received string) classifies as app-regression
+    const diffFailure = classifyFailureRootCause({
+      errorText: `Error: expect(locator).toContainText(expected) failed\n- Expected substring  - 1\n+ Received string     + 5\n- expected text\n+ actual text`,
+    });
+    assert.equal(diffFailure.category, 'app-regression');
+
+    // 7. --ci-init via orchestrate scaffolds missing workflow
+    const ciPath = path.join(tmpRoot, '.github/workflows/playwright-ci.yml');
+    if (fs.existsSync(ciPath)) fs.unlinkSync(ciPath);
+    const bpNoCi = buildOrchestrationBlueprint(tmpRoot);
+    assert.equal(bpNoCi.nextAction.skill, '04-ci-pipeline');
+    assert.equal(bpNoCi.nextAction.command, 'npx cortex orchestrate --ci-init');
+    const ciInitRes = ensureCiPipelineConfigured(tmpRoot);
+    assert.equal(ciInitRes.status, 'created');
+    assert.ok(fs.existsSync(ciPath));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
 

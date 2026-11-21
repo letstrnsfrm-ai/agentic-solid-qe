@@ -325,7 +325,7 @@ export function createDraftTape({
     charter: 'happy-path-baseline',
     baseUrl,
     recordedAt: new Date().toISOString(),
-    tags: ['@regression'],
+    tags: ['@p0', '@smoke'],
     persona: {
       role: actor,
       dataBuilderRef: `${safeId.split('-').map((p) => p[0].toUpperCase() + p.slice(1)).join('')}DataBuilder.standard()`,
@@ -381,10 +381,14 @@ export function appendRecordedAction(
         .join('') || 'Main'}SectionComponent`,
     action: normalizedAction,
     locatorContract,
-    ...(dataBuilderRef ? { dataBuilderRef } : {}),
+    ...(dataBuilderRef ? { inputDataRef: dataBuilderRef, dataBuilderRef } : {}),
+    ...(!redacted && value !== undefined ? { __builderSampleValue: String(value) } : {}),
     ...(actor ? { actor } : {}),
   };
 
+  if (draftTape.__recordedBuilderValues && dataBuilderRef && !redacted && value !== undefined) {
+    draftTape.__recordedBuilderValues[dataBuilderRef] = String(value);
+  }
   draftTape.semanticSteps.push(stepObj);
   return { stepObj, redacted };
 }
@@ -405,21 +409,61 @@ export function switchDraftActor(draftTape, { actorId, role, portalBaseUrl, stor
 
 export function finalizeDraftTape(draftTape, scenarioId) {
   const safeId = validateSafeId(scenarioId || draftTape.scenarioId, 'scenarioId');
+  const cleanedSteps = (Array.isArray(draftTape.semanticSteps) ? draftTape.semanticSteps : []).map((st, idx) => {
+    const copy = { ...st, stepIndex: idx + 1 };
+    if (copy.dataBuilderRef && !copy.inputDataRef) {
+      copy.inputDataRef = copy.dataBuilderRef;
+    }
+    delete copy.dataBuilderRef;
+    delete copy.__builderSampleValue;
+    return copy;
+  });
+  let baseUrl = draftTape.baseUrl || 'http://localhost:3000';
+  let startRoute = '/';
+  try {
+    const parsedUrl = new URL(baseUrl);
+    if (parsedUrl.pathname && parsedUrl.pathname !== '/') {
+      startRoute = parsedUrl.pathname;
+      baseUrl = parsedUrl.origin;
+    }
+  } catch {
+    /* keep raw baseUrl */
+  }
+  if (cleanedSteps.length > 0 && cleanedSteps[0].action !== 'goto' && startRoute && startRoute !== '/') {
+    const firstStep = cleanedSteps[0];
+    const targetRoute = startRoute;
+    cleanedSteps.unshift({
+      stepIndex: 1,
+      intent: `Navigate to ${targetRoute}`,
+      businessStep: firstStep.businessStep || `Navigate to ${targetRoute}`,
+      pageRoute: targetRoute,
+      componentCandidate: firstStep.componentCandidate || 'MainSectionComponent',
+      action: 'goto',
+      locatorContract: { strategy: 'url', value: targetRoute },
+      ...(firstStep.actor ? { actor: firstStep.actor } : {}),
+    });
+    cleanedSteps.forEach((st, i) => {
+      st.stepIndex = i + 1;
+    });
+  }
   const finalized = {
     ...draftTape,
     scenarioId: safeId,
+    baseUrl,
     recordedAt: new Date().toISOString(),
+    semanticSteps: cleanedSteps,
     networkContracts: Array.isArray(draftTape.networkContracts) ? draftTape.networkContracts : [],
   };
+  delete finalized.__recordedBuilderValues;
   if (finalized.semanticSteps.length === 0) {
     finalized.semanticSteps.push({
       stepIndex: 1,
       intent: 'Navigate to target application route',
       businessStep: 'Navigate to target application route',
-      pageRoute: '/',
+      pageRoute: startRoute,
       componentCandidate: 'MainSectionComponent',
       action: 'goto',
-      locatorContract: { strategy: 'url', value: '/' },
+      locatorContract: { strategy: 'url', value: startRoute },
     });
   }
   if (finalized.expectedStates.length === 0) {
@@ -595,23 +639,47 @@ export function appendRecordedAssertion(
     resolveComponentFromDomainGraph(pageRoute, domainGraph) ||
     draftTape.semanticSteps[draftTape.semanticSteps.length - 1]?.componentCandidate ||
     'MainSectionComponent';
-  const rawProp = String(loc.value || 'root')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(Boolean)
-    .map((p, idx) => (idx === 0 ? p : p[0].toUpperCase() + p.slice(1)))
-    .join('');
+  const isEphemeralRef = /^@?e\d+$/i.test(String(loc.value || ''));
+  const rawProp = isEphemeralRef
+    ? 'root'
+    : String(loc.value || 'root')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+        .split(' ')
+        .filter(Boolean)
+        .map((p, idx) => (idx === 0 ? p : p[0].toUpperCase() + p.slice(1)))
+        .join('');
   const targetProperty = rawProp || 'root';
 
+  const rawExpected = String(expectedValue ?? 'true');
+  const isSafeRef =
+    rawExpected === 'true' ||
+    rawExpected === 'false' ||
+    /^capturedVariable:[A-Za-z_][A-Za-z0-9_]*$/.test(rawExpected) ||
+    /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*(\(\))?)+$/.test(rawExpected);
+  let expectedValueRef = rawExpected;
+  if (!isSafeRef) {
+    const pascal = String(draftTape?.scenarioId || 'explore')
+      .split(/[^a-zA-Z0-9]+/)
+      .filter(Boolean)
+      .map((p) => p[0].toUpperCase() + p.slice(1))
+      .join('');
+    const builderClass = `${pascal || 'Explore'}DataBuilder`;
+    const propName =
+      targetProperty && targetProperty !== 'root'
+        ? `expected${targetProperty[0].toUpperCase()}${targetProperty.slice(1)}Text`
+        : `expectedText${(draftTape?.expectedStates?.length || 0) + 1}`;
+    expectedValueRef = `${builderClass}.standard().${propName}`;
+  }
+
   const expectedObj = {
-    description: `Verify ${loc.value || targetProperty} satisfies ${safeAssertion}`,
+    description: `Verify ${isEphemeralRef ? compName : loc.value || targetProperty} satisfies ${safeAssertion}`,
     businessStep: businessStep || `Verify ${pageRoute || 'workflow'} state`,
     targetComponent: compName,
     targetProperty,
     assertionType: safeAssertion,
-    expectedValueRef: String(expectedValue ?? 'true'),
+    expectedValueRef,
     ...(actor ? { actor } : {}),
   };
   draftTape.expectedStates.push(expectedObj);
@@ -1062,6 +1130,9 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
   const recorded = [];
   const recordedAssertions = [];
 
+  if (!state.recordedBuilderValues || typeof state.recordedBuilderValues !== 'object') {
+    state.recordedBuilderValues = {};
+  }
   for (const tuple of actionTuples) {
     const [rawAction, target, rawVal, extraVal] = tuple;
     let pageRoute = '/';
@@ -1084,6 +1155,14 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
         actor: state.actor,
         domainGraph,
       });
+      if (
+        expectedObj.expectedValueRef &&
+        expectedObj.expectedValueRef !== 'true' &&
+        expectedObj.expectedValueRef !== 'false' &&
+        expectedValue !== expectedObj.expectedValueRef
+      ) {
+        state.recordedBuilderValues[expectedObj.expectedValueRef] = String(expectedValue);
+      }
       const targetExists = refMap.has(target) || String(state.lastSnapshot || '').includes(String(target || ''));
       recordedAssertions.push({
         target: expectedObj.targetProperty,
@@ -1113,7 +1192,12 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
       actor: state.actor,
       domainGraph,
     });
-    if (rec) recorded.push(rec);
+    if (rec) {
+      recorded.push(rec);
+      if (!rec.redacted && rec.stepObj?.inputDataRef && interpolatedVal !== undefined) {
+        state.recordedBuilderValues[rec.stepObj.inputDataRef] = String(interpolatedVal);
+      }
+    }
   }
 
   // Parallel post-action telemetry via agent-browser daemon (avoids redundant Playwright connectOverCDP reconnects)
@@ -1358,6 +1442,29 @@ async function cmdFinish(args) {
     });
     const specOp = (report.operations || []).find((op) => op.file && op.file.endsWith('.spec.ts'));
     if (specOp?.file) compiledSpecRel = specOp.file;
+
+    // Hydrate synthesized Data Builder sample placeholders with non-sensitive values observed during live exploration
+    const recordedVals = state?.recordedBuilderValues || {};
+    const builderOps = (report.operations || []).filter((op) => op.layer === 'data-builder' && op.file);
+    for (const bOp of builderOps) {
+      const absBuilder = assertNoSymlinkEscape(ROOT, path.join(ROOT, bOp.file), 'Data Builder');
+      if (!fs.existsSync(absBuilder)) continue;
+      let bSrc = fs.readFileSync(absBuilder, 'utf8');
+      let changed = false;
+      for (const [refKey, rawSampleVal] of Object.entries(recordedVals)) {
+        const propName = String(refKey).split('.').pop();
+        if (!propName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(propName)) continue;
+        if (SENSITIVE_FIELD_RE.test(propName) || SENSITIVE_VALUE_RE.test(String(rawSampleVal || '').trim())) continue;
+        const propRe = new RegExp(`(\\b${propName}\\s*:\\s*)(?:'[^']*'|\"[^\"]*\")(,?)`);
+        if (propRe.test(bSrc)) {
+          bSrc = bSrc.replace(propRe, (_, p1, p2) => `${p1}${JSON.stringify(String(rawSampleVal))}${p2}`);
+          changed = true;
+        }
+      }
+      if (changed) {
+        fs.writeFileSync(absBuilder, bSrc, 'utf8');
+      }
+    }
   }
 
   let verified = false;

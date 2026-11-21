@@ -16,7 +16,7 @@
 ```
 
 ## 2. Phase A–D Execution Flow
-- **Phase A — Safe Init:** `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.44.0 init . --url <url> --name "<App>"` (optional multi-squad: `npx cortex sync --squad <squad>`). Merges `package.json`/`tsconfig.json` and backs up existing `AGENTS.md`.
+- **Phase A — Safe Init:** `npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.45.0 init . --url <url> --name "<App>"` (optional multi-squad: `npx cortex sync --squad <squad>`). Merges `package.json`/`tsconfig.json` and backs up existing `AGENTS.md`.
 - **Phase B — Discover:** `npm run migrate:skill -- --discover` inventories `.cursorrules`, `.windsurfrules`, `CLAUDE.md`, `.agents/legacy-backups/*`, `.cursor/rules/*.mdc`, custom prompts/commands, oversized skills, and SOLID gaps in existing `tests/*.spec.ts`.
 - **Phase C — Dry-Run Triage:** `npm run migrate:skill -- <path> --name <skill-id> [--squad <squad>]` and present the **4-Part Triage Matrix** (`references/migration-guardrails-checklist.md`).
 - **Phase D — Apply & Verify:** Re-run with `--apply` (writes `<500`-tok `SKILL.md`, sanitized `references/` + `scripts/`, Session Tape bridge, indexed `≤150`-line shard, and IDE wrappers), then run `npm run verify`.

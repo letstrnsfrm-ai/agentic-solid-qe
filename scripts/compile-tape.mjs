@@ -803,11 +803,11 @@ export class ${clientClass} implements ApiClientContract {
   }
 
   // Also inspect expectedStates to ensure any referenced targetProperty exists on the target component
-  const expectedPropsBySubProp = new Map(); // subPropName (e.g. 'queue' or 'summary') -> Set(targetProperty)
+  const expectedPropsBySubProp = new Map(); // subPropName (e.g. 'queue', 'summary', or 'LoginSectionComponent') -> Set(targetProperty)
   for (const state of tape.expectedStates || []) {
     const parts = String(state.targetComponent || '').split('.');
-    if (parts.length >= 2) {
-      const subProp = parts[1];
+    const subProp = parts.length >= 2 ? parts[1] : parts[0];
+    if (subProp) {
       if (!expectedPropsBySubProp.has(subProp)) {
         expectedPropsBySubProp.set(subProp, new Set());
       }
@@ -838,19 +838,17 @@ export class ${clientClass} implements ApiClientContract {
       stepLocatorProps.set(propName, buildLocatorExpression(s.locatorContract, 'this.root'));
     }
 
-    // Add any expectedState targetProperty that maps to this component's propNameOnPage
+    // Add any expectedState targetProperty that maps to this component's propNameOnPage or className
     for (const [subProp, propSet] of expectedPropsBySubProp.entries()) {
       if (
+        subProp === compClass ||
         subProp.toLowerCase() === propNameOnPage.toLowerCase() ||
         propNameOnPage.toLowerCase().endsWith(subProp.toLowerCase())
       ) {
         for (const reqProp of propSet) {
           const safeReqProp = assertSafeJsIdentifier(reqProp, 'expectedState targetProperty');
           if (safeReqProp !== 'root' && !stepLocatorProps.has(safeReqProp)) {
-            stepLocatorProps.set(
-              safeReqProp,
-              `this.root.getByTestId(${JSON.stringify(toKebabCase(safeReqProp))})`
-            );
+            stepLocatorProps.set(safeReqProp, `this.root`);
           }
         }
       }
@@ -1372,9 +1370,11 @@ export { expect };
 
   // 7. Synthesize Declarative Spec (`tests/<scenario-id>.spec.ts` or `tests/<squad>/<scenario-id>.spec.ts`)
   const existingSpecs = walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
-  const matchingExistingSpec = existingSpecs.find((sf) =>
-    fs.readFileSync(sf, 'utf8').includes(scenarioId)
-  );
+  const exactSpecPath = path.resolve(ROOT, `${baseTestDir}/${scenarioId}.spec.ts`);
+  const scenarioIdBoundaryRe = new RegExp(`(?<![a-z0-9-])${scenarioId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9-])`);
+  const matchingExistingSpec = existingSpecs.includes(exactSpecPath)
+    ? exactSpecPath
+    : existingSpecs.find((sf) => scenarioIdBoundaryRe.test(fs.readFileSync(sf, 'utf8')));
   const specRelPath = matchingExistingSpec
     ? rel(matchingExistingSpec)
     : `${baseTestDir}/${scenarioId}.spec.ts`;
@@ -1547,13 +1547,17 @@ export { expect };
         !resolvedTargetComponent.includes('.') &&
         !injectedFixtures.includes(resolvedTargetComponent)
       ) {
+        const directDesc = componentDescriptors.get(resolvedTargetComponent);
         const matchedStep = (tape.semanticSteps || []).find(
           (s) =>
             s.__compiledComponentProp &&
-            (toCamelCase(s.componentCandidate || '') === resolvedTargetComponent ||
+            (s.componentCandidate === resolvedTargetComponent ||
+              toCamelCase(s.componentCandidate || '') === resolvedTargetComponent ||
               s.__compiledComponentProp === resolvedTargetComponent)
         );
-        if (matchedStep) {
+        if (directDesc) {
+          resolvedTargetComponent = `${primaryPageFixture}.${directDesc.propNameOnPage}`;
+        } else if (matchedStep) {
           resolvedTargetComponent = `${primaryPageFixture}.${matchedStep.__compiledComponentProp}`;
         }
       }

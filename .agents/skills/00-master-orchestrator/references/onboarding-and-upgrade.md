@@ -4,7 +4,7 @@
 
 ## 1. New Project Adoption (Non-Destructive)
 ```bash
-npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.44.0 init . --url <app-url> --name "<App Name>"
+npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.45.0 init . --url <app-url> --name "<App Name>"
 npx playwright install chromium
 ```
 - Merges `package.json` scripts and `tsconfig.json` `@*` path aliases without deleting existing `src/` or `tests/`.

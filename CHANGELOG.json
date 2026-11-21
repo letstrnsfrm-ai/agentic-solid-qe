@@ -1,7 +1,21 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.44.0",
+  "latestVersion": "0.45.0",
   "releases": [
+    {
+      "version": "0.45.0",
+      "date": "2026-11-21",
+      "highlights": [
+        "Unified `00-master-orchestrator` Single Entry Point (`npx cortex orchestrate`): All lifecycle commands and human-gate questions now route through `npx cortex orchestrate` (`--loop`, `--bootstrap`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, `--verify`) with structured `gatePayload` and `GATE_OPTIONS`.",
+        "Stage 0 Live Route Discovery & Empty-Repo Guard (`--bootstrap --discover-shards`): Prevents empty initialized repos from prematurely claiming Stage 4 readiness, discovers live top-level application routes from `<url>`, and scaffolds `.agents/domain/shards/*.md` + `domain-memory.md`.",
+        "Live Explore-to-Compile Schema & Builder Hydration (`explore-session.mjs` + `compile-tape.mjs`): Auto-normalizes `inputDataRef`, prepends initial sub-route `goto` steps, converts literal assertion strings into Data Builder references, resolves bare Component class names in `expectedStates`, defaults P0 tags (`@p0`, `@smoke`), and hydrates synthesized `src/data/*.builder.ts` with non-sensitive recorded values.",
+        "Zero-Raw-JSON Data Builder Patching (`--tape patch --set-data`), Exact Spec Matching & Adopter `bin.cortex` Linking: Added `--set-data <Builder.fn().prop=val>` for Stage 2 boundary variants, eliminated substring spec collisions on cloned tapes, fixed Playwright diff-style assertion classification in `heal-drift.mjs`, and ensured `npx cortex` resolves locally in all adopter repos."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.45.0 unified `00-master-orchestrator` single-entry-point routing and structured human gates.",
+        "Drive every E2E lifecycle phase via `npx cortex orchestrate` (`--loop --compact`, `--bootstrap --discover-shards`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--verify`)."
+      ]
+    },
     {
       "version": "0.44.0",
       "date": "2026-11-20",

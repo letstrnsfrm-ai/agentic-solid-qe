@@ -3,8 +3,8 @@
  * CLI Installer, Onboarding Initializer & Upgrader for Agentic-SOLID-QE.
  *
  * Usage:
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.44.0 init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
- *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.44.0 sync [target-dir]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.45.0 init [target-dir] [--url <url>] [--name <app-name>] [--reset] [--demo]
+ *   npx --yes github:letstrnsfrm-ai/agentic-solid-qe#v0.45.0 sync [target-dir]
  *   npm run init:app -- --url https://your-app.com --name "Your App"
  */
 import crypto from 'node:crypto';
@@ -767,12 +767,40 @@ function mergeConsumerPackageJson() {
     'playwright-core': '1.64.1',
   };
 
+  const requiredBins = {
+    cortex: './scripts/sync-skills.mjs',
+    asqe: './scripts/sync-skills.mjs',
+    'agentic-solid-qe': './scripts/sync-skills.mjs',
+  };
+
+  function ensureLocalBinLinks() {
+    if (dryRun) return;
+    const binDir = path.join(TARGET_ROOT, 'node_modules', '.bin');
+    const targetScript = path.join(TARGET_ROOT, 'scripts', 'sync-skills.mjs');
+    if (!fs.existsSync(targetScript)) return;
+    try {
+      fs.chmodSync(targetScript, 0o755);
+      if (fs.existsSync(path.join(TARGET_ROOT, 'node_modules'))) {
+        fs.mkdirSync(binDir, { recursive: true });
+        for (const binName of Object.keys(requiredBins)) {
+          const linkPath = path.join(binDir, binName);
+          if (!fs.existsSync(linkPath)) {
+            fs.symlinkSync(targetScript, linkPath);
+          }
+        }
+      }
+    } catch {
+      /* non-fatal on read-only or non-POSIX */
+    }
+  }
+
   if (!fs.existsSync(pkgPath)) {
     const newPkg = {
       name: path.basename(TARGET_ROOT) || 'my-app-e2e',
       version: '0.1.0',
       private: true,
       type: 'module',
+      bin: requiredBins,
       scripts: requiredScripts,
       engines: {
         node: '>=20.12.0',
@@ -783,18 +811,26 @@ function mergeConsumerPackageJson() {
     if (!dryRun) {
       fs.writeFileSync(pkgPath, JSON.stringify(newPkg, null, 2) + '\n', 'utf8');
     }
+    ensureLocalBinLinks();
     console.log(`${dryRun ? '🔍 [DRY-RUN] Would create' : '🌱 Created'}: package.json`);
     return;
   }
 
   try {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    pkg.bin = pkg.bin && typeof pkg.bin === 'object' ? pkg.bin : {};
     pkg.scripts = pkg.scripts || {};
     pkg.devDependencies = pkg.devDependencies || {};
     pkg.overrides = pkg.overrides || {};
     const allDeps = { ...(pkg.dependencies || {}), ...pkg.devDependencies };
 
     let modified = false;
+    for (const [bKey, bVal] of Object.entries(requiredBins)) {
+      if (!pkg.bin[bKey]) {
+        pkg.bin[bKey] = bVal;
+        modified = true;
+      }
+    }
     for (const [k, v] of Object.entries(requiredScripts)) {
       if (
         !pkg.scripts[k] ||
@@ -830,6 +866,7 @@ function mergeConsumerPackageJson() {
         `${dryRun ? '🔍 [DRY-RUN] Would merge' : '🔧 Merged'} SOLID QE scripts & devDependencies into: package.json`
       );
     }
+    ensureLocalBinLinks();
   } catch {
     console.warn(`⚠️  Could not parse existing package.json; skipping script merge.`);
   }
