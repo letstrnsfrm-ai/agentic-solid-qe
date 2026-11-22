@@ -69,6 +69,7 @@ const CORE_SKILL_IDS = new Set([
 
 const CORE_ENGINE_SCRIPTS = new Set([
   'scripts/lib/cli-output.mjs',
+  'scripts/lib/autonomous-mode.mjs',
   'scripts/context-pack.mjs',
   'scripts/impact-graph.mjs',
   'scripts/tape-cli.mjs',

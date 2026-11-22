@@ -4718,6 +4718,201 @@ test('40. Deep Vulnerability Audit Remediation: unified SSRF/NAT64/numeric-IP pr
   }
 });
 
+// ---------------------------------------------------------------------------
+// Fully Autonomous Mode (--autonomous) Tests
+// ---------------------------------------------------------------------------
+test('autonomous-mode: parseDurationMs, formatDurationHuman, and objective-based gate ranking', async () => {
+  const {
+    parseDurationMs,
+    formatDurationHuman,
+    rankAndSelectGateOption,
+    detectHardBlocker,
+  } = await import('./lib/autonomous-mode.mjs');
+
+  assert.equal(parseDurationMs('30m'), 30 * 60 * 1000);
+  assert.equal(parseDurationMs('1h'), 60 * 60 * 1000);
+  assert.equal(parseDurationMs('2hr'), 2 * 60 * 60 * 1000);
+  assert.equal(parseDurationMs('1.5h'), 90 * 60 * 1000);
+  assert.equal(formatDurationHuman(30 * 60 * 1000), '30m');
+  assert.equal(formatDurationHuman(90 * 60 * 1000), '1h 30m');
+  assert.throws(() => parseDurationMs('invalid'), /Invalid duration/);
+  assert.throws(() => parseDurationMs('999h'), /out of allowed bounds/);
+
+  // Regression focus prefers @p1 boundary/negative over default @p0 happy path
+  const bpScenario = {
+    maturityStage: 'Stage 1 — P0 Golden-Path Baseline',
+    queuePreview: { uncoveredShards: ['.agents/domain/shards/login.md', '.agents/domain/shards/checkout.md'] },
+    nextAction: {
+      skill: '01-cli-explorer',
+      gatePayload: {
+        gateId: 'stage1-scenario-selection',
+        shard: 'login',
+        options: [
+          { id: 'login-p0', label: '(Recommended) @p0 Happy-Path Baseline on /login', charter: 'happy-path-baseline', command: 'npx cortex orchestrate --explore start --shard login --scenario login-p0' },
+          { id: 'login-negative', label: '@p1 Boundary & Validation Error Resilience on /login', charter: 'boundary-analysis', command: 'npx cortex orchestrate --explore start --shard login --scenario login-negative' },
+          { id: 'login-a11y', label: '@p2 Accessibility Check on /login', charter: 'accessibility-audit', command: 'npx cortex orchestrate --explore start --shard login --scenario login-a11y' },
+        ],
+      },
+    },
+  };
+  const regRank = rankAndSelectGateOption(bpScenario, {
+    objectives: { focus: 'regression', routes: [], goal: 'Expand negative validation coverage' },
+    quarantined: [],
+  });
+  assert.equal(regRank.chosen.id, 'login-negative');
+
+  // Route scope prioritizes matching shard over default uncoveredShards[0]
+  const routeRank = rankAndSelectGateOption(bpScenario, {
+    objectives: { focus: 'baseline', routes: ['/checkout'], goal: 'Automate checkout flow' },
+    quarantined: [],
+  });
+  assert.equal(routeRank.chosen.id, 'checkout-p0');
+  assert.match(routeRank.chosen.command, /--shard checkout/);
+
+  // Quarantined shard is skipped and pivots to next unblocked shard
+  const quarRank = rankAndSelectGateOption(bpScenario, {
+    objectives: { focus: 'baseline', routes: [], goal: 'Baseline all shards' },
+    quarantined: [{ key: 'shard:login', reason: '500 error', category: 'app-regression' }],
+  });
+  assert.equal(quarRank.chosen.id, 'checkout-p0');
+
+  // Hard blocker detection: ONLY URL/auth/MFA/auth-drift
+  assert.equal(detectHardBlocker({ nextAction: { gatePayload: { gateId: 'stage0-target-url' } } }).blocked, true);
+  assert.equal(detectHardBlocker({ nextAction: { gatePayload: { gateId: 'stage0-auth-session' } }, targetApp: { missingAuthSessions: ['admin'] } }).blocked, true);
+  assert.equal(detectHardBlocker({ nextAction: {} }, { rootCause: { category: 'auth-drift' } }).blocked, true);
+  assert.equal(detectHardBlocker(bpScenario).blocked, false);
+  assert.equal(detectHardBlocker({ nextAction: { gatePayload: { gateId: 'stage4-ci-init' } } }).blocked, false);
+});
+
+test('autonomous-mode: lifecycle, dual-stream ledger, soft-pause check-in interval, resume & CLI', async () => {
+  const {
+    AUTONOMOUS_SESSION_REL_PATH,
+    AUTONOMOUS_LEDGER_REL_PATH,
+    startAutonomousSession,
+    loadAutonomousSession,
+    resumeAutonomousSession,
+    stopAutonomousSession,
+    quarantineAutonomousItem,
+  } = await import('./lib/autonomous-mode.mjs');
+  const { runAutonomousStep, runAutonomousLoop } = await import('./orchestrate.mjs');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-auto-'));
+  try {
+    // Seed minimal domain-memory + 2 uncovered shards
+    fs.mkdirSync(path.join(tmpRoot, '.agents/domain/shards'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/domain-memory.md'),
+      `# Domain Memory\n- **App Name:** AutoDemo\n- **Base URL:** \`https://example.com\`\n\n| Feature | Owner | Route | Shard | Notes |\n| :--- | :--- | :--- | :--- | :--- |\n| **Login** | \`@qe\` | \`/login\` | \`.agents/domain/shards/login.md\` | Auth |\n| **Checkout** | \`@qe\` | \`/checkout\` | \`.agents/domain/shards/checkout.md\` | Cart |\n`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/shards/login.md'),
+      `# Feature Shard: Login (/login)\n- **Owner Squad:** \`@qe\`\n- **Last Verified:** \`2026-11-01\`\n- **Routes:** \`/login\`\n`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/shards/checkout.md'),
+      `# Feature Shard: Checkout (/checkout)\n- **Owner Squad:** \`@qe\`\n- **Last Verified:** \`2026-11-01\`\n- **Routes:** \`/checkout\`\n`,
+      'utf8'
+    );
+
+    const t0 = 1_700_000_000_000;
+    const { session } = startAutonomousSession(tmpRoot, {
+      goal: 'Automate checkout and login baseline',
+      focus: 'baseline',
+      interval: '30m',
+      routes: ['/checkout'],
+      nowMs: t0,
+    });
+    assert.equal(session.status, 'active');
+    assert.equal(session.schedule.intervalMs, 30 * 60 * 1000);
+    assert.ok(fs.existsSync(path.join(tmpRoot, AUTONOMOUS_SESSION_REL_PATH)));
+    assert.ok(fs.existsSync(path.join(tmpRoot, AUTONOMOUS_LEDGER_REL_PATH)));
+
+    // Step 1 (t0 + 5m): auto-decides checkout shard aligned with routes objective & delegates exploration
+    const step1 = await runAutonomousStep(tmpRoot, { apply: true, skipTests: true, quiet: true, nowMs: t0 + 5 * 60 * 1000 });
+    assert.equal(step1.status, 'active');
+    assert.equal(step1.action, 'delegate-to-agent');
+    assert.match(step1.nextCommand, /--shard checkout/);
+    assert.match(step1.liveUpdate, /AUTO-DECISION \| cycle:#1/);
+    assert.match(step1.liveUpdate, /next check-in in 25m/);
+
+    // Ledger persisted the decision
+    const ledgerText = fs.readFileSync(path.join(tmpRoot, AUTONOMOUS_LEDGER_REL_PATH), 'utf8');
+    assert.match(ledgerText, /Cycle #1/);
+    assert.match(ledgerText, /checkout/);
+
+    // Quarantine checkout -> next step pivots to login without blocking
+    quarantineAutonomousItem(tmpRoot, loadAutonomousSession(tmpRoot), {
+      key: 'shard:checkout',
+      reason: '500 Internal Server Error on /checkout',
+      category: 'app-regression',
+      defectFile: 'defects/DEFECT-2026-11-22-checkout.md',
+      nowMs: t0 + 10 * 60 * 1000,
+    });
+    const step2 = await runAutonomousStep(tmpRoot, { apply: true, skipTests: true, quiet: true, nowMs: t0 + 12 * 60 * 1000 });
+    assert.equal(step2.status, 'active');
+    assert.equal(step2.action, 'delegate-to-agent');
+    assert.match(step2.nextCommand, /--shard login/);
+
+    // Step 3 (t0 + 31m): 30m check-in interval elapsed -> soft-pause with Progress & Decision Digest
+    const step3 = await runAutonomousStep(tmpRoot, { apply: true, skipTests: true, quiet: true, nowMs: t0 + 31 * 60 * 1000 });
+    assert.equal(step3.status, 'paused-checkin');
+    assert.equal(step3.action, 'checkin-interval');
+    assert.match(step3.digest, /Check-In #1/);
+    assert.match(step3.digest, /Quarantined Items & Logged Defects/);
+    assert.match(step3.digest, /--autonomous resume/);
+
+    // Resume with new 2h interval & verify active state
+    const resumed = resumeAutonomousSession(tmpRoot, { interval: '2h', nowMs: t0 + 35 * 60 * 1000 });
+    assert.equal(resumed.status, 'active');
+    assert.equal(resumed.schedule.intervalLabel, '2h');
+
+    // Run autonomous loop -> delegates cleanly in 1 step
+    const loopRes = await runAutonomousLoop(tmpRoot, {
+      maxSteps: 5,
+      skipTests: true,
+      quiet: true,
+      nowMsFn: () => t0 + 36 * 60 * 1000,
+    });
+    assert.equal(loopRes.finalAction, 'delegate-to-agent');
+
+    // Stop cleanly
+    const stopped = stopAutonomousSession(tmpRoot, { reason: 'test-complete', nowMs: t0 + 40 * 60 * 1000 });
+    assert.equal(stopped.status, 'stopped');
+
+    // CLI smoke test: --autonomous start -> status -> stop
+    const cliStart = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, 'scripts/orchestrate.mjs'), '--autonomous', 'start', '--goal', 'Smoke test autopilot', '--focus', 'baseline', '--interval', '1h', '--json'],
+      { cwd: tmpRoot, encoding: 'utf8' }
+    );
+    assert.equal(cliStart.status, 0, cliStart.stderr);
+    const parsedStart = JSON.parse(cliStart.stdout);
+    assert.equal(parsedStart.session.objectives.focus, 'baseline');
+    assert.equal(parsedStart.session.schedule.intervalLabel, '1h');
+
+    const cliStatus = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, 'scripts/orchestrate.mjs'), '--autonomous', 'status', '--json'],
+      { cwd: tmpRoot, encoding: 'utf8' }
+    );
+    assert.equal(cliStatus.status, 0, cliStatus.stderr);
+    assert.equal(JSON.parse(cliStatus.stdout).active, true);
+
+    const cliStop = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, 'scripts/orchestrate.mjs'), '--autonomous', 'stop', '--json'],
+      { cwd: tmpRoot, encoding: 'utf8' }
+    );
+    assert.equal(cliStop.status, 0, cliStop.stderr);
+    assert.equal(JSON.parse(cliStop.stdout).session.status, 'stopped');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
 
 
 

@@ -3,7 +3,7 @@
 Route all Quality Engineering tasks through `.agents/skills/agentic-solid-qe/SKILL.md` (`/agentic-solid-qe`).
 
 ## Token-Efficient Execution Rules
-1. **Single Entry Point (`npx cortex orchestrate`):** Run `npx cortex orchestrate --loop --compact` to diagnose Stage 0–4 maturity, auto-drain safe steps, and surface structured gates (`GATE_OPTIONS`). Route all commands via `npx cortex orchestrate` (`--bootstrap`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, `--verify`).
+1. **Single Entry Point (`npx cortex orchestrate`):** Run `npx cortex orchestrate --loop --compact` (or `--autonomous start|loop|resume` for interval-based autopilot) to diagnose Stage 0–4 maturity, auto-drain safe steps, and surface structured gates (`GATE_OPTIONS`). Route all commands via `npx cortex orchestrate` (`--bootstrap`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, `--verify`).
 2. **Context Packs first:** Run `npx cortex orchestrate --context [--route|--squad|--tape|--spec]` (`≤ 400` tok) before reading files. Use `orchestrate --tape show|clone|patch` (`--set-data`) instead of raw tape JSON.
 3. **Lazy-load skills & references:** Read only the active `SKILL.md` (`≤ 500` tok) and open `references/*.md` (`≤ 800` tok) *only* when needed.
 

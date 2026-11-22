@@ -98,6 +98,7 @@ npx cortex upgrade --apply-patches   # Opt-in config patch apply
 | Command | Purpose |
 | :--- | :--- |
 | `npx cortex orchestrate [--loop --compact]` | **Unified Single Entry Point:** Smart Auto-Drain loop + structured `gatePayload`/`GATE_OPTIONS` + sub-workflow routing (`--bootstrap --discover-shards`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, `--verify`). |
+| `npx cortex orchestrate --autonomous <start\|loop\|step\|resume\|status\|stop\|quarantine>` | **Fully Autonomous QE Mode:** Locks objectives at kickoff (`--goal`, `--focus`, `--routes`, `--interval 30m\|1h\|2h`), ranks `GATE_OPTIONS` autonomously, streams live `AUTO-DECISION` updates + `.agents/domain/autonomous-decisions.md`, quarantines regressions/ambiguous drift to keep progressing, and soft-pauses at each check-in interval with a Progress & Decision Digest. |
 | `npx cortex context [--route\|--squad\|--tape\|--spec\|--file]` | Builds a single `≤ 400`-token scoped Context Pack (matching shards, `src/` signatures, compact tape DSL, spec metadata, and blast-radius `IMPACT`). |
 | `npx cortex impact [--file <p>\|--base <ref>\|--specs-only]` | Fixture-aware blast-radius & affected-spec analyzer distinguishing shared components/builders from isolated page fixtures. |
 | `npx cortex tape list\|show\|clone\|patch [--set-data]` | Inspects and mutates v1 Session Tapes and Data Builders (`--set-data <Builder.fn().prop=val>`) without reading raw JSON; auto-validates before writing. |
