@@ -1,7 +1,17 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.4",
+  "latestVersion": "0.48.5",
   "releases": [
+    {
+      "version": "0.48.5",
+      "date": "2026-11-22",
+      "highlights": [
+        "Transactional Shared-Component Auto-Healing in Autonomous Mode (`scripts/orchestrate.mjs`): Upgraded `runAutonomousStep` to invoke `healDriftWithGuardrail` when high-confidence locator drift hits a shared component (`blastRadius.isShared === true`), enabling atomic affected-spec verification with automatic rollback + quarantine on knock-on regressions instead of failing on `blocked-shared-blast-radius`, and fixed `applied.specPath` targeting."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.5 transactional shared-component autonomous healing."
+      ]
+    },
     {
       "version": "0.48.4",
       "date": "2026-11-22",

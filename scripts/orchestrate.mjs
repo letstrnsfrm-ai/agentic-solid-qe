@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { analyzeCoverage } from './analyze-coverage.mjs';
 import { buildDomainGraph } from './build-domain-graph.mjs';
 import { compileSessionTape, finalizeBatchDomainRefresh } from './compile-tape.mjs';
-import { analyzeAndHealDrift } from './heal-drift.mjs';
+import { analyzeAndHealDrift, healDriftWithGuardrail } from './heal-drift.mjs';
 import { isCompactMode } from './lib/cli-output.mjs';
 import { discoverLegacyTests, MIGRATION_MANIFEST_REL_PATH } from './legacy-test-migrator.mjs';
 import {
@@ -1453,26 +1453,44 @@ export async function runAutonomousStep(
       return { status: 'active', action: 'quarantined', decision, liveUpdate, triage, session, blueprint: updatedBp };
     }
 
-    const applied = analyzeAndHealDrift(rootDir, { apply: true });
-    const affectedSpecs =
-      applied?.spec && /^tests\/[a-zA-Z0-9_./-]+\.spec\.ts$/.test(applied.spec) ? [applied.spec] : [];
-    const vRes = await runFastVerify({
-      rootDir,
-      fast: true,
-      specs: affectedSpecs,
-      skipTests,
-      skipMap: true,
-      workers: safeWorkers,
-      quiet: true,
-    });
+    const isSharedTarget = Boolean(triage?.blastRadius?.isShared);
+    const applied = isSharedTarget
+      ? await healDriftWithGuardrail(rootDir, {
+          apply: true,
+          verifyAffected: !skipTests,
+          forceShared: true,
+        })
+      : analyzeAndHealDrift(rootDir, { apply: true });
+
+    let vRes;
+    if (isSharedTarget && !skipTests) {
+      vRes = { ok: applied.status === 'healed', rolledBack: applied.status === 'rolled-back' };
+    } else if (applied.status !== 'healed') {
+      vRes = { ok: false, reason: applied.status };
+    } else {
+      const affectedSpecs =
+        applied?.specPath && /^tests\/[a-zA-Z0-9_./-]+\.spec\.ts$/.test(applied.specPath) ? [applied.specPath] : [];
+      vRes = await runFastVerify({
+        rootDir,
+        fast: true,
+        specs: affectedSpecs,
+        skipTests,
+        skipMap: true,
+        workers: safeWorkers,
+        quiet: true,
+      });
+    }
+
     if (!vRes.ok) {
-      const fKey = `spec:${applied?.spec || 'healed-spec'}`;
+      const fKey = `spec:${applied?.specPath || applied?.componentMatch?.file || 'healed-spec'}`;
       session.failureCounts[fKey] = (session.failureCounts[fKey] || 0) + 1;
-      if (session.failureCounts[fKey] >= maxFail) {
+      if (session.failureCounts[fKey] >= maxFail || vRes.rolledBack) {
         quarantineAutonomousItem(rootDir, session, {
           key: fKey,
-          reason: `Auto-heal verification failed ${session.failureCounts[fKey]} consecutive time(s).`,
-          category: 'repeated-failure',
+          reason: vRes.rolledBack
+            ? `Shared-component heal rolled back due to knock-on regression in affected specs.`
+            : `Auto-heal verification failed ${session.failureCounts[fKey]} consecutive time(s).`,
+          category: vRes.rolledBack ? 'ambiguous-drift' : 'repeated-failure',
           nowMs,
         });
         clearResolvedFailureArtifacts(rootDir);
@@ -1488,10 +1506,12 @@ export async function runAutonomousStep(
         cycle: session.cycleCount,
         gateId,
         skill: '03-drift-healer',
-        action: 'executed',
-        chosenOptionId: 'heal-apply',
-        chosenLabel: `Auto-healed high-confidence locator drift (${affectedSpecs[0] || 'component'})`,
-        command: 'npx cortex orchestrate --heal-action apply',
+        action: vRes.ok ? 'executed' : 'quarantined',
+        chosenOptionId: isSharedTarget ? 'heal-apply-transactional' : 'heal-apply',
+        chosenLabel: vRes.ok
+          ? `Auto-healed ${isSharedTarget ? 'shared ' : ''}locator drift (${applied?.componentMatch?.file || 'component'})`
+          : `Heal ${vRes.rolledBack ? 'rolled back' : 'failed'} (${applied?.componentMatch?.file || 'component'})`,
+        command: isSharedTarget ? 'npx cortex orchestrate --heal-action apply --verify-affected' : 'npx cortex orchestrate --heal-action apply',
         rationale: ranked.rationale,
         alternatives: ranked.alternatives,
         outcome: vRes.ok ? 'success' : 'failed',
