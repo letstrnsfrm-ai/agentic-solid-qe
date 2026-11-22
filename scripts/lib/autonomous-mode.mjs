@@ -240,8 +240,16 @@ export function resumeAutonomousSession(
     session.schedule.intervalMs = ms;
     session.schedule.intervalLabel = formatDurationHuman(ms);
   }
-  if (maxRuntime) session.schedule.maxRuntimeMs = parseDurationMs(maxRuntime, { allowNull: true });
-  if (maxCycles) session.schedule.maxCycles = Math.max(1, Math.min(500, Math.floor(Number(maxCycles))));
+  if (maxRuntime) {
+    session.schedule.maxRuntimeMs = parseDurationMs(maxRuntime, { allowNull: true });
+  } else if (session.schedule.maxRuntimeMs && nowMs - (session.startedAtMs || nowMs) >= session.schedule.maxRuntimeMs) {
+    session.schedule.maxRuntimeMs += session.schedule.intervalMs || DEFAULT_CHECKIN_INTERVAL_MS;
+  }
+  if (maxCycles) {
+    session.schedule.maxCycles = Math.max(1, Math.min(500, Math.floor(Number(maxCycles))));
+  } else if (session.schedule.maxCycles && (session.cycleCount || 0) >= session.schedule.maxCycles) {
+    session.schedule.maxCycles = Math.min(500, session.schedule.maxCycles + DEFAULT_MAX_CYCLES);
+  }
 
   session.status = 'active';
   session.lastCheckinAtMs = nowMs;
@@ -356,10 +364,16 @@ export function quarantineAutonomousItem(
 
 export function isItemQuarantined(session, candidate) {
   if (!session || !Array.isArray(session.quarantined) || session.quarantined.length === 0) return false;
-  const hay = String(candidate || '').toLowerCase();
+  const hay = String(candidate || '').trim().toLowerCase();
+  if (!hay) return false;
+  const hayBare = hay.replace(/^(shard|spec|tape|option):/, '').replace(/\.md$/, '');
+  const hayBase = path.basename(hayBare);
   return session.quarantined.some((q) => {
-    const bare = q.key.replace(/^(shard|spec|tape|option):/, '');
-    return hay === q.key || hay === bare || (bare.length >= 3 && hay.includes(bare));
+    const bare = q.key.replace(/^(shard|spec|tape|option):/, '').replace(/\.md$/, '');
+    if (hay === q.key || hayBare === bare || hayBase === bare) return true;
+    // Also match generated scenario IDs for a quarantined shard (e.g. `login-p0`, `--shard login`)
+    const escaped = bare.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|--shard\\s+)${escaped}(?:-(?:p[0-2]|negative|a11y))?(?:$|\\s)`).test(hay);
   });
 }
 

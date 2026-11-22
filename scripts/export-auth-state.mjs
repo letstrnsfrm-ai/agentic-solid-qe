@@ -10,14 +10,21 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function parseArgs(argv) {
-  const args = { session: 'auth', out: '.auth/default.json' };
+  const args = { session: 'auth', out: '.auth/default.json', help: false };
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--session' && argv[i + 1]) {
+    if (argv[i] === '--help' || argv[i] === '-h') {
+      args.help = true;
+    } else if (argv[i] === '--session' && argv[i + 1]) {
       args.session = argv[++i];
+    } else if (argv[i].startsWith('--session=')) {
+      args.session = argv[i].slice('--session='.length);
     } else if (argv[i] === '--out' && argv[i + 1]) {
       args.out = argv[++i];
+    } else if (argv[i].startsWith('--out=')) {
+      args.out = argv[i].slice('--out='.length);
     }
   }
   return args;
@@ -75,7 +82,11 @@ export function assertSafeAuthOutputPath(outPath, root = process.cwd()) {
 
 function runAgentBrowser(session, cmdArgs) {
   const safeSession = assertSafeSessionName(session);
-  const res = spawnSync('npx', ['--no-install', 'agent-browser', '--session', safeSession, ...cmdArgs], {
+  const binName = process.platform === 'win32' ? 'agent-browser.cmd' : 'agent-browser';
+  const localBin = path.join(process.cwd(), 'node_modules', '.bin', binName);
+  const cmd = fs.existsSync(localBin) ? localBin : process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const prefix = fs.existsSync(localBin) ? [] : ['--no-install', 'agent-browser'];
+  const res = spawnSync(cmd, [...prefix, '--session', safeSession, ...cmdArgs], {
     encoding: 'utf8',
     timeout: 15000,
   });
@@ -94,7 +105,13 @@ export function buildStorageState({ cookies = [], origin = '', localStorageEntri
 }
 
 function main() {
-  const { session, out } = parseArgs(process.argv.slice(2));
+  const { session, out, help } = parseArgs(process.argv.slice(2));
+  if (help) {
+    console.log(
+      'Usage: node scripts/export-auth-state.mjs --session <name> --out .auth/<persona>.json'
+    );
+    process.exit(0);
+  }
   const root = process.cwd();
   const safeSession = assertSafeSessionName(session);
   const { authDir, resolvedOut } = assertSafeAuthOutputPath(out, root);
@@ -125,7 +142,9 @@ function main() {
   console.log(`Exported Playwright storageState (${cookies.length} cookies, ${localStorageEntries.length} localStorage keys) -> ${out}`);
 }
 
-const isCli = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+const isCli =
+  Boolean(process.argv[1]) &&
+  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isCli) {
   main();
 }

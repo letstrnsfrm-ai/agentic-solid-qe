@@ -1,7 +1,17 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.6",
+  "latestVersion": "0.48.7",
   "releases": [
+    {
+      "version": "0.48.7",
+      "date": "2026-11-22",
+      "highlights": [
+        "Framework Hardening Batch #2 (20 Live-Reproduced Defects Fixed across 11 core scripts): Synced `scripts/export-auth-state.mjs` into adopter repos (`sync-skills.mjs`/`migrate-skill.mjs`) and hardened its `--help`/local-bin/`fileURLToPath`, preserved cross-origin `tape.baseUrl` on `goto` in `compile-tape.mjs`, fixed `appendRecordedAssertion` role-suffix mismatch (eliminating false-green `root` assertions), fixed `--ci-init --verify`, fixed `capture --var` & safe URL regex validation, added SPA auto-settle and `actorSessions` cleanup to multi-actor `explore`, fixed `--set-data` numeric/boolean replacement and multi-flag new-builder overwrites, added `--spec=` in `verify-fast.mjs`, replaced `process.exit(1)` with `throw` in `seedShardsFromTapes`, auto-extended exhausted `maxRuntime`/`maxCycles` on `--autonomous resume` and tightened `isItemQuarantined` boundary matching, allowlisted all core engine scripts in `upgrade-framework.mjs`, fixed `report-cloud.mjs` `cliVersion` to prefer installed framework version, and added `--help` + clean word-boundary truncation to `analyze-coverage.mjs`."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.7 Framework Hardening Batch #2."
+      ]
+    },
     {
       "version": "0.48.6",
       "date": "2026-11-22",

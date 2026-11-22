@@ -536,7 +536,10 @@ export function formatCompactCoverage(report) {
     const nxt = report.nextSingleScenarioToAutomate;
     lines.push(`PICK   | ${typeof nxt === 'string' ? nxt : nxt.scenarioId || JSON.stringify(nxt)}`);
   }
-  lines.push(`NEXT   | ${String(report.recommendedNextAction || '').slice(0, 180)}`);
+  const rawNext = String(report.recommendedNextAction || '').trim();
+  const clippedNext =
+    rawNext.length > 180 ? `${rawNext.slice(0, 177).replace(/\s+\S*$/, '')}...` : rawNext;
+  lines.push(`NEXT   | ${clippedNext}`);
   return lines.join('\n');
 }
 
@@ -545,6 +548,12 @@ const isMain =
   fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(
+      'Usage: npx cortex coverage [--squad <id>] [--summary|--compact|--full|--verbose] [--json]'
+    );
+    process.exit(0);
+  }
   let filterSquad = null;
   let forceSummary = false;
   let forceFull = false;

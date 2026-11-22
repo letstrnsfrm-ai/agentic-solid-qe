@@ -1476,7 +1476,18 @@ export { expect };
           stmt = `await ${apiFix}.executeRequest(${endpointArg}${payloadArg});`;
         }
       } else if (step.action === 'goto') {
-        const targetRoute = step.locatorContract?.value || step.pageRoute || '/';
+        let targetRoute = step.locatorContract?.value || step.pageRoute || '/';
+        if (targetRoute.startsWith('/') && tape.baseUrl && domainGraph?.targetApp?.baseUrl) {
+          try {
+            const tapeOrigin = new URL(tape.baseUrl).origin;
+            const appOrigin = new URL(domainGraph.targetApp.baseUrl).origin;
+            if (tapeOrigin !== appOrigin) {
+              targetRoute = new URL(targetRoute, tape.baseUrl).toString();
+            }
+          } catch {
+            /* keep relative targetRoute */
+          }
+        }
         if (primaryPageFixture) {
           groupMatchKeys.add(primaryPageFixture);
           stmt = `await ${primaryPageFixture}.open(${JSON.stringify(targetRoute)});`;

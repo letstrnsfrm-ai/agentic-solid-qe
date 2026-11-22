@@ -251,6 +251,7 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
           `/**\n * Typed Data Builder (DIP).\n */\nexport class ${builderClass} {\n  static ${methodName}() {\n    return {\n      ${propName}: ${serializedVal},\n    };\n  }\n}\n`,
           'utf8'
         );
+        builderFiles.push(targetFile);
       }
       applied.push({ builderClass, methodName, propName, file: path.relative(rootDir, targetFile) });
       continue;
@@ -263,7 +264,9 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
     const methodRe = new RegExp(`(static\\s+${safeMethodRe}\\s*\\([^)]*\\)[^{]*\\{\\s*return\\s*\\{)([\\s\\S]*?)(\\n\\s*\\};)`);
     const mm = content.match(methodRe);
     if (mm) {
-      const propRe = new RegExp(`(\\b${safePropRe}\\s*:\\s*)(?:'[^']*'|\"[^\"]*\")(,?)`);
+      const propRe = new RegExp(
+        `(\\b${safePropRe}\\s*:\\s*)(?:'[^']*'|\"[^\"]*\"|-?\\d+(?:\\.\\d+)?|true|false|null)(,?)`
+      );
       if (propRe.test(mm[2])) {
         const updatedBody = mm[2].replace(propRe, (_, p1, p2) => `${p1}${serializedVal}${p2}`);
         content = content.replace(methodRe, (_, m1, _m2, m3) => `${m1}${updatedBody}${m3}`);
@@ -395,10 +398,10 @@ if (isMain) {
     console.log(`Cortex Tape CLI (npx cortex tape)
   list [--json]
   show <scenarioId> [--json]
-  clone <srcId> <newId> [--title "..."] [--charter "..."] [--tags "@p1,@neg"] [--persona-role "..."] [--persona-builder "..."] [--dry-run]
+  clone <srcId> <newId> [--title "..."] [--charter "..."] [--tags "@p1,@neg"] [--persona-role "..."] [--persona-builder "..."] [--dry-run] [--json]
   patch <scenarioId> [--set-title "..."] [--set-charter "..."] [--add-tag "@tag"] [--remove-tag "@tag"]
-                     [--set-step <idx> <field=val>] [--remove-step <idx>]
-                     [--set-expect <idx> <field=val>] [--add-expect "Target|assertion|value"] [--remove-expect <idx>] [--dry-run]`);
+                     [--set-data "Builder.fn().prop=val"] [--set-step <idx> <field=val>] [--remove-step <idx>]
+                     [--set-expect <idx> <field=val>] [--add-expect "Target|assertion|value"] [--remove-expect <idx>] [--dry-run] [--json]`);
     process.exit(0);
   }
 

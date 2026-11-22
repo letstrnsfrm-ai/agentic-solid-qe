@@ -2076,6 +2076,14 @@ Usage:
     console.log(`CI     | ${ciRes.status} -> ${ciRes.file}`);
     const updatedBp = buildOrchestrationBlueprint(rootDir);
     console.log(formatCompactBlueprint(updatedBp));
+    if (args.includes('--verify')) {
+      const vArgs = args.filter((a) => a !== '--ci-init' && a !== '--verify');
+      const vRes = spawnSync(process.execPath, [path.join(__dirname, 'verify-fast.mjs'), ...vArgs], {
+        cwd: rootDir,
+        stdio: 'inherit',
+      });
+      process.exit(vRes.status ?? 0);
+    }
     process.exit(0);
   }
 

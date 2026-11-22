@@ -629,9 +629,9 @@ export function appendRecordedAssertion(
     draftTape.semanticSteps[draftTape.semanticSteps.length - 1]?.componentCandidate ||
     'MainSectionComponent';
   const isEphemeralRef = /^@?e\d+$/i.test(String(loc.value || ''));
-  const rawProp = isEphemeralRef
+  const baseProp = isEphemeralRef
     ? 'root'
-    : String(loc.value || 'root')
+    : String(loc.value || '')
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, ' ')
         .trim()
@@ -639,7 +639,19 @@ export function appendRecordedAssertion(
         .filter(Boolean)
         .map((p, idx) => (idx === 0 ? p : p[0].toUpperCase() + p.slice(1)))
         .join('');
-  const targetProperty = rawProp || 'root';
+  let targetProperty = baseProp || 'root';
+  if (!isEphemeralRef && loc.strategy === 'getByRole' && loc.role) {
+    const rolePascal = loc.role
+      .split(/[^a-zA-Z0-9]+/)
+      .filter(Boolean)
+      .map((p) => p[0].toUpperCase() + p.slice(1))
+      .join('');
+    if (!baseProp && Number.isInteger(loc.nth)) {
+      targetProperty = `${loc.role.toLowerCase()}${loc.nth + 1}`;
+    } else if (baseProp && rolePascal && !baseProp.toLowerCase().endsWith(rolePascal.toLowerCase())) {
+      targetProperty = `${baseProp}${rolePascal}`;
+    }
+  }
 
   const rawExpected = String(expectedValue ?? 'true');
   const isSafeRef =
@@ -891,11 +903,11 @@ Subcommands:
   actor       Switch portal/actor mid-session carrying capturedVariables:
                 cortex explore actor <actorId> [--url <portal-url>] [--auth <.auth/p.json>] [--json]
   capture     Capture a runtime variable (e.g. quoteId) for cross-portal reuse:
-                cortex explore capture <varName> --from <url|eval> --expr "<regex|js>"
+                cortex explore capture <varName> [--var <varName>] --from <url|text|value|eval> --expr "<regex|@eN|js>"
   checkpoint  Save or list reusable <1s browser checkpoints (.exploratory/checkpoints/):
                 cortex explore checkpoint save <name> | list
   finish      Finalize & validate Session Tape, release browser, optionally compile, verify single spec, or promote API seeder:
-                cortex explore finish [--scenario <id>] [--compile] [--verify] [--emit-seeder] [--keep-browser] [--json]
+                cortex explore finish [--scenario <id>] [--title "..."] [--charter <c>] [--tags "@p0,@smoke"] [--assert-url <route>] [--assert-text "..."] [--compile] [--verify] [--emit-seeder] [--keep-browser] [--json]
   status      Show active exploration session, actor, capturedVariables, and recorded step count [--json]
 `);
 }
@@ -1349,9 +1361,14 @@ async function cmdActor(args) {
     storageStatePath: authPath,
   });
 
-  const snap = runAgentBrowser(actorSession, ['snapshot', '-i'], { allowFail: true });
+  let snap = runAgentBrowser(actorSession, ['snapshot', '-i'], { allowFail: true });
+  if (parseSnapshotRefs(snap).size === 0) {
+    runAgentBrowser(actorSession, ['wait', '2000'], { allowFail: true });
+    snap = runAgentBrowser(actorSession, ['snapshot', '-i'], { allowFail: true });
+  }
   state.actor = actorId;
   state.activeSession = actorSession;
+  state.actorSessions = [...new Set([...(Array.isArray(state.actorSessions) ? state.actorSessions : []), actorSession])];
   state.url = targetUrl;
   state.lastSnapshot = snap;
   writePrivateJson(LIVE_STATE_FILE, state);
@@ -1366,8 +1383,9 @@ async function cmdActor(args) {
 async function cmdCapture(args) {
   const rawFrom = getFlagValue(args, '--from', 'url');
   const rawExpr = getFlagValue(args, '--expr', '');
+  const rawVarName = getFlagValue(args, '--var', '') || (args[0] && !args[0].startsWith('--') ? args[0] : '');
   const { varName, from, expr } = validateSafeCaptureRequest({
-    varName: args[0],
+    varName: rawVarName,
     from: rawFrom,
     expr: rawExpr,
   });
@@ -1380,7 +1398,16 @@ async function cmdCapture(args) {
   if (from === 'url') {
     const url = (runAgentBrowser(session, ['eval', 'location.href'], { allowFail: true }) || state.url).replace(/^"|"$/g, '');
     if (expr) {
-      const m = url.match(new RegExp(expr));
+      if (expr.length > 200) {
+        throw new Error('Security Error: Capture URL regex --expr exceeds 200 characters.');
+      }
+      let re;
+      try {
+        re = new RegExp(expr);
+      } catch (err) {
+        throw new Error(`Invalid capture URL regex '${expr}': ${err.message}`);
+      }
+      const m = url.match(re);
       value = m ? m[1] || m[0] : url;
     } else {
       value = url;
@@ -1539,8 +1566,12 @@ async function cmdFinish(args) {
     assertNoSymlinkEscape(ROOT, RELEASE_SENTINEL_FILE, 'live-session.release');
     fs.mkdirSync(EXPLORATORY_DIR, { recursive: true });
     fs.writeFileSync(RELEASE_SENTINEL_FILE, new Date().toISOString() + '\n', 'utf8');
-    if (state?.session) {
-      runAgentBrowser(state.session, ['close'], { allowFail: true });
+    const sessionsToClose = new Set([
+      ...(state?.session ? [state.session] : []),
+      ...(Array.isArray(state?.actorSessions) ? state.actorSessions : []),
+    ]);
+    for (const s of sessionsToClose) {
+      runAgentBrowser(s, ['close'], { allowFail: true });
     }
   }
 

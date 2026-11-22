@@ -256,7 +256,25 @@ function detectCommitSha() {
 }
 
 function readCliVersion() {
-  for (const pkgCandidate of [path.join(ROOT, 'package.json'), path.resolve(__dirname, '..', 'package.json')]) {
+  const manifestPath = path.join(ROOT, '.agents/framework-manifest.json');
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      if (m.version) return String(m.version);
+    } catch {
+      /* ignore */
+    }
+  }
+  const changelogPath = path.join(ROOT, 'CHANGELOG.json');
+  if (fs.existsSync(changelogPath)) {
+    try {
+      const c = JSON.parse(fs.readFileSync(changelogPath, 'utf8'));
+      if (c.latestVersion) return String(c.latestVersion);
+    } catch {
+      /* ignore */
+    }
+  }
+  for (const pkgCandidate of [path.resolve(__dirname, '..', 'package.json'), path.join(ROOT, 'package.json')]) {
     if (!fs.existsSync(pkgCandidate)) continue;
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgCandidate, 'utf8'));

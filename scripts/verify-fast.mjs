@@ -421,6 +421,8 @@ Usage:
       specs.push(...a.slice('--specs='.length).split(',').filter(Boolean));
     } else if (a === '--spec' && args[i + 1]) {
       specs.push(args[++i]);
+    } else if (a.startsWith('--spec=')) {
+      specs.push(a.slice('--spec='.length));
     } else if (a === '--workers' && args[i + 1]) {
       workers = Number(args[++i]);
     } else if (a.startsWith('--workers=')) {
