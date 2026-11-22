@@ -743,12 +743,24 @@ function readJsonOrNull(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
-function runAgentBrowser(session, args, { allowFail = false } = {}) {
+function runAgentBrowser(session, args, { allowFail = false, timeoutMs = 45_000 } = {}) {
   const { command, prefixArgs } = resolveLocalBin('agent-browser');
   const fullArgs = [...prefixArgs, '--session', session, ...args];
-  const res = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8' });
+  const isIdempotent = args.includes('open') || args[0] === 'snapshot';
+  const maxAttempts = isIdempotent ? 2 : 1;
+  let res;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    res = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8', timeout: timeoutMs });
+    if (res.status === 0) break;
+    const errText = `${res.stderr || ''} ${res.stdout || ''} ${res.error?.message || ''}`;
+    const isTransient = /os error 11|Resource temporarily unavailable|EAGAIN|ETIMEDOUT/i.test(errText);
+    if (attempt < maxAttempts && isTransient) {
+      continue;
+    }
+    break;
+  }
   if (res.status !== 0 && !allowFail) {
-    throw new Error(`agent-browser failed (${args.join(' ')}): ${(res.stderr || res.stdout || '').trim()}`);
+    throw new Error(`agent-browser failed (${args.join(' ')}): ${(res.stderr || res.stdout || res.error?.message || '').trim()}`);
   }
   return (res.stdout || '').trim();
 }
