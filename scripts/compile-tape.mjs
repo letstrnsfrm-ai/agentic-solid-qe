@@ -547,7 +547,11 @@ export function compileSessionTape({
     if (nc.requestBuilderRef) registerBuilderRef(nc.requestBuilderRef);
   }
   for (const state of tape.expectedStates || []) {
-    if (state.expectedValueRef && state.assertionType !== 'toHaveStatus') {
+    const isLiteralUrlPath =
+      state.assertionType === 'toHaveURL' &&
+      typeof state.expectedValueRef === 'string' &&
+      state.expectedValueRef.startsWith('/');
+    if (state.expectedValueRef && state.assertionType !== 'toHaveStatus' && !isLiteralUrlPath) {
       registerBuilderRef(state.expectedValueRef);
     }
   }
@@ -1568,7 +1572,11 @@ export { expect };
         }
       }
       const targetExpr = `${resolvedTargetComponent}.${state.targetProperty}`;
-      const parsedExpected = parseBuilderRef(state.expectedValueRef);
+      const isLiteralUrlPath =
+        state.assertionType === 'toHaveURL' &&
+        typeof state.expectedValueRef === 'string' &&
+        state.expectedValueRef.startsWith('/');
+      const parsedExpected = isLiteralUrlPath ? null : parseBuilderRef(state.expectedValueRef);
       const valExpr = parsedExpected?.isCapturedVar
         ? parsedExpected.varName
         : parsedExpected?.callExpression || '';
@@ -1586,6 +1594,12 @@ export { expect };
         assertStmt = `expect((await ${apiFix}.executeRequest(${endpointArg})).status).toBe(${expectedStatus});`;
       } else if (state.assertionType === 'toBeVisible' || state.assertionType === 'toBeHidden') {
         assertStmt = `await expect(${targetExpr}).${state.assertionType}();`;
+      } else if (state.assertionType === 'toHaveURL') {
+        const rawUrl = String(state.expectedValueRef || '').trim();
+        const urlArg = valExpr
+          ? `new RegExp(String(${valExpr}).replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'))`
+          : `new RegExp(${JSON.stringify(rawUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))})`;
+        assertStmt = `await expect(${targetExpr}.page()).toHaveURL(${urlArg});`;
       } else if (state.assertionType === 'toHaveScreenshot') {
         const ratio =
           typeof state.maxDiffPixelRatio === 'number' &&

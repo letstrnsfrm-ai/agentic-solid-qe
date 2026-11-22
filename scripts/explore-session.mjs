@@ -309,7 +309,7 @@ export function appendRecordedAction(
   draftTape,
   { action, refOrSelector, value, refMap, pageRoute, businessStep, actor, domainGraph }
 ) {
-  const allowedActions = new Set(['goto', 'fill', 'click', 'select', 'check', 'uncheck', 'press', 'hover', 'wait']);
+  const allowedActions = new Set(['goto', 'fill', 'click', 'select', 'check', 'uncheck', 'press', 'hover']);
   const normalizedAction = action === 'type' ? 'fill' : action;
   if (!allowedActions.has(normalizedAction)) return null;
 
@@ -374,15 +374,17 @@ export function switchDraftActor(draftTape, { actorId, role, portalBaseUrl, stor
 
 export function finalizeDraftTape(draftTape, scenarioId) {
   const safeId = validateSafeId(scenarioId || draftTape.scenarioId, 'scenarioId');
-  const cleanedSteps = (Array.isArray(draftTape.semanticSteps) ? draftTape.semanticSteps : []).map((st, idx) => {
-    const copy = { ...st, stepIndex: idx + 1 };
-    if (copy.dataBuilderRef && !copy.inputDataRef) {
-      copy.inputDataRef = copy.dataBuilderRef;
-    }
-    delete copy.dataBuilderRef;
-    delete copy.__builderSampleValue;
-    return copy;
-  });
+  const cleanedSteps = (Array.isArray(draftTape.semanticSteps) ? draftTape.semanticSteps : [])
+    .filter((st) => st && st.action !== 'wait')
+    .map((st, idx) => {
+      const copy = { ...st, stepIndex: idx + 1 };
+      if (copy.dataBuilderRef && !copy.inputDataRef) {
+        copy.inputDataRef = copy.dataBuilderRef;
+      }
+      delete copy.dataBuilderRef;
+      delete copy.__builderSampleValue;
+      return copy;
+    });
   let baseUrl = draftTape.baseUrl || 'http://localhost:3000';
   let startRoute = '/';
   try {
@@ -1414,11 +1416,30 @@ async function cmdFinish(args) {
   const draftTape = readJsonOrNull(LIVE_DRAFT_TAPE_FILE);
   if (!draftTape) throw new Error('No active draft tape found.');
   const scenarioId = validateSafeId(getFlagValue(args, '--scenario', draftTape.scenarioId), 'scenario');
+  const titleOverride = getFlagValue(args, '--title', '');
+  const assertUrl = getFlagValue(args, '--assert-url', '');
   const shouldCompile = args.includes('--compile');
   const shouldVerify = args.includes('--verify');
   const emitSeeder = args.includes('--emit-seeder');
   const keepBrowser = args.includes('--keep-browser');
   const jsonOut = args.includes('--json');
+
+  if (titleOverride) {
+    draftTape.title = String(titleOverride).trim().slice(0, 140);
+  }
+  if (assertUrl) {
+    if (!Array.isArray(draftTape.expectedStates)) draftTape.expectedStates = [];
+    const lastStep = (draftTape.semanticSteps || []).filter((s) => s && s.action !== 'wait').slice(-1)[0];
+    draftTape.expectedStates.push({
+      description: `Verify navigation to ${assertUrl}`,
+      businessStep: lastStep?.businessStep || 'Verify navigation outcome',
+      targetComponent: lastStep?.componentCandidate || 'MainSectionComponent',
+      targetProperty: 'root',
+      assertionType: 'toHaveURL',
+      expectedValueRef: String(assertUrl).trim(),
+      ...(lastStep?.actor ? { actor: lastStep.actor } : {}),
+    });
+  }
 
   const finalized = finalizeDraftTape(draftTape, scenarioId);
   const tapeFile = assertNoSymlinkEscape(ROOT, path.join(TAPES_DIR, `${scenarioId}.json`), 'Session Tape');
