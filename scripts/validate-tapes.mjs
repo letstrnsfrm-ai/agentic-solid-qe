@@ -428,10 +428,16 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
           }
         }
       }
-      if (/^e\d+$/.test(step.locatorContract?.value ?? '')) {
+      if (/^@?e\d+$/.test(step.locatorContract?.value ?? '')) {
         errors.push(
           `${stepLabel} Ephemeral CLI ref '${step.locatorContract.value}' leaked into locatorContract.value!`
         );
+      }
+      if (
+        step.locatorContract?.nth !== undefined &&
+        (!Number.isInteger(step.locatorContract.nth) || step.locatorContract.nth < 0)
+      ) {
+        errors.push(`${stepLabel} locatorContract.nth must be a non-negative integer.`);
       }
       if (step.capturesVariable !== undefined) {
         if (

@@ -966,23 +966,35 @@ export async function runOrchestratorLoop(
         break;
       }
 
-      const applied = analyzeAndHealDrift(rootDir, { apply: true });
+      const isSharedTarget = Boolean(triage?.blastRadius?.isShared);
+      const applied = isSharedTarget
+        ? await healDriftWithGuardrail(rootDir, {
+            apply: true,
+            verifyAffected: !skipTests,
+            forceShared: true,
+          })
+        : analyzeAndHealDrift(rootDir, { apply: true });
       const affectedSpecs = [];
-      if (applied?.spec && /^tests\/[a-zA-Z0-9_./-]+\.spec\.ts$/.test(applied.spec)) {
-        affectedSpecs.push(applied.spec);
-        mutatedSpecs.add(applied.spec);
+      if (applied?.specPath && /^tests\/[a-zA-Z0-9_./-]+\.spec\.ts$/.test(applied.specPath)) {
+        affectedSpecs.push(applied.specPath);
+        mutatedSpecs.add(applied.specPath);
       }
       didMutate = true;
 
-      const vRes = await runFastVerify({
-        rootDir,
-        fast: true,
-        specs: affectedSpecs,
-        skipTests,
-        skipMap: true,
-        workers: safeWorkers,
-        quiet: true,
-      });
+      const vRes =
+        isSharedTarget && !skipTests
+          ? { ok: applied.status === 'healed', failedStage: applied.status === 'healed' ? null : { stage: applied.status }, totalMs: 0 }
+          : applied.status !== 'healed'
+            ? { ok: false, failedStage: { stage: applied.status }, totalMs: 0 }
+            : await runFastVerify({
+                rootDir,
+                fast: true,
+                specs: affectedSpecs,
+                skipTests,
+                skipMap: true,
+                workers: safeWorkers,
+                quiet: true,
+              });
 
       stepsExecuted.push({
         step: stepIdx + 1,
@@ -2068,8 +2080,7 @@ Usage:
   }
 
   if (args.includes('--verify')) {
-    const isFast = args.includes('--fast');
-    const vArgs = isFast ? ['--fast'] : [];
+    const vArgs = args.filter((a) => a !== '--verify');
     const res = spawnSync(process.execPath, [path.join(__dirname, 'verify-fast.mjs'), ...vArgs], {
       cwd: rootDir,
       stdio: 'inherit',

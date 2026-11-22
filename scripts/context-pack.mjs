@@ -329,18 +329,35 @@ export function buildContextPack(
     }
   }
 
-  const allTapes = walkFiles(path.join(rootDir, '.exploratory/tapes'), (f) => f.endsWith('.json')).map((f) => {
-    const d = readJsonSafe(f);
-    return {
-      scenarioId: d?.scenarioId || path.basename(f, '.json'),
-      steps: Array.isArray(d?.semanticSteps) ? d.semanticSteps.length : 0,
-      tags: Array.isArray(d?.tags) ? d.tags : [],
-    };
-  });
+  const lowerKeywords = [...new Set(keywords.map((k) => String(k).toLowerCase()).filter((k) => k.length >= 2))];
+  const scoreRelevance = (text) => {
+    if (lowerKeywords.length === 0) return 0;
+    const hay = String(text || '').toLowerCase();
+    let score = 0;
+    for (const kw of lowerKeywords) {
+      if (hay.includes(kw)) score += kw.length;
+    }
+    return score;
+  };
 
-  const allSpecs = walkFiles(path.join(rootDir, 'tests'), (f) => f.endsWith('.spec.ts')).map((f) =>
-    path.relative(rootDir, f).replace(/\\/g, '/')
-  );
+  const allTapes = walkFiles(path.join(rootDir, '.exploratory/tapes'), (f) => f.endsWith('.json'))
+    .map((f) => {
+      const d = readJsonSafe(f);
+      const scenarioId = d?.scenarioId || path.basename(f, '.json');
+      const routesText = (d?.semanticSteps || []).map((s) => `${s.pageRoute || ''} ${s.locatorContract?.value || ''}`).join(' ');
+      return {
+        scenarioId,
+        steps: Array.isArray(d?.semanticSteps) ? d.semanticSteps.length : 0,
+        tags: Array.isArray(d?.tags) ? d.tags : [],
+        _score: scoreRelevance(`${scenarioId} ${d?.title || ''} ${routesText}`),
+      };
+    })
+    .sort((a, b) => b._score - a._score || a.scenarioId.localeCompare(b.scenarioId))
+    .map(({ _score, ...rest }) => rest);
+
+  const allSpecs = walkFiles(path.join(rootDir, 'tests'), (f) => f.endsWith('.spec.ts'))
+    .map((f) => path.relative(rootDir, f).replace(/\\/g, '/'))
+    .sort((a, b) => scoreRelevance(b) - scoreRelevance(a) || a.localeCompare(b));
 
   return {
     scope: {

@@ -137,19 +137,34 @@ export function findFreePort(host = '127.0.0.1') {
 
 export function parseSnapshotRefs(snapshotText = '') {
   const refMap = new Map();
+  const roleNamelessCounts = new Map();
   for (const rawLine of String(snapshotText).split('\n')) {
     const line = rawLine.trim();
     if (!line) continue;
-    // Format 1: `- button "Sign In" [ref=e5]` or `- textbox "Email" [ref=e2]`
-    let m = line.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?.*?\[ref=(e\d+)\]/);
+    // Format 1: `- button "Sign In" [ref=e5]` or `- checkbox [checked=false, ref=e5]` or `- combobox [expanded=false, ref=e5]`
+    let m = line.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?.*?\[[^\]]*\bref=(e\d+)\]/);
     if (m) {
-      refMap.set(`@${m[3]}`, { role: m[1].toLowerCase(), name: m[2] || '', rawLine: line });
+      const role = m[1].toLowerCase();
+      const name = m[2] || '';
+      let nth;
+      if (!name) {
+        nth = roleNamelessCounts.get(role) || 0;
+        roleNamelessCounts.set(role, nth + 1);
+      }
+      refMap.set(`@${m[3]}`, { role, name, ...(nth !== undefined ? { nth } : {}), rawLine: line });
       continue;
     }
     // Format 2: `@e5 [button] "Sign In"` or `@e5 button "Sign In"`
     m = line.match(/^@(e\d+)\s+\[?([a-zA-Z0-9_-]+)\]?(?:\s+"([^"]*)")?/);
     if (m) {
-      refMap.set(`@${m[1]}`, { role: m[2].toLowerCase(), name: m[3] || '', rawLine: line });
+      const role = m[2].toLowerCase();
+      const name = m[3] || '';
+      let nth;
+      if (!name) {
+        nth = roleNamelessCounts.get(role) || 0;
+        roleNamelessCounts.set(role, nth + 1);
+      }
+      refMap.set(`@${m[1]}`, { role, name, ...(nth !== undefined ? { nth } : {}), rawLine: line });
     }
   }
   return refMap;
@@ -188,7 +203,12 @@ export function resolveSemanticLocator(refOrSelector, refMap) {
         return { strategy: 'getByLabel', value: meta.name };
       }
       if (meta.role) {
-        return { strategy: 'getByRole', role: meta.role, value: meta.role };
+        return {
+          strategy: 'getByRole',
+          role: meta.role,
+          value: '',
+          ...(Number.isInteger(meta.nth) ? { nth: meta.nth } : {}),
+        };
       }
     }
   }
@@ -309,8 +329,9 @@ export function appendRecordedAction(
   draftTape,
   { action, refOrSelector, value, refMap, pageRoute, businessStep, actor, domainGraph }
 ) {
-  const allowedActions = new Set(['goto', 'fill', 'click', 'select', 'check', 'uncheck', 'press', 'hover']);
-  const normalizedAction = action === 'type' ? 'fill' : action;
+  const allowedActions = new Set(['goto', 'fill', 'click', 'selectOption', 'check', 'uncheck', 'press', 'hover']);
+  const normalizedAction =
+    action === 'type' ? 'fill' : action === 'select' ? 'selectOption' : action;
   if (!allowedActions.has(normalizedAction)) return null;
 
   const stepIndex = draftTape.semanticSteps.length + 1;
@@ -322,7 +343,7 @@ export function appendRecordedAction(
 
   let dataBuilderRef;
   let redacted = false;
-  if (normalizedAction === 'fill' || normalizedAction === 'select') {
+  if (normalizedAction === 'fill' || normalizedAction === 'selectOption') {
     const res = redactInputToBuilderRef(fieldMeta, value, draftTape.scenarioId);
     dataBuilderRef = res.dataBuilderRef;
     redacted = res.redacted;
@@ -332,7 +353,7 @@ export function appendRecordedAction(
   const existingComp = resolveComponentFromDomainGraph(pageRoute || '/', domainGraph);
   const stepObj = {
     stepIndex,
-    intent: `${normalizedAction} ${locatorContract.value || pageRoute || 'control'}`,
+    intent: `${normalizedAction} ${locatorContract.value || locatorContract.role || pageRoute || 'control'}`,
     businessStep: stepLabel,
     pageRoute: pageRoute || '/',
     componentCandidate:
@@ -345,6 +366,7 @@ export function appendRecordedAction(
         .map((p) => p[0].toUpperCase() + p.slice(1))
         .join('') || 'Main'}SectionComponent`,
     action: normalizedAction,
+    ...(normalizedAction === 'press' ? { key: String(value || 'Enter').trim() || 'Enter' } : {}),
     locatorContract,
     ...(dataBuilderRef ? { inputDataRef: dataBuilderRef, dataBuilderRef } : {}),
     ...(!redacted && value !== undefined ? { __builderSampleValue: String(value) } : {}),
@@ -666,7 +688,7 @@ export function buildSeederCodeFromTape(tape, mutatingContracts = []) {
     .filter(Boolean)
     .map((p) => p[0].toUpperCase() + p.slice(1))
     .join('');
-  const className = `${pascal}Seeder`;
+  const className = pascal.endsWith('Seeder') ? pascal : `${pascal}Seeder`;
   const primary = mutatingContracts[0] || { method: 'POST', urlPattern: '/api/v1/seed', expectedStatus: 201 };
   const method = String(primary.method || 'POST').toLowerCase();
   if (!new Set(['post', 'put', 'patch']).has(method)) {
@@ -1502,6 +1524,13 @@ async function cmdFinish(args) {
   }
 
   const finalized = finalizeDraftTape(draftTape, scenarioId);
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const valErrors = validateTapeObject(finalized, `${scenarioId}.json`, { expectedScenarioId: scenarioId });
+  if (valErrors.length > 0) {
+    console.error(`❌ Tape validation failed:\n  - ${valErrors.join('\n  - ')}`);
+    process.exit(1);
+  }
+
   const tapeFile = assertNoSymlinkEscape(ROOT, path.join(TAPES_DIR, `${scenarioId}.json`), 'Session Tape');
   fs.mkdirSync(TAPES_DIR, { recursive: true });
   fs.writeFileSync(tapeFile, JSON.stringify(finalized, null, 2) + '\n', 'utf8');
@@ -1524,15 +1553,10 @@ async function cmdFinish(args) {
     fs.mkdirSync(path.dirname(safeOut.absPath), { recursive: true });
     fs.writeFileSync(safeOut.absPath, built.codeContent, 'utf8');
     seederFile = safeOut.relPath;
+  } else if (emitSeeder) {
+    seederTip = 'SEEDER skipped: no mutating POST/PUT/PATCH API contracts were captured during this session.';
   } else if (mutatingContracts.length > 0) {
     seederTip = `Detected ${mutatingContracts.length} mutating API call(s) (${mutatingContracts[0].method} ${mutatingContracts[0].urlPattern}); re-run with --emit-seeder to promote Point A to a <300ms StateSeederContract.`;
-  }
-
-  const { validateTapeObject } = await import('./validate-tapes.mjs');
-  const valErrors = validateTapeObject(finalized, `${scenarioId}.json`, { expectedScenarioId: scenarioId });
-  if (valErrors.length > 0) {
-    console.error(`❌ Tape validation failed:\n  - ${valErrors.join('\n  - ')}`);
-    process.exit(1);
   }
 
   let compiledSpecRel = `tests/${scenarioId}.spec.ts`;

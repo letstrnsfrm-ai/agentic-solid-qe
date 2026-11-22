@@ -440,9 +440,13 @@ if (isMain) {
         personaBuilder: getVal('--persona-builder'),
         dryRun,
       });
-      console.log(
-        `${dryRun ? 'DRY-RUN' : 'CLONED'} | ${res.relFile}\n${summarizeTapeCompact(res.tape)}`
-      );
+      if (jsonOnly) {
+        console.log(JSON.stringify({ action: dryRun ? 'dry-run' : 'cloned', file: res.relFile, tape: res.tape }));
+      } else {
+        console.log(
+          `${dryRun ? 'DRY-RUN' : 'CLONED'} | ${res.relFile}\n${summarizeTapeCompact(res.tape)}`
+        );
+      }
     } else if (sub === 'patch') {
       const id = args[1];
       if (!id) throw new Error('Usage: npx cortex tape patch <scenarioId> [options]');
@@ -500,9 +504,13 @@ if (isMain) {
         }
       }
       const res = patchTape(process.cwd(), id, opts);
-      console.log(
-        `${dryRun ? 'DRY-RUN' : 'PATCHED'} | ${res.relFile}\n${summarizeTapeCompact(res.tape)}`
-      );
+      if (jsonOnly) {
+        console.log(JSON.stringify({ action: dryRun ? 'dry-run' : 'patched', file: res.relFile, tape: res.tape }));
+      } else {
+        console.log(
+          `${dryRun ? 'DRY-RUN' : 'PATCHED'} | ${res.relFile}\n${summarizeTapeCompact(res.tape)}`
+        );
+      }
     } else {
       throw new Error(`Unknown subcommand '${sub}'. Run 'npx cortex tape --help'.`);
     }
