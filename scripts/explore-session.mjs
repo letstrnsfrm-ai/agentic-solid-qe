@@ -1006,17 +1006,29 @@ async function cmdStart(args) {
     resolveConfinedPath(ROOT, authPath, '.auth/', '--auth');
   }
 
-  const [snap, rawLiveUrl] = await Promise.all([
+  let [snap, rawLiveUrl] = await Promise.all([
     runAgentBrowserAsync(session, ['snapshot', '-i'], { allowFail: true }),
     fromSpec && currentUrl
       ? Promise.resolve(currentUrl)
       : runAgentBrowserAsync(session, ['eval', 'location.href'], { allowFail: true }),
   ]);
-  const liveUrl = rawLiveUrl || currentUrl;
+  // Auto-settle once for client-side SPAs (Vue/React/Angular) that mount asynchronously after load
+  if (parseSnapshotRefs(snap).size === 0) {
+    await runAgentBrowserAsync(session, ['wait', '2000'], { allowFail: true });
+    snap = await runAgentBrowserAsync(session, ['snapshot', '-i'], { allowFail: true });
+    if (!fromSpec) {
+      const settledUrl = await runAgentBrowserAsync(session, ['eval', 'location.href'], { allowFail: true });
+      if (settledUrl) rawLiveUrl = settledUrl;
+    }
+  }
+  const liveUrl = String(rawLiveUrl || currentUrl || '').replace(/^"|"$/g, '');
+  // Preserve explicitly requested start URL (e.g. auth-protected route that 302-redirected to /login)
+  // so compiled specs open the requested route and keep server-side post-login redirect targets intact.
+  const tapeStartUrl = currentUrl ? String(currentUrl).replace(/^"|"$/g, '') : liveUrl;
   const draftTape = createDraftTape({
     scenarioId,
     title: scenarioId.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-    baseUrl: liveUrl.replace(/^"|"$/g, ''),
+    baseUrl: tapeStartUrl,
     actor: actorId,
     resumesFrom,
   });
@@ -1030,7 +1042,7 @@ async function cmdStart(args) {
     cdpPort,
     specPid,
     checkpointPath,
-    url: liveUrl.replace(/^"|"$/g, ''),
+    url: liveUrl,
     variables,
     lastSnapshot: snap,
     startedAt: new Date().toISOString(),
@@ -1417,7 +1429,10 @@ async function cmdFinish(args) {
   if (!draftTape) throw new Error('No active draft tape found.');
   const scenarioId = validateSafeId(getFlagValue(args, '--scenario', draftTape.scenarioId), 'scenario');
   const titleOverride = getFlagValue(args, '--title', '');
+  const charterOverride = getFlagValue(args, '--charter', '');
+  const tagsOverride = getFlagValue(args, '--tags', '');
   const assertUrl = getFlagValue(args, '--assert-url', '');
+  const assertText = getFlagValue(args, '--assert-text', '');
   const shouldCompile = args.includes('--compile');
   const shouldVerify = args.includes('--verify');
   const emitSeeder = args.includes('--emit-seeder');
@@ -1426,6 +1441,16 @@ async function cmdFinish(args) {
 
   if (titleOverride) {
     draftTape.title = String(titleOverride).trim().slice(0, 140);
+  }
+  if (charterOverride) {
+    draftTape.charter = String(charterOverride).trim();
+  }
+  if (tagsOverride) {
+    const parsedTags = String(tagsOverride)
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => /^@[a-zA-Z0-9_-]+$/.test(t));
+    if (parsedTags.length > 0) draftTape.tags = parsedTags;
   }
   if (assertUrl) {
     if (!Array.isArray(draftTape.expectedStates)) draftTape.expectedStates = [];
@@ -1439,6 +1464,29 @@ async function cmdFinish(args) {
       expectedValueRef: String(assertUrl).trim(),
       ...(lastStep?.actor ? { actor: lastStep.actor } : {}),
     });
+  }
+  if (assertText) {
+    if (!Array.isArray(draftTape.expectedStates)) draftTape.expectedStates = [];
+    const lastStep = (draftTape.semanticSteps || []).filter((s) => s && s.action !== 'wait').slice(-1)[0];
+    const pascalPrefix = scenarioId
+      .split(/[^a-zA-Z0-9]+/)
+      .filter(Boolean)
+      .map((p) => p[0].toUpperCase() + p.slice(1))
+      .join('');
+    const builderRef = `${pascalPrefix}DataBuilder.standard().expectedMessage`;
+    draftTape.expectedStates.push({
+      description: `Verify page displays expected text`,
+      businessStep: lastStep?.businessStep || 'Verify expected message',
+      targetComponent: lastStep?.componentCandidate || 'MainSectionComponent',
+      targetProperty: 'root',
+      assertionType: 'toContainText',
+      expectedValueRef: builderRef,
+      ...(lastStep?.actor ? { actor: lastStep.actor } : {}),
+    });
+    if (state) {
+      state.recordedBuilderValues = state.recordedBuilderValues || {};
+      state.recordedBuilderValues[builderRef] = String(assertText).trim();
+    }
   }
 
   const finalized = finalizeDraftTape(draftTape, scenarioId);

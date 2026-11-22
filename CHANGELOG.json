@@ -1,7 +1,27 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.0",
+  "latestVersion": "0.48.2",
   "releases": [
+    {
+      "version": "0.48.2",
+      "date": "2026-11-22",
+      "highlights": [
+        "SPA Auto-Settle, Auth-Redirect Start URL Preservation & Finish Assertions (`explore-session.mjs`): Automatically settles once when `--explore start` lands on an unhydrated client-side SPA (`REFS: 0`), preserves explicitly requested auth-protected start URLs across 302 login redirects so compiled specs keep server-side return URLs intact, and adds `--charter`, `--tags`, and DIP-compliant `--assert-text` (with Data Builder auto-hydration) to `--explore finish`."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.2 SPA exploration and assertion ergonomics."
+      ]
+    },
+    {
+      "version": "0.48.1",
+      "date": "2026-11-22",
+      "highlights": [
+        "SPA Wait Omission & `toHaveURL` Compilation (`explore-session.mjs`, `validate-tapes.mjs`, `compile-tape.mjs`): Omitted live `wait` steps from recorded `semanticSteps`, added `--title` and `--assert-url` to `--explore finish`, and compiled `toHaveURL` assertions onto `expect(<target>.page()).toHaveURL(...)`."
+      ],
+      "nextActions": [
+        "Upgrade to v0.48.2 via `npx cortex upgrade`."
+      ]
+    },
     {
       "version": "0.48.0",
       "date": "2026-11-22",

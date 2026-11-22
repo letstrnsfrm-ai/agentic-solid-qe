@@ -4992,6 +4992,7 @@ test('explore-session & compile-tape: omits SPA wait actions from semanticSteps 
     assert.ok(specOp, 'Expected compiled spec operation');
     const specSrc = fs.readFileSync(path.join(tmpRoot, specOp.file), 'utf8');
     assert.match(specSrc, /\.page\(\)\)\.toHaveURL\(new RegExp\(/);
+    assert.match(specSrc, /open\("\/auth\/login"\)/);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
