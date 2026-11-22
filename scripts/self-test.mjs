@@ -4912,6 +4912,92 @@ test('autonomous-mode: lifecycle, dual-stream ledger, soft-pause check-in interv
   }
 });
 
+test('explore-session & compile-tape: omits SPA wait actions from semanticSteps and compiles toHaveURL on page()', async () => {
+  const { createDraftTape, appendRecordedAction, finalizeDraftTape } = await import('./explore-session.mjs');
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const { compileSessionTape } = await import('./compile-tape.mjs');
+
+  const draft = createDraftTape({
+    scenarioId: 'spa-login-url-check',
+    baseUrl: 'https://example.com/auth/login',
+    charter: 'happy-path-baseline',
+  });
+
+  // Live SPA hydration wait must NOT be recorded into semanticSteps
+  const waitRes = appendRecordedAction(draft, {
+    action: 'wait',
+    refOrSelector: '3000',
+    pageRoute: '/auth/login',
+  });
+  assert.equal(waitRes, null);
+
+  // Real interaction step IS recorded
+  const clickRes = appendRecordedAction(draft, {
+    action: 'click',
+    refOrSelector: '@e1',
+    refMap: new Map([['@e1', { role: 'button', name: 'Login', label: 'Login' }]]),
+    pageRoute: '/auth/login',
+    businessStep: 'Submit login form',
+  });
+  assert.ok(clickRes);
+
+  // Also ensure finalizeDraftTape strips any pre-existing wait entries defensively
+  draft.semanticSteps.push({
+    stepIndex: 99,
+    intent: 'wait 2000',
+    businessStep: 'Wait',
+    pageRoute: '/auth/login',
+    componentCandidate: 'LoginSectionComponent',
+    action: 'wait',
+    locatorContract: { strategy: 'text', value: '2000' },
+  });
+  draft.expectedStates.push({
+    description: 'Verify navigation to /dashboard/index',
+    businessStep: 'Submit login form',
+    targetComponent: 'LoginSectionComponent',
+    targetProperty: 'root',
+    assertionType: 'toHaveURL',
+    expectedValueRef: '/dashboard/index',
+  });
+
+  const finalized = finalizeDraftTape(draft, 'spa-login-url-check');
+  assert.equal(finalized.semanticSteps.some((s) => s.action === 'wait'), false);
+  const valErrors = validateTapeObject(finalized, 'spa-login-url-check.json', {
+    expectedScenarioId: 'spa-login-url-check',
+  });
+  assert.deepEqual(valErrors, []);
+
+  // Compile into temp workspace and verify expect(...page()).toHaveURL(...) codegen
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-url-'));
+  try {
+    fs.mkdirSync(path.join(tmpRoot, '.exploratory/tapes'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, '.agents/domain'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/domain-memory.md'),
+      '# Domain Memory\n- **App Name:** SpaDemo\n- **Base URL:** `https://example.com`\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, '.exploratory/tapes/spa-login-url-check.json'),
+      JSON.stringify(finalized, null, 2),
+      'utf8'
+    );
+    const compiled = compileSessionTape({
+      tapeInput: 'spa-login-url-check',
+      apply: true,
+      rootDir: tmpRoot,
+      skipMap: true,
+    });
+    const specOp = compiled.operations.find((op) => op.file && op.file.endsWith('.spec.ts'));
+    assert.ok(specOp, 'Expected compiled spec operation');
+    const specSrc = fs.readFileSync(path.join(tmpRoot, specOp.file), 'utf8');
+    assert.match(specSrc, /\.page\(\)\)\.toHaveURL\(new RegExp\(/);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
 
 
 

@@ -508,9 +508,14 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         typeof state.expectedValueRef === 'string' &&
         /^capturedVariable:[a-zA-Z][a-zA-Z0-9_]*$/.test(state.expectedValueRef) &&
         !hasForbiddenIdentifierSegment(state.expectedValueRef);
+      const isSafeUrlPathRef =
+        state.assertionType === 'toHaveURL' &&
+        typeof state.expectedValueRef === 'string' &&
+        /^\/[a-zA-Z0-9._/?=&%#:~-]*$/.test(state.expectedValueRef) &&
+        !state.expectedValueRef.includes('..');
       if (
         typeof state.expectedValueRef !== 'string' ||
-        (!isCapturedVarRef && !isSafeMemberRef(state.expectedValueRef))
+        (!isCapturedVarRef && !isSafeUrlPathRef && !isSafeMemberRef(state.expectedValueRef))
       ) {
         errors.push(`[${file}] Invalid expectedStates.expectedValueRef '${state.expectedValueRef}'.`);
       }
