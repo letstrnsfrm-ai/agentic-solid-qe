@@ -5032,6 +5032,104 @@ test('heal-drift: extracts leaf semantic locator from chained locator(body).getB
   }
 });
 
+test('framework-hardening-batch-1: parseSnapshotRefs attrs/nth, select->selectOption, press key, nameless role compile, SeederSeeder dedup, context route ranking, @eN ref block, tape --json', async () => {
+  const {
+    parseSnapshotRefs,
+    resolveSemanticLocator,
+    createDraftTape,
+    appendRecordedAction,
+    finalizeDraftTape,
+    buildSeederCodeFromTape,
+  } = await import('./explore-session.mjs');
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const { compileSessionTape } = await import('./compile-tape.mjs');
+  const { buildContextPack } = await import('./context-pack.mjs');
+
+  // Defects #6 & #7: parseSnapshotRefs matches [attr, ref=eN] and tracks nameless role nth
+  const snap = [
+    '- heading "Controls" [level=3, ref=e1]',
+    '- checkbox [checked=false, ref=e5]',
+    '- checkbox [checked=true, ref=e6]',
+    '- combobox [expanded=false, ref=e7] hint="id:dropdown": Please select',
+  ].join('\n');
+  const refMap = parseSnapshotRefs(snap);
+  assert.equal(refMap.get('@e5')?.role, 'checkbox');
+  assert.equal(refMap.get('@e5')?.nth, 0);
+  assert.equal(refMap.get('@e6')?.nth, 1);
+  assert.equal(refMap.get('@e7')?.role, 'combobox');
+  assert.equal(refMap.get('@e7')?.nth, 0);
+
+  const loc5 = resolveSemanticLocator('@e5', refMap);
+  assert.deepEqual(loc5, { strategy: 'getByRole', role: 'checkbox', value: '', nth: 0 });
+  const loc6 = resolveSemanticLocator('@e6', refMap);
+  assert.deepEqual(loc6, { strategy: 'getByRole', role: 'checkbox', value: '', nth: 1 });
+
+  // Defects #4 & #5: select -> selectOption and press populates key
+  const draft = createDraftTape({ scenarioId: 'controls-batch-test', baseUrl: 'https://example.com/controls' });
+  const selRes = appendRecordedAction(draft, { action: 'select', refOrSelector: '@e7', value: 'Option 1', refMap, pageRoute: '/controls' });
+  assert.equal(selRes.stepObj.action, 'selectOption');
+  const chk1 = appendRecordedAction(draft, { action: 'check', refOrSelector: '@e5', refMap, pageRoute: '/controls' });
+  const chk2 = appendRecordedAction(draft, { action: 'uncheck', refOrSelector: '@e6', refMap, pageRoute: '/controls' });
+  assert.equal(chk1.stepObj.locatorContract.nth, 0);
+  assert.equal(chk2.stepObj.locatorContract.nth, 1);
+  const pressRes = appendRecordedAction(draft, { action: 'press', refOrSelector: '@e7', value: 'Enter', refMap, pageRoute: '/controls' });
+  assert.equal(pressRes.stepObj.key, 'Enter');
+
+  const finalized = finalizeDraftTape(draft, 'controls-batch-test');
+  assert.deepEqual(validateTapeObject(finalized, 'controls-batch-test.json', { expectedScenarioId: 'controls-batch-test' }), []);
+
+  // Defect #7: validate-tapes blocks @eN ephemeral CLI refs
+  const leakedTape = structuredClone(finalized);
+  leakedTape.semanticSteps[1].locatorContract = { strategy: 'getByText', value: '@e5' };
+  const leakErrors = validateTapeObject(leakedTape, 'controls-batch-test.json');
+  assert.ok(leakErrors.some((e) => e.includes('Ephemeral CLI ref')));
+
+  // Defect #9: buildSeederCodeFromTape avoids double SeederSeeder suffix
+  const seederBuilt = buildSeederCodeFromTape({ scenarioId: 'form-login-seeder' }, [{ method: 'POST', urlPattern: '/authenticate', expectedStatus: 200 }]);
+  assert.equal(seederBuilt.className, 'FormLoginSeeder');
+
+  // Compile nameless nth controls & verify getByRole("checkbox").nth(0) / .nth(1) + distinct props
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-batch1-'));
+  try {
+    fs.mkdirSync(path.join(tmpRoot, '.exploratory/tapes'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, '.agents/domain'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, '.agents/domain/domain-memory.md'), '# Domain Memory\n- **App Name:** Demo\n- **Base URL:** `https://example.com`\n', 'utf8');
+    fs.writeFileSync(path.join(tmpRoot, '.exploratory/tapes/controls-batch-test.json'), JSON.stringify(finalized, null, 2), 'utf8');
+
+    const comp = compileSessionTape({ tapeInput: 'controls-batch-test', apply: true, rootDir: tmpRoot, skipMap: true });
+    const compOp = comp.operations.find((o) => o.layer === 'component');
+    assert.ok(compOp);
+    const compSrc = fs.readFileSync(path.join(tmpRoot, compOp.file), 'utf8');
+    assert.match(compSrc, /getByRole\("checkbox"\)\.nth\(0\)/);
+    assert.match(compSrc, /getByRole\("checkbox"\)\.nth\(1\)/);
+    assert.match(compSrc, /getByRole\("combobox"\)\.nth\(0\)/);
+    assert.match(compSrc, /readonly checkbox1: Locator;/);
+    assert.match(compSrc, /readonly checkbox2: Locator;/);
+
+    // Defect #1: context-pack ranks matching tapes & specs first even when >8 tapes exist
+    for (let i = 0; i < 9; i++) {
+      fs.writeFileSync(path.join(tmpRoot, `.exploratory/tapes/aaa-other-${i}.json`), JSON.stringify({ scenarioId: `aaa-other-${i}`, semanticSteps: [] }), 'utf8');
+      fs.writeFileSync(path.join(tmpRoot, `tests/aaa-other-${i}.spec.ts`), '// filler\n', 'utf8');
+    }
+    const pack = buildContextPack(tmpRoot, { route: '/controls' });
+    assert.equal(pack.tapes[0]?.scenarioId, 'controls-batch-test');
+    assert.equal(pack.specs[0], 'tests/controls-batch-test.spec.ts');
+
+    // Defect #10: tape-cli patch --json outputs valid JSON
+    const patchRes = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, 'scripts/tape-cli.mjs'), 'patch', 'controls-batch-test', '--add-tag', '@regression', '--json'],
+      { cwd: tmpRoot, encoding: 'utf8' }
+    );
+    assert.equal(patchRes.status, 0, patchRes.stderr);
+    const parsedPatch = JSON.parse(patchRes.stdout);
+    assert.equal(parsedPatch.action, 'patched');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 
 
 

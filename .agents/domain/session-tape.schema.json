@@ -319,6 +319,11 @@
               "nameExact": {
                 "type": "boolean",
                 "default": true
+              },
+              "nth": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Optional 0-based index disambiguator for repeating nameless role elements (e.g., unnamed checkboxes or comboboxes)."
               }
             }
           }

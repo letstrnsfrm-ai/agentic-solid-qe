@@ -1,7 +1,17 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.5",
+  "latestVersion": "0.48.6",
   "releases": [
+    {
+      "version": "0.48.6",
+      "date": "2026-11-22",
+      "highlights": [
+        "Framework Hardening Batch #1 (10 Live-Reproduced Defects Fixed across `explore-session.mjs`, `compile-tape.mjs`, `validate-tapes.mjs`, `context-pack.mjs`, `orchestrate.mjs`, `tape-cli.mjs`, and `session-tape.schema.json`): Fixed attribute-prefixed snapshot ref parsing (`[checked=false, ref=e5]`) and nameless `getByRole` + `.nth(N)` compilation, normalized `select` -> `selectOption` and populated `press.key`, blocked `@eN` ephemeral ref leaks and validated tapes prior to disk writes, prevented `SeederSeeder` double suffixes and added `--emit-seeder` skip diagnostics, prioritized route-matching tapes/specs in `cortex context`, upgraded `--loop` to transactional shared-component healing, forwarded all `--verify` flags, and added `--json` output to `cortex tape clone|patch`."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.6 framework hardening fixes."
+      ]
+    },
     {
       "version": "0.48.5",
       "date": "2026-11-22",

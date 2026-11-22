@@ -227,23 +227,28 @@ function buildLocatorExpression(locatorContract, rootExpr = 'this.root') {
   const val = JSON.stringify(String(locatorContract.value ?? ''));
   const exact = locatorContract.nameExact !== false;
 
+  const nthSuffix = Number.isInteger(locatorContract.nth) ? `.nth(${locatorContract.nth})` : '';
+
   if (strat === 'getByRole') {
     const role = JSON.stringify(String(locatorContract.role || 'button'));
-    return `${effectiveRoot}.getByRole(${role}, { name: ${val}, exact: ${exact} })`;
+    if (!String(locatorContract.value ?? '').trim()) {
+      return `${effectiveRoot}.getByRole(${role})${nthSuffix}`;
+    }
+    return `${effectiveRoot}.getByRole(${role}, { name: ${val}, exact: ${exact} })${nthSuffix}`;
   }
   if (strat === 'getByLabel') {
-    return `${effectiveRoot}.getByLabel(${val}, { exact: ${exact} })`;
+    return `${effectiveRoot}.getByLabel(${val}, { exact: ${exact} })${nthSuffix}`;
   }
   if (strat === 'getByPlaceholder') {
-    return `${effectiveRoot}.getByPlaceholder(${val}, { exact: ${exact} })`;
+    return `${effectiveRoot}.getByPlaceholder(${val}, { exact: ${exact} })${nthSuffix}`;
   }
   if (strat === 'getByText') {
-    return `${effectiveRoot}.getByText(${val}, { exact: ${exact} })`;
+    return `${effectiveRoot}.getByText(${val}, { exact: ${exact} })${nthSuffix}`;
   }
   if (strat === 'getByTestId') {
-    return `${effectiveRoot}.getByTestId(${val})`;
+    return `${effectiveRoot}.getByTestId(${val})${nthSuffix}`;
   }
-  return `${effectiveRoot}.locator(${val})`;
+  return `${effectiveRoot}.locator(${val})${nthSuffix}`;
 }
 
 function buildRootLocatorExpression(parentScope) {
@@ -282,6 +287,11 @@ function ensureSafeLocatorPropName(candidateName, fallbackIndex = 1) {
  */
 function deriveLocatorPropertyName(step) {
   const lc = step.locatorContract || {};
+  if (lc.strategy === 'getByRole' && !String(lc.value || '').trim()) {
+    const roleCamel = toCamelCase(lc.role || 'element') || 'element';
+    const suffix = Number.isInteger(lc.nth) ? String(lc.nth + 1) : String(step.stepIndex);
+    return ensureSafeLocatorPropName(`${roleCamel}${suffix}`, step.stepIndex);
+  }
   const rawVal = String(lc.value || step.intent || `step${step.stepIndex}`)
     .replace(/^#/, '')
     .replace(/[^a-zA-Z0-9]+/g, ' ')
