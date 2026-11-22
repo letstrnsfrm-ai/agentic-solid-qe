@@ -1,7 +1,17 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.3",
+  "latestVersion": "0.48.4",
   "releases": [
+    {
+      "version": "0.48.4",
+      "date": "2026-11-22",
+      "highlights": [
+        "Drift-Healer Chained Locator & Embedded `error-context.md` Snapshot Extraction (`scripts/heal-drift.mjs`): Fixed `extractFailingLocatorFromError` to extract the leaf semantic `getBy*` locator from chained `waiting for locator('body').getByRole(...)` call logs instead of stopping at `body`, and added fallback parsing of embedded `# Page snapshot` YAML blocks inside Playwright `error-context.md` so live drift healing works out-of-the-box without requiring a separate `.agent-browser/` snapshot file."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.4 drift-healer accuracy fixes."
+      ]
+    },
     {
       "version": "0.48.3",
       "date": "2026-11-22",
