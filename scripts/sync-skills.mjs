@@ -1133,6 +1133,7 @@ const coreEnginePaths = [
   '.claude/commands',
   'CHANGELOG.json',
   'scripts/lib/cli-output.mjs',
+  'scripts/lib/autonomous-mode.mjs',
   'scripts/context-pack.mjs',
   'scripts/impact-graph.mjs',
   'scripts/tape-cli.mjs',

@@ -18,10 +18,12 @@ Route all commands & questions via `npx cortex orchestrate`:
    - **Failures:** `--heal-action <dry-run|apply> [--verify-affected]` (`03-drift-healer`).
    - **Legacy:** `npx cortex wave --run --verify --workers 4` (`05-skill-migrator`).
    - **CI & Verify:** `--ci-init` ➔ `--verify [--fast]`.
+   - **Autonomous:** `--autonomous <start|loop|step|resume|status|stop|quarantine>` (`--interval`).
 
 ## 2. Lazy Reference Index (Read ONLY When Needed)
 - `references/master-orchestration-playbook.md` — Stage 0–4 ladder & SOLID contracts.
 - `references/human-gates-and-reporting.md` — Decision flow, gates & Blueprint template.
+- `references/autonomous-mode.md` — Kickoff, objective-ranked autopilot & check-in intervals.
 - `references/onboarding-and-upgrade.md` — `init`, `cortex sync`, multi-squad & legacy onboarding.
 - `references/subagent-isolation.md` — Subagent delegation & model-tiering.
 

@@ -7,7 +7,7 @@ Token-efficient QE workflow (`agent-browser`, `cortex`, `@playwright/test`). Ent
 - **Agent = Autonomous Executor:** Route all commands & questions via `npx cortex orchestrate` (`--loop --compact`, `GATE_OPTIONS`). Pause only at human gates.
 
 ## Skill Router (`.agents/skills/<id>/SKILL.md`)
-- `agentic-solid-qe`: Single entry point (`--loop`, `--bootstrap`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, `--verify`).
+- `agentic-solid-qe`: Single entry point (`--loop`, `--autonomous`, `--bootstrap`, `--explore`, `--tape`, `--heal-action`, `--ci-init`, `--context`, `--verify`).
 - `00-env-bootstrap`: `baseUrl`, `.auth/<persona>.json`, route shards (`--bootstrap --discover-shards`).
 - `01-cli-explorer`: Live recon, oracles, defects, Session Tapes (`--explore`).
 - `02-solid-architect`: Compile 1 Session Tape ➔ SOLID TS + `verify:fast` (`--loop`).

@@ -30,6 +30,23 @@ import {
   generateMigrationDashboard,
 } from './migration-wave-factory.mjs';
 import { runFastVerify } from './verify-fast.mjs';
+import {
+  AUTONOMOUS_LEDGER_REL_PATH,
+  loadAutonomousSession,
+  saveAutonomousSession,
+  startAutonomousSession,
+  resumeAutonomousSession,
+  stopAutonomousSession,
+  recordAutonomousDecision,
+  quarantineAutonomousItem,
+  isItemQuarantined,
+  detectHardBlocker,
+  checkAutonomousLimits,
+  rankAndSelectGateOption,
+  isObjectiveComplete,
+  formatLiveDecisionUpdate,
+  formatCheckinDigest,
+} from './lib/autonomous-mode.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1173,6 +1190,608 @@ export async function runOrchestratorLoop(
   return summary;
 }
 
+/**
+ * Execute a single Fully Autonomous decision & execution cycle (`npx cortex orchestrate --autonomous step`).
+ *
+ * - Enforces check-in interval soft-pauses (`30m`/`1h`/`2h`) and runtime/cycle caps.
+ * - Auto-decides routine gates aligned with user objectives (`focus`, `routes`, `goal`).
+ * - Executes safe deterministic steps in-process (heal, compile, discover-shards, ci-init, waves).
+ * - Logs/quarantines app regressions or ambiguous drift and continues on remaining unblocked shards.
+ * - Hard-pauses immediately ONLY on MFA/CAPTCHA/auth expiry or unconfigured target URL.
+ * - Delegates live browser exploration (`01-cli-explorer`) to the host LLM with exact command & rationale.
+ */
+export async function runAutonomousStep(
+  rootDir = process.cwd(),
+  {
+    apply = true,
+    workers = 4,
+    skipTests = false,
+    quiet = false,
+    nowMs = Date.now(),
+  } = {}
+) {
+  const session = loadAutonomousSession(rootDir);
+  if (!session) {
+    throw new Error(
+      'No active autonomous session. Start one with: npx cortex orchestrate --autonomous start --goal "<objective>" --interval 1h'
+    );
+  }
+
+  const squad = session.objectives?.squad || null;
+  const safeWorkers = Math.max(1, Math.min(32, Number.isFinite(Number(workers)) ? Math.floor(Number(workers)) : 4));
+
+  if (session.status === 'paused-checkin') {
+    const bp = buildOrchestrationBlueprint(rootDir, { squad });
+    const digest = formatCheckinDigest(session, bp, { trigger: 'checkin-interval', nowMs });
+    if (!quiet) console.log(digest);
+    return { status: 'paused-checkin', action: 'checkin-pause', digest, session, blueprint: bp };
+  }
+  if (session.status === 'stopped' || session.status === 'completed') {
+    const bp = buildOrchestrationBlueprint(rootDir, { squad });
+    const digest = formatCheckinDigest(session, bp, { trigger: session.status, nowMs });
+    if (!quiet) console.log(digest);
+    return { status: session.status, action: session.status, digest, session, blueprint: bp };
+  }
+
+  // 1. Check schedule & guardrail limits (soft-pause at check-in interval, max runtime, max cycles)
+  const limits = checkAutonomousLimits(session, nowMs);
+  if (limits.limitHit) {
+    const bp = buildOrchestrationBlueprint(rootDir, { squad });
+    session.lastSnapshot = bp.healthSnapshot;
+    if (limits.type === 'checkin-interval') {
+      session.checkinCount = (session.checkinCount || 0) + 1;
+    }
+    session.status = 'paused-checkin';
+    recordAutonomousDecision(
+      rootDir,
+      session,
+      {
+        cycle: session.cycleCount,
+        gateId: limits.type,
+        skill: 'agentic-solid-qe',
+        action: 'checkin-pause',
+        chosenOptionId: limits.type,
+        chosenLabel: limits.message,
+        rationale: `Soft-pause triggered (${limits.type}) for user progress inspection and optional objective steering.`,
+        outcome: 'paused-checkin',
+      },
+      { nowMs }
+    );
+    const digest = formatCheckinDigest(session, bp, { trigger: limits.type, message: limits.message, nowMs });
+    if (!quiet) console.log(digest);
+    return { status: 'paused-checkin', action: limits.type, digest, session, blueprint: bp };
+  }
+
+  const bp = buildOrchestrationBlueprint(rootDir, { squad });
+  session.lastSnapshot = bp.healthSnapshot;
+
+  // 2. Check if stated objectives are already achieved
+  const completion = isObjectiveComplete(bp, session);
+  if (completion.complete) {
+    let finalVerify = null;
+    if (apply && !skipTests) {
+      finalVerify = await runFastVerify({
+        rootDir,
+        fast: false,
+        skipTests: false,
+        withEngine: false,
+        skipMap: false,
+        workers: safeWorkers,
+        quiet: true,
+      });
+    }
+    if (finalVerify && !finalVerify.ok) {
+      // Verification failed -> let next cycle triage/heal rather than declaring complete
+      saveAutonomousSession(rootDir, session);
+    } else {
+      session.status = 'completed';
+      recordAutonomousDecision(
+        rootDir,
+        session,
+        {
+          cycle: session.cycleCount,
+          gateId: 'objective-complete',
+          skill: 'agentic-solid-qe',
+          action: 'completed',
+          chosenOptionId: 'complete',
+          chosenLabel: completion.reason,
+          rationale: 'All unblocked objectives met and verified.',
+          outcome: 'completed',
+        },
+        { nowMs }
+      );
+      const digest = formatCheckinDigest(session, bp, { trigger: 'completed', message: completion.reason, nowMs });
+      if (!quiet) console.log(digest);
+      return { status: 'completed', action: 'completed', digest, finalVerify, session, blueprint: bp };
+    }
+  }
+
+  // 3. Hard-blocker check (ONLY MFA/CAPTCHA/auth expiry or unconfigured target URL)
+  const blocker = detectHardBlocker(bp);
+  if (blocker.blocked) {
+    session.status = 'paused-blocker';
+    recordAutonomousDecision(
+      rootDir,
+      session,
+      {
+        cycle: session.cycleCount,
+        gateId: blocker.gateId,
+        skill: bp.nextAction.skill,
+        action: 'blocker-pause',
+        chosenOptionId: blocker.gateId,
+        chosenLabel: blocker.reason,
+        command: bp.nextAction.command,
+        rationale: 'Hard blocker requires human credentials/MFA/URL before autonomous execution can continue.',
+        outcome: 'paused-blocker',
+      },
+      { nowMs }
+    );
+    const digest = formatCheckinDigest(session, bp, { trigger: 'blocker', message: blocker.reason, nowMs });
+    if (!quiet) console.log(digest);
+    return { status: 'paused-blocker', action: 'blocker-pause', blocker, digest, session, blueprint: bp };
+  }
+
+  // 4. Advance cycle & rank options against user objectives
+  const fp = computeBlueprintFingerprint(bp);
+  const repeatedFp = Array.isArray(session.seenFingerprints) && session.seenFingerprints.includes(fp);
+  session.cycleCount = (session.cycleCount || 0) + 1;
+  session.lastFingerprint = fp;
+  session.seenFingerprints = [...(session.seenFingerprints || []).slice(-24), fp];
+
+  const ranked = rankAndSelectGateOption(bp, session);
+  if (ranked.allQuarantined || !ranked.chosen) {
+    session.status = 'paused-checkin';
+    const msg = ranked.rationale || 'All remaining candidate items are quarantined; user review requested.';
+    recordAutonomousDecision(
+      rootDir,
+      session,
+      {
+        cycle: session.cycleCount,
+        gateId: bp.nextAction?.gatePayload?.gateId || 'all-quarantined',
+        skill: bp.nextAction.skill,
+        action: 'checkin-pause',
+        chosenOptionId: 'all-quarantined',
+        chosenLabel: msg,
+        rationale: msg,
+        outcome: 'paused-checkin',
+      },
+      { nowMs }
+    );
+    const digest = formatCheckinDigest(session, bp, { trigger: 'checkin-interval', message: msg, nowMs });
+    if (!quiet) console.log(digest);
+    return { status: 'paused-checkin', action: 'all-quarantined', digest, session, blueprint: bp };
+  }
+
+  if (repeatedFp && bp.nextAction.skill !== '01-cli-explorer') {
+    const key = `${bp.nextAction.skill}:${ranked.chosen.id || 'action'}`;
+    quarantineAutonomousItem(rootDir, session, {
+      key,
+      reason: `State fingerprint did not advance after previous cycle (${fp}).`,
+      category: 'repeated-failure',
+      nowMs,
+    });
+    const decision = recordAutonomousDecision(
+      rootDir,
+      session,
+      {
+        cycle: session.cycleCount,
+        gateId: 'cycle-guard',
+        skill: bp.nextAction.skill,
+        action: 'quarantined',
+        chosenOptionId: key,
+        chosenLabel: `Quarantined non-advancing action '${key}'`,
+        rationale: 'Circuit breaker prevented infinite loop; continuing with remaining work.',
+        alternatives: ranked.alternatives,
+        outcome: 'quarantined',
+      },
+      { nowMs }
+    );
+    const liveUpdate = formatLiveDecisionUpdate(decision, session, bp, nowMs);
+    if (!quiet) console.log(liveUpdate);
+    return { status: 'active', action: 'quarantined', decision, liveUpdate, session, blueprint: bp };
+  }
+
+  const maxFail = session.guardrails?.maxConsecutiveShardFailures || 3;
+  const gateId = bp.nextAction?.gatePayload?.gateId || bp.nextAction.skill;
+
+  // 5A. Deterministic: 03-drift-healer (auto-heal high-confidence drift; quarantine regressions/ambiguous drift & continue)
+  if (apply && bp.nextAction.skill === '03-drift-healer') {
+    const triage = analyzeAndHealDrift(rootDir, { apply: false });
+    const triageBlocker = detectHardBlocker(bp, triage);
+    if (triageBlocker.blocked) {
+      session.status = 'paused-blocker';
+      recordAutonomousDecision(
+        rootDir,
+        session,
+        {
+          cycle: session.cycleCount,
+          gateId: triageBlocker.gateId,
+          skill: '03-drift-healer',
+          action: 'blocker-pause',
+          chosenOptionId: 'auth-drift',
+          chosenLabel: triageBlocker.reason,
+          rationale: 'Authentication session expired; interactive re-login required.',
+          outcome: 'paused-blocker',
+        },
+        { nowMs }
+      );
+      const digest = formatCheckinDigest(session, bp, { trigger: 'blocker', message: triageBlocker.reason, nowMs });
+      if (!quiet) console.log(digest);
+      return { status: 'paused-blocker', action: 'blocker-pause', blocker: triageBlocker, digest, session, blueprint: bp };
+    }
+
+    const isHighConfDrift = triage?.rootCause?.category === 'locator-drift' && triage?.autoHealReady === true;
+    if (!isHighConfDrift) {
+      const targetKey = `spec:${triage?.spec || bp.queuePreview?.failingArtifacts?.[0]?.title || 'failing-spec'}`;
+      const category = triage?.rootCause?.category === 'app-regression' ? 'app-regression' : 'ambiguous-drift';
+      quarantineAutonomousItem(rootDir, session, {
+        key: targetKey,
+        reason: `${category} detected (confidence ${triage?.rootCause?.confidence ?? 'low'}) — logged & quarantined so autonomous run continues on unblocked shards.`,
+        category,
+        nowMs,
+      });
+      clearResolvedFailureArtifacts(rootDir);
+      const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
+      const decision = recordAutonomousDecision(
+        rootDir,
+        session,
+        {
+          cycle: session.cycleCount,
+          gateId,
+          skill: '03-drift-healer',
+          action: 'quarantined',
+          chosenOptionId: targetKey,
+          chosenLabel: `Quarantined ${category} (${targetKey}) and continued`,
+          rationale: `Policy: log & quarantine ${category} instead of blocking remaining shards until check-in.`,
+          alternatives: ranked.alternatives,
+          outcome: 'quarantined',
+        },
+        { nowMs }
+      );
+      const liveUpdate = formatLiveDecisionUpdate(decision, session, updatedBp, nowMs);
+      if (!quiet) console.log(liveUpdate);
+      return { status: 'active', action: 'quarantined', decision, liveUpdate, triage, session, blueprint: updatedBp };
+    }
+
+    const applied = analyzeAndHealDrift(rootDir, { apply: true });
+    const affectedSpecs =
+      applied?.spec && /^tests\/[a-zA-Z0-9_./-]+\.spec\.ts$/.test(applied.spec) ? [applied.spec] : [];
+    const vRes = await runFastVerify({
+      rootDir,
+      fast: true,
+      specs: affectedSpecs,
+      skipTests,
+      skipMap: true,
+      workers: safeWorkers,
+      quiet: true,
+    });
+    if (!vRes.ok) {
+      const fKey = `spec:${applied?.spec || 'healed-spec'}`;
+      session.failureCounts[fKey] = (session.failureCounts[fKey] || 0) + 1;
+      if (session.failureCounts[fKey] >= maxFail) {
+        quarantineAutonomousItem(rootDir, session, {
+          key: fKey,
+          reason: `Auto-heal verification failed ${session.failureCounts[fKey]} consecutive time(s).`,
+          category: 'repeated-failure',
+          nowMs,
+        });
+        clearResolvedFailureArtifacts(rootDir);
+      }
+    } else {
+      clearResolvedFailureArtifacts(rootDir);
+    }
+    const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
+    const decision = recordAutonomousDecision(
+      rootDir,
+      session,
+      {
+        cycle: session.cycleCount,
+        gateId,
+        skill: '03-drift-healer',
+        action: 'executed',
+        chosenOptionId: 'heal-apply',
+        chosenLabel: `Auto-healed high-confidence locator drift (${affectedSpecs[0] || 'component'})`,
+        command: 'npx cortex orchestrate --heal-action apply',
+        rationale: ranked.rationale,
+        alternatives: ranked.alternatives,
+        outcome: vRes.ok ? 'success' : 'failed',
+      },
+      { nowMs }
+    );
+    const liveUpdate = formatLiveDecisionUpdate(decision, session, updatedBp, nowMs);
+    if (!quiet) console.log(liveUpdate);
+    return { status: 'active', action: 'executed', decision, liveUpdate, verify: vRes, session, blueprint: updatedBp };
+  }
+
+  // 5B. Deterministic: 02-solid-architect (batch-compile unquarantined Session Tapes + fast verify)
+  if (apply && bp.nextAction.skill === '02-solid-architect') {
+    const queuedTapes = (bp.queuePreview?.uncompiledTapes || [])
+      .map((t) => (typeof t === 'string' ? t : t?.scenarioId))
+      .filter((id) => /^[a-z0-9][a-z0-9-]*$/.test(String(id || '')) && !isItemQuarantined(session, `tape:${id}`));
+
+    if (queuedTapes.length > 0) {
+      const sharedGraph = buildDomainGraph({ rootDir, writeToDisk: false });
+      const compiledIds = [];
+      const batchSpecs = [];
+      let compileError = null;
+      for (const sid of queuedTapes) {
+        try {
+          const rep = compileSessionTape({
+            tapeInput: sid,
+            squadOverride: squad || '',
+            apply: true,
+            rootDir,
+            domainGraph: sharedGraph,
+            deferGraphRefresh: true,
+            skipMap: true,
+          });
+          compiledIds.push(sid);
+          const specOp = (rep.operations || []).find((op) => op.file && op.file.endsWith('.spec.ts'));
+          if (specOp?.file) batchSpecs.push(specOp.file);
+        } catch (err) {
+          compileError = { scenarioId: sid, message: String(err.message || err).slice(0, 200) };
+          const fKey = `tape:${sid}`;
+          session.failureCounts[fKey] = (session.failureCounts[fKey] || 0) + 1;
+          if (session.failureCounts[fKey] >= maxFail) {
+            quarantineAutonomousItem(rootDir, session, {
+              key: fKey,
+              reason: `Tape compilation failed ${session.failureCounts[fKey]} times: ${compileError.message}`,
+              category: 'repeated-failure',
+              nowMs,
+            });
+          }
+          break;
+        }
+      }
+      if (compiledIds.length > 0) {
+        finalizeBatchDomainRefresh(rootDir, { skipMap: true });
+      }
+      const vRes =
+        !compileError && compiledIds.length > 0
+          ? await runFastVerify({
+              rootDir,
+              fast: true,
+              specs: batchSpecs,
+              skipTests,
+              skipMap: true,
+              workers: safeWorkers,
+              quiet: true,
+            })
+          : { ok: false };
+      const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
+      const decision = recordAutonomousDecision(
+        rootDir,
+        session,
+        {
+          cycle: session.cycleCount,
+          gateId,
+          skill: '02-solid-architect',
+          action: 'executed',
+          chosenOptionId: 'compile-batch',
+          chosenLabel: `Compiled ${compiledIds.length} tape(s): ${compiledIds.join(', ') || 'none'}`,
+          command: 'npx cortex orchestrate --loop --compact',
+          rationale: ranked.rationale,
+          alternatives: ranked.alternatives,
+          outcome: !compileError && vRes.ok ? 'success' : 'failed',
+        },
+        { nowMs }
+      );
+      const liveUpdate = formatLiveDecisionUpdate(decision, session, updatedBp, nowMs);
+      if (!quiet) console.log(liveUpdate);
+      return { status: 'active', action: 'executed', decision, liveUpdate, compiledIds, verify: vRes, session, blueprint: updatedBp };
+    }
+  }
+
+  // 5C. Deterministic: 00-env-bootstrap (auto-discover live shards)
+  if (apply && gateId === 'stage0-discover-shards' && ranked.chosen.id === 'discover-shards') {
+    const disc = await discoverAndSeedLiveShards(rootDir, {
+      baseUrl: bp.targetApp.baseUrl,
+      filterPattern: session.objectives.routes[0] || '',
+    });
+    const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
+    const decision = recordAutonomousDecision(
+      rootDir,
+      session,
+      {
+        cycle: session.cycleCount,
+        gateId,
+        skill: '00-env-bootstrap',
+        action: 'executed',
+        chosenOptionId: ranked.chosen.id,
+        chosenLabel: `Discovered ${disc.discoveredTotal} route(s), seeded ${disc.createdShards.length} feature shard(s)`,
+        command: ranked.chosen.command,
+        rationale: ranked.rationale,
+        alternatives: ranked.alternatives,
+        outcome: 'success',
+      },
+      { nowMs }
+    );
+    const liveUpdate = formatLiveDecisionUpdate(decision, session, updatedBp, nowMs);
+    if (!quiet) console.log(liveUpdate);
+    return { status: 'active', action: 'executed', decision, liveUpdate, discovery: disc, session, blueprint: updatedBp };
+  }
+
+  // 5D. Deterministic: 04-ci-pipeline (scaffold CI workflow)
+  if (apply && gateId === 'stage4-ci-init') {
+    const ciRes = ensureCiPipelineConfigured(rootDir);
+    const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
+    const decision = recordAutonomousDecision(
+      rootDir,
+      session,
+      {
+        cycle: session.cycleCount,
+        gateId,
+        skill: '04-ci-pipeline',
+        action: 'executed',
+        chosenOptionId: ranked.chosen.id,
+        chosenLabel: `CI workflow ${ciRes.status}: ${ciRes.file}`,
+        command: 'npx cortex orchestrate --ci-init',
+        rationale: ranked.rationale,
+        alternatives: ranked.alternatives,
+        outcome: 'success',
+      },
+      { nowMs }
+    );
+    const liveUpdate = formatLiveDecisionUpdate(decision, session, updatedBp, nowMs);
+    if (!quiet) console.log(liveUpdate);
+    return { status: 'active', action: 'executed', decision, liveUpdate, ciRes, session, blueprint: updatedBp };
+  }
+
+  // 5E. Deterministic: 05-skill-migrator wave micro-batch
+  if (apply && bp.nextAction.skill === '05-skill-migrator' && bp.nextAction.autoRunnable) {
+    const manifestPath = path.join(rootDir, MIGRATION_MANIFEST_REL_PATH);
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const pendingWave0 = (manifest.wave0Prereqs || []).filter((w) => w.status === 'pending');
+      const selection = selectNextWaveBatch(manifest, {
+        squad: squad || '',
+        wave: pendingWave0.length > 0 ? 0 : null,
+        batchSize: 5,
+      });
+      if (selection.batch && selection.batch.length > 0) {
+        const execution = executeWaveBatch(manifest, selection, {
+          projectRoot: rootDir,
+          verify: !skipTests,
+          workers: safeWorkers,
+        });
+        try {
+          generateMigrationDashboard(rootDir);
+        } catch {
+          /* non-fatal */
+        }
+        const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
+        const decision = recordAutonomousDecision(
+          rootDir,
+          session,
+          {
+            cycle: session.cycleCount,
+            gateId,
+            skill: '05-skill-migrator',
+            action: 'executed',
+            chosenOptionId: `wave-${execution.wave}`,
+            chosenLabel: `Executed Wave ${execution.wave} micro-batch (${execution.processed} item(s))`,
+            command: bp.nextAction.command,
+            rationale: ranked.rationale,
+            alternatives: ranked.alternatives,
+            outcome: 'success',
+          },
+          { nowMs }
+        );
+        const liveUpdate = formatLiveDecisionUpdate(decision, session, updatedBp, nowMs);
+        if (!quiet) console.log(liveUpdate);
+        return { status: 'active', action: 'executed', decision, liveUpdate, execution, session, blueprint: updatedBp };
+      }
+    }
+  }
+
+  // 5F. Deterministic: Stage 2/3 verify-suite
+  if (apply && ranked.chosen.id === 'verify-suite') {
+    const vRes = await runFastVerify({
+      rootDir,
+      fast: false,
+      skipTests,
+      withEngine: false,
+      skipMap: false,
+      workers: safeWorkers,
+      quiet: true,
+    });
+    const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
+    const decision = recordAutonomousDecision(
+      rootDir,
+      session,
+      {
+        cycle: session.cycleCount,
+        gateId,
+        skill: 'agentic-solid-qe',
+        action: 'executed',
+        chosenOptionId: 'verify-suite',
+        chosenLabel: `Full verification gate (${vRes.ok ? 'PASS' : 'FAIL'})`,
+        command: 'npx cortex orchestrate --verify',
+        rationale: ranked.rationale,
+        alternatives: ranked.alternatives,
+        outcome: vRes.ok ? 'success' : 'failed',
+      },
+      { nowMs }
+    );
+    const liveUpdate = formatLiveDecisionUpdate(decision, session, updatedBp, nowMs);
+    if (!quiet) console.log(liveUpdate);
+    return { status: 'active', action: 'executed', decision, liveUpdate, verify: vRes, session, blueprint: updatedBp };
+  }
+
+  // 6. Delegate interactive browser / LLM skill execution (e.g., 01-cli-explorer) with auto-selected decision
+  const decision = recordAutonomousDecision(
+    rootDir,
+    session,
+    {
+      cycle: session.cycleCount,
+      gateId,
+      skill: bp.nextAction.skill,
+      action: 'auto-decided',
+      chosenOptionId: ranked.chosen.id || bp.nextAction.skill,
+      chosenLabel: ranked.chosen.label || bp.nextAction.why,
+      command: ranked.chosen.command || bp.nextAction.command,
+      rationale: ranked.rationale,
+      alternatives: ranked.alternatives,
+      outcome: 'delegate-to-agent',
+    },
+    { nowMs }
+  );
+  const liveUpdate = formatLiveDecisionUpdate(decision, session, bp, nowMs);
+  if (!quiet) {
+    console.log(liveUpdate);
+    console.log(`NEXT_COMMAND  | ${decision.command}`);
+  }
+  return {
+    status: 'active',
+    action: 'delegate-to-agent',
+    decision,
+    nextCommand: decision.command,
+    liveUpdate,
+    session,
+    blueprint: bp,
+  };
+}
+
+/**
+ * Continuously chain deterministic autonomous steps until an interactive agent exploration step,
+ * check-in interval soft-pause, hard blocker, completion, or `--max-steps` cap.
+ */
+export async function runAutonomousLoop(
+  rootDir = process.cwd(),
+  { maxSteps = 10, workers = 4, skipTests = false, quiet = false, nowMsFn = () => Date.now() } = {}
+) {
+  const safeMax = Math.max(1, Math.min(50, Math.floor(Number(maxSteps) || 10)));
+  const results = [];
+  let last = null;
+  for (let i = 0; i < safeMax; i++) {
+    last = await runAutonomousStep(rootDir, {
+      apply: true,
+      workers,
+      skipTests,
+      quiet,
+      nowMs: nowMsFn(),
+    });
+    results.push({ action: last.action, status: last.status, decision: last.decision || null });
+    if (
+      ['checkin-pause', 'checkin-interval', 'max-runtime', 'max-cycles', 'blocker-pause', 'completed', 'stopped', 'delegate-to-agent', 'all-quarantined'].includes(
+        last.action
+      )
+    ) {
+      break;
+    }
+  }
+  return {
+    mode: 'autonomous-loop',
+    stepsRun: results.length,
+    finalStatus: last?.status || 'unknown',
+    finalAction: last?.action || 'none',
+    nextCommand: last?.nextCommand || null,
+    digest: last?.digest || null,
+    results,
+    session: last?.session || loadAutonomousSession(rootDir),
+  };
+}
+
 // CLI Entrypoint
 const isMain =
   Boolean(process.argv[1]) &&
@@ -1186,6 +1805,7 @@ if (isMain) {
 Usage:
   npx cortex orchestrate [--squad <squad>] [--json] [--compact] [--run]
   npx cortex orchestrate --loop [--max-steps 10] [--workers 4] [--fast-only] [--skip-tests] [--verify-waves] [--compact] [--json]
+  npx cortex orchestrate --autonomous <start|step|loop|resume|status|stop|quarantine> [--goal "<objective>"] [--focus full|baseline|regression|migrate|heal] [--interval 30m|1h|2h] [--routes <csv>] [--max-runtime <dur>] [--max-cycles <n>] [--json]
   npx cortex orchestrate --bootstrap [--url <url>] [--name "<App Name>"] [--reset] [--discover-shards] [--max-shards 6] [--filter <pattern>]
   npx cortex orchestrate --explore <start|act|batch|finish|status|actor|capture|checkpoint> [--shard <id>] [explore-args...]
   npx cortex orchestrate --tape <list|show|clone|patch> [tape-args...]
@@ -1198,6 +1818,138 @@ Usage:
   }
 
   const rootDir = process.cwd();
+
+  // 0. Fully Autonomous Mode (`npx cortex orchestrate --autonomous <subcommand>`)
+  const autoIdx = args.indexOf('--autonomous');
+  if (autoIdx !== -1) {
+    const rest = args.slice(autoIdx + 1);
+    const subCmd = rest[0] && !rest[0].startsWith('--') ? rest[0] : 'status';
+    const subArgs = rest[0] && !rest[0].startsWith('--') ? rest.slice(1) : rest;
+    const jsonOut = subArgs.includes('--json');
+
+    const getFlag = (name) => {
+      for (let i = 0; i < subArgs.length; i++) {
+        if (subArgs[i] === name && subArgs[i + 1] !== undefined) return subArgs[i + 1];
+        if (subArgs[i].startsWith(`${name}=`)) return subArgs[i].slice(name.length + 1);
+      }
+      return null;
+    };
+
+    try {
+      if (subCmd === 'start') {
+        const squadRaw = getFlag('--squad');
+        const squad = squadRaw ? assertSafeSquadName(squadRaw) : null;
+        const baseBp = buildOrchestrationBlueprint(rootDir, { squad });
+        const started = startAutonomousSession(rootDir, {
+          goal: getFlag('--goal') || undefined,
+          focus: getFlag('--focus') || 'full',
+          interval: getFlag('--interval') || '1h',
+          routes: getFlag('--routes') || '',
+          squad,
+          targetStage: getFlag('--target-stage') || 4,
+          targetSpecs: getFlag('--target-specs'),
+          maxRuntime: getFlag('--max-runtime'),
+          maxCycles: getFlag('--max-cycles') || 100,
+          baselineSnapshot: baseBp.healthSnapshot,
+        });
+        if (jsonOut) {
+          console.log(JSON.stringify({ ...started, blueprint: baseBp }, null, 2));
+        } else {
+          console.log(
+            `AUTONOMOUS | started session ${started.session.sessionId} | focus:${started.session.objectives.focus} | check-in:${started.session.schedule.intervalLabel} (soft-pause)`
+          );
+          console.log(`OBJECTIVE  | ${started.session.objectives.goal}`);
+          console.log(`LEDGER     | ${AUTONOMOUS_LEDGER_REL_PATH}`);
+          console.log(`NEXT       | npx cortex orchestrate --autonomous loop`);
+        }
+        process.exit(0);
+      } else if (subCmd === 'resume') {
+        const updated = resumeAutonomousSession(rootDir, {
+          goal: getFlag('--goal'),
+          focus: getFlag('--focus'),
+          interval: getFlag('--interval'),
+          routes: getFlag('--routes'),
+          maxRuntime: getFlag('--max-runtime'),
+          maxCycles: getFlag('--max-cycles'),
+        });
+        if (jsonOut) {
+          console.log(JSON.stringify(updated, null, 2));
+        } else {
+          console.log(
+            `AUTONOMOUS | resumed session ${updated.sessionId} | focus:${updated.objectives.focus} | next check-in in ${updated.schedule.intervalLabel}`
+          );
+          console.log(`NEXT       | npx cortex orchestrate --autonomous loop`);
+        }
+        process.exit(0);
+      } else if (subCmd === 'stop') {
+        const stopped = stopAutonomousSession(rootDir, { reason: getFlag('--reason') || 'user-stopped' });
+        const bp = buildOrchestrationBlueprint(rootDir, { squad: stopped.objectives?.squad || null });
+        const digest = formatCheckinDigest(stopped, bp, { trigger: 'stopped' });
+        if (jsonOut) console.log(JSON.stringify({ session: stopped, digest }, null, 2));
+        else console.log(digest);
+        process.exit(0);
+      } else if (subCmd === 'status') {
+        const session = loadAutonomousSession(rootDir);
+        if (!session) {
+          const msg = 'No autonomous session active. Start one with: npx cortex orchestrate --autonomous start --goal "<objective>" --interval 1h';
+          if (jsonOut) console.log(JSON.stringify({ active: false, message: msg }, null, 2));
+          else console.log(msg);
+          process.exit(0);
+        }
+        const bp = buildOrchestrationBlueprint(rootDir, { squad: session.objectives?.squad || null });
+        const digest = formatCheckinDigest(session, bp, { trigger: 'status' });
+        if (jsonOut) console.log(JSON.stringify({ active: session.status === 'active', session, digest }, null, 2));
+        else console.log(digest);
+        process.exit(0);
+      } else if (subCmd === 'quarantine') {
+        const session = loadAutonomousSession(rootDir);
+        if (!session) throw new Error('No autonomous session active.');
+        const key = getFlag('--key');
+        const reason = getFlag('--reason') || 'Quarantined by autonomous agent';
+        const category = getFlag('--category') || 'app-regression';
+        const defectFile = getFlag('--defect');
+        quarantineAutonomousItem(rootDir, session, { key, reason, category, defectFile });
+        if (jsonOut) console.log(JSON.stringify({ quarantined: session.quarantined }, null, 2));
+        else console.log(`QUARANTINE | added '${key}' (${category}) -> continuing on remaining unblocked shards.`);
+        process.exit(0);
+      } else if (subCmd === 'step') {
+        runAutonomousStep(rootDir, {
+          apply: !subArgs.includes('--dry-run'),
+          workers: Number(getFlag('--workers') || 4),
+          skipTests: subArgs.includes('--skip-tests'),
+          quiet: jsonOut,
+        })
+          .then((res) => {
+            if (jsonOut) console.log(JSON.stringify(res, null, 2));
+            process.exit(0);
+          })
+          .catch((err) => {
+            console.error(`❌ orchestrate --autonomous step failed: ${err.message}`);
+            process.exit(1);
+          });
+      } else if (subCmd === 'loop') {
+        runAutonomousLoop(rootDir, {
+          maxSteps: Number(getFlag('--max-steps') || 10),
+          workers: Number(getFlag('--workers') || 4),
+          skipTests: subArgs.includes('--skip-tests'),
+          quiet: jsonOut,
+        })
+          .then((res) => {
+            if (jsonOut) console.log(JSON.stringify(res, null, 2));
+            process.exit(0);
+          })
+          .catch((err) => {
+            console.error(`❌ orchestrate --autonomous loop failed: ${err.message}`);
+            process.exit(1);
+          });
+      } else {
+        throw new Error(`Unknown --autonomous subcommand '${subCmd}'. Expected: start, step, loop, resume, status, stop, quarantine.`);
+      }
+    } catch (err) {
+      console.error(`❌ orchestrate --autonomous ${subCmd} failed: ${err.message}`);
+      process.exit(1);
+    }
+  } else {
 
   // 1. Unified Sub-Workflow Routing via agentic-solid-qe
   const exploreIdx = args.indexOf('--explore');
@@ -1447,6 +2199,7 @@ Usage:
         process.exit(res.status ?? 0);
       }
     }
+  }
   }
   }
 }
