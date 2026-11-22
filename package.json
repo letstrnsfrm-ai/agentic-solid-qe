@@ -1,6 +1,6 @@
 {
   "name": "agentic-solid-qe",
-  "version": "0.48.2",
+  "version": "0.48.3",
   "description": "Zero-API-key agent skill framework bridging Autonomous Exploratory Testing (agent-browser) and SOLID Playwright TypeScript Architecture.",
   "license": "MIT",
   "type": "module",
