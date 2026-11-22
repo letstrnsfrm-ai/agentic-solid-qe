@@ -400,8 +400,19 @@ export function parsePlaywrightSnapshotYaml(yamlText) {
  */
 export function extractFailingLocatorFromError(errorText) {
   const text = String(errorText || '');
+  // 1. Prefer the full chained expression on `waiting for ...` and extract its leaf semantic locator (e.g. `locator('body').getByRole(...)`)
+  const waitingLine = text.match(/waiting for ([^\n]+)/i);
+  if (waitingLine) {
+    const chain = waitingLine[1].trim();
+    const semanticCalls = [...chain.matchAll(/getBy(?:Role|TestId|Label|Placeholder|Text)\([^)]*\)/g)];
+    if (semanticCalls.length > 0) {
+      return semanticCalls[semanticCalls.length - 1][0].trim();
+    }
+    const singleLoc = chain.match(/^locator\(['"`]([^'"`]+)['"`]\)/i);
+    if (singleLoc) return singleLoc[1].trim();
+    return chain;
+  }
   const patterns = [
-    /waiting for (?:locator\(['"`]([^'"`]+)['"`]\)|([a-zA-Z0-9_.]+\([^)]*\)))/i,
     /Locator:\s*([^\n]+)/i,
     /(getBy(?:Role|TestId|Label|Placeholder|Text)\([^)]+\))/,
   ];
@@ -713,7 +724,13 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
   const failingLocator = options.locator || extractFailingLocatorFromError(errorText) || activeArtifact.failingLocator || '';
 
   const snapshotFile = findLatestSnapshot(projectRoot, options.snapshot);
-  const snapshotText = snapshotFile ? readTextSafe(snapshotFile) : '';
+  let snapshotText = snapshotFile ? readTextSafe(snapshotFile) : '';
+  if (!snapshotText && errorText) {
+    const embeddedYaml = errorText.match(/# Page snapshot[\s\S]*?```yaml\r?\n([\s\S]*?)```/i);
+    if (embeddedYaml) {
+      snapshotText = embeddedYaml[1];
+    }
+  }
   const snapshotNodes = parsePlaywrightSnapshotYaml(snapshotText);
 
   const rootCause = classifyFailureRootCause({

@@ -4998,6 +4998,40 @@ test('explore-session & compile-tape: omits SPA wait actions from semanticSteps 
   }
 });
 
+test('heal-drift: extracts leaf semantic locator from chained locator(body).getByRole() and parses embedded error-context.md YAML snapshot', async () => {
+  const { extractFailingLocatorFromError, analyzeAndHealDrift } = await import('./heal-drift.mjs');
+
+  const chainedErr = `Error: locator.click: Test timeout of 8000ms exceeded.\nCall log:\n  - waiting for locator('body').getByRole('button', { name: 'Sign In', exact: true })\n`;
+  assert.equal(
+    extractFailingLocatorFromError(chainedErr),
+    "getByRole('button', { name: 'Sign In', exact: true })"
+  );
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-heal-chain-'));
+  try {
+    fs.mkdirSync(path.join(tmpRoot, 'src/components'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'test-results/login-chromium'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, 'src/components/login-section.component.ts'),
+      `import type { Locator, Page } from '@playwright/test';\nexport class LoginSectionComponent {\n  readonly root: Locator;\n  readonly loginButton: Locator;\n  constructor(page: Page) {\n    this.root = page.locator('body');\n    this.loginButton = this.root.getByRole("button", { name: "Sign In", exact: true });\n  }\n}\n`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'test-results/login-chromium/error-context.md'),
+      `# Error details\n\n\`\`\`\n${chainedErr}\`\`\`\n\n# Page snapshot\n\n\`\`\`yaml\n- generic [ref=e4]:\n  - textbox "Username" [ref=e23]\n  - button "Login" [ref=e32] [cursor=pointer]\n\`\`\`\n`,
+      'utf8'
+    );
+
+    const rep = analyzeAndHealDrift(tmpRoot, { apply: false });
+    assert.equal(rep.rootCause.category, 'locator-drift');
+    assert.equal(rep.componentMatch?.property, 'loginButton');
+    assert.equal(rep.autoHealReady, true);
+    assert.match(rep.candidates[0]?.suggestedExpr || '', /getByRole\('button', \{ name: 'Login', exact: true \}\)/);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 
 
 
