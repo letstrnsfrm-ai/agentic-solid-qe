@@ -1,7 +1,29 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.47.1",
+  "latestVersion": "0.48.0",
   "releases": [
+    {
+      "version": "0.48.0",
+      "date": "2026-11-22",
+      "highlights": [
+        "Fully Autonomous QE Mode (`npx cortex orchestrate --autonomous <start|loop|step|resume|status|stop|quarantine>`): Added `scripts/lib/autonomous-mode.mjs` with structured objective profiles (`.agents/domain/autonomous-session.json`), objective-ranked `GATE_OPTIONS` scoring (`--focus full|baseline|regression|migrate|heal`, `--routes`, `--goal`), dual-stream live `AUTO-DECISION` updates + persistent `.agents/domain/autonomous-decisions.md` ledger, soft-pause check-in intervals (`30m`/`1h`/`2h`) emitting a Progress & Decision Digest, Log/Quarantine & Continue exception policy, and workspace-only guardrails.",
+        "Lazy Autonomous Playbook & Framework Registration: Added `.agents/skills/agentic-solid-qe/references/autonomous-mode.md` (`<= 800` tokens), updated `SKILL.md`, `AGENTS.md`, `.github/copilot-instructions.md`, `README.md`, `sync-skills.mjs`, and `migrate-skill.mjs` (`CORE_ENGINE_SCRIPTS`)."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.0 Fully Autonomous QE Mode (`--autonomous`) and its lazy reference playbook.",
+        "Start an autonomous run with `npx cortex orchestrate --autonomous start --goal \"<objective>\" --focus baseline --interval 1h` followed by `npx cortex orchestrate --autonomous loop`."
+      ]
+    },
+    {
+      "version": "0.47.2",
+      "date": "2026-11-21",
+      "highlights": [
+        "Deep Security Hardening (`report-cloud.mjs`, `explore-session.mjs`, `compile-tape.mjs`, `orchestrate.mjs`): Hardened unified SSRF/NAT64/numeric-IP validation, `explore` flag and capture-eval guards, symlink confinement, and `$`-replacement codegen safety."
+      ],
+      "nextActions": [
+        "Upgrade to v0.48.0 via `npx cortex upgrade` to include both v0.47.2 security hardening and v0.48.0 Fully Autonomous QE Mode."
+      ]
+    },
     {
       "version": "0.47.1",
       "date": "2026-11-21",
