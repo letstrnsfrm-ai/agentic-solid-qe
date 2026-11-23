@@ -96,6 +96,7 @@ const ALLOWED_LOCATOR_METHODS = new Set([
   'getByAltText',
   'getByTitle',
   'locator',
+  'frameLocator',
   'first',
   'last',
   'nth',
@@ -111,6 +112,7 @@ const ALLOWED_ROOT_LOCATOR_METHODS = new Set([
   'getByAltText',
   'getByTitle',
   'locator',
+  'frameLocator',
 ]);
 
 const ALLOWED_LOCATOR_OPTION_KEYS = new Set([
@@ -631,9 +633,10 @@ export function scoreSnapshotCandidates(failingLocator, propertyName, snapshotNo
 
 function findMatchingComponentProperty(projectRoot, failingLocator, specPath) {
   const componentFiles = [
-    ...walkFiles(path.join(projectRoot, 'src/components'), (n) => n.endsWith('.component.ts')),
+    ...walkFiles(path.join(projectRoot, 'src/components'), (n) => n.endsWith('.component.ts') || n.endsWith('.step.ts')),
+    ...walkFiles(path.join(projectRoot, 'src/steps'), (n) => n.endsWith('.step.ts')),
     ...walkFiles(path.join(projectRoot, 'src/shared/components'), (n) => n.endsWith('.component.ts') || n.endsWith('.ts')),
-    ...walkFiles(path.join(projectRoot, 'src/domains'), (n) => n.endsWith('.component.ts')),
+    ...walkFiles(path.join(projectRoot, 'src/domains'), (n) => n.endsWith('.component.ts') || n.endsWith('.step.ts')),
   ];
 
   const locTokens = tokenize(failingLocator);
@@ -642,23 +645,26 @@ function findMatchingComponentProperty(projectRoot, failingLocator, specPath) {
     if (!content) continue;
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(/^\s*this\.([a-zA-Z0-9_]+)\s*=\s*(?:this\.root|page)\.(.+);\s*$/);
+      const m = lines[i].match(/^\s*this\.([a-zA-Z0-9_]+)\s*=\s*(this\.root\.|page\.)(.+);\s*$/);
       if (!m) continue;
       const propName = m[1];
-      const rhs = m[2];
+      const basePrefix = m[2];
+      const rhs = m[3];
       const exactMatch = failingLocator && rhs.includes(failingLocator);
       const tokenMatch =
         locTokens.length > 0 &&
         locTokens.every((t) => rhs.toLowerCase().includes(t) || propName.toLowerCase().includes(t));
 
       if (exactMatch || tokenMatch) {
+        const frameMatch = rhs.match(/^(frameLocator\([^)]*\)\.)/);
+        const prefix = frameMatch ? `${basePrefix}${frameMatch[1]}` : basePrefix;
         return {
           filePath: file,
           relPath: path.relative(projectRoot, file).replace(/\\/g, '/'),
           propertyName: propName,
           lineIndex: i,
           currentExpr: rhs,
-          prefix: lines[i].includes('this.root.') ? 'this.root.' : 'page.',
+          prefix,
         };
       }
     }
@@ -922,9 +928,14 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
           locTokens.every((t) => JSON.stringify(step.locatorContract || {}).toLowerCase().includes(t))
         ) {
           patchedStep = true;
+          const prevLoc = step.locatorContract || {};
           return {
             ...step,
             locatorContract: {
+              ...(prevLoc.parentScope ? { parentScope: prevLoc.parentScope } : {}),
+              ...(prevLoc.iframeSelector ? { iframeSelector: prevLoc.iframeSelector } : {}),
+              ...(prevLoc.portalScope ? { portalScope: prevLoc.portalScope } : {}),
+              ...(prevLoc.force !== undefined ? { force: prevLoc.force } : {}),
               ...topCandidate.suggestedLocatorContract,
             },
           };
@@ -982,17 +993,22 @@ export async function healDriftWithGuardrail(projectRoot, options = {}) {
   }
   const targetSpecs = [...affectedSpecs].sort();
 
-  const verifyRes =
-    typeof options.verifyFn === 'function'
-      ? await options.verifyFn({ rootDir: projectRoot, specs: targetSpecs, applied })
-      : await runFastVerify({
-          rootDir: projectRoot,
-          fast: true,
-          specs: targetSpecs,
-          noAffected: true,
-          quiet: true,
-          compact: true,
-        });
+  let verifyRes;
+  try {
+    verifyRes =
+      typeof options.verifyFn === 'function'
+        ? await options.verifyFn({ rootDir: projectRoot, specs: targetSpecs, applied })
+        : await runFastVerify({
+            rootDir: projectRoot,
+            fast: true,
+            specs: targetSpecs,
+            noAffected: true,
+            quiet: true,
+            compact: true,
+          });
+  } catch (err) {
+    verifyRes = { ok: false, error: String(err?.message || err) };
+  }
 
   if (!verifyRes?.ok) {
     for (const [absPath, originalContent] of backupFiles.entries()) {

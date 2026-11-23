@@ -214,7 +214,7 @@ export async function runFastVerify({
       failedStage = {
         stage: r.name,
         status: r.status,
-        output: (r.stderr || r.stdout || '').trim().slice(0, 2000),
+        output: [r.stderr, r.stdout].filter(Boolean).join('\n').trim().slice(0, 2000),
       };
     }
   }

@@ -364,6 +364,9 @@ function toImportAlias(relPath) {
   if (withoutExt.startsWith('src/data/')) return `@data/${withoutExt.slice('src/data/'.length)}`;
   if (withoutExt.startsWith('src/domains/')) return `@domains/${withoutExt.slice('src/domains/'.length)}`;
   if (withoutExt.startsWith('src/shared/')) return `@shared/${withoutExt.slice('src/shared/'.length)}`;
+  if (withoutExt.startsWith('src/steps/')) return `@steps/${withoutExt.slice('src/steps/'.length)}`;
+  if (withoutExt.startsWith('src/seeders/')) return `@seeders/${withoutExt.slice('src/seeders/'.length)}`;
+  if (withoutExt.startsWith('src/api/')) return `@api/${withoutExt.slice('src/api/'.length)}`;
   if (withoutExt.startsWith('src/')) return `../${withoutExt.slice('src/'.length)}`;
   return `../${withoutExt}`;
 }
@@ -705,6 +708,19 @@ ${methodsCode}
         endpoint: nc.urlPattern || '/api/v1/resource',
         responseSchemaSummary: nc.responseSchemaSummary,
       });
+    }
+  }
+  if (tape.resumesFrom?.handoffStrategy === 'api-seed' && tape.resumesFrom?.seedClientRef) {
+    const rawSeedClass = String(tape.resumesFrom.seedClientRef).trim().split('.')[0];
+    if (
+      /^[A-Z][A-Za-z0-9_]*$/.test(rawSeedClass) &&
+      !rawSeedClass.endsWith('Seeder') &&
+      !rawSeedClass.endsWith('Builder') &&
+      !apiClientCandidates.has(rawSeedClass)
+    ) {
+      apiClientCandidates.set(rawSeedClass, [
+        { method: 'POST', endpoint: '/api/v1/seed', intent: `Seed state via ${rawSeedClass}` },
+      ]);
     }
   }
 
@@ -1448,7 +1464,7 @@ export { expect };
     };
 
     const capturedVarsDeclared = new Set();
-    if (tape.resumesFrom && Array.isArray(tape.capturedVariables)) {
+    if (Array.isArray(tape.capturedVariables)) {
       for (const cv of tape.capturedVariables) {
         if (cv?.name) {
           capturedVarsDeclared.add(assertSafeJsIdentifier(cv.name, 'capturedVariables.name'));
@@ -1533,6 +1549,10 @@ export { expect };
           stmt = `await ${locRef}.fill(String(${inputExpr}));`;
         } else if (step.action === 'selectOption') {
           stmt = `await ${locRef}.selectOption(String(${inputExpr}));`;
+        } else if (step.action === 'upload') {
+          stmt = `await ${locRef}.setInputFiles(String(${inputExpr}));`;
+        } else if (step.action === 'waitFor') {
+          stmt = `await ${locRef}.waitFor();`;
         } else if (step.action === 'press') {
           stmt = `await ${locRef}.press(${JSON.stringify(step.key || 'Enter')});`;
         } else if (step.action === 'check') {
@@ -1753,7 +1773,13 @@ export { expect };
 ${hydrateBlock}
     });\n\n`;
       } else if (strategy === 'api-seed') {
-        const parsedSeed = rf.seedClientRef ? parseBuilderRef(rf.seedClientRef) : null;
+        const rawSeedRef = String(rf.seedClientRef || '').trim();
+        const parsedSeed = rawSeedRef
+          ? parseBuilderRef(rawSeedRef) ||
+            (/^[A-Z][A-Za-z0-9_]*$/.test(rawSeedRef)
+              ? { builderClass: rawSeedRef, callExpression: `${rawSeedRef}.seed()` }
+              : null)
+          : null;
         let seedCallStmt = `// Seed prerequisite state for ${parentLabel} via ApiClientContract`;
         if (parsedSeed && parsedSeed.builderClass) {
           const seederDesc = seederImports.get(parsedSeed.builderClass);
@@ -1821,10 +1847,14 @@ ${flowCallBlock}
     const specBody = `${personaPreamble}${capturedVarsPreamble}${resumesFromPreamble}${stepBlocks.join('\n\n')}`;
     const usedFixtures = injectedFixtures.filter((f) => new RegExp(`\\b${f}\\b`).test(specBody));
     const finalFixtures = usedFixtures.length > 0 ? usedFixtures : injectedFixtures.slice(0, 1);
+    const activeBuilderImportLines = [...builderImports.entries()]
+      .filter(([cls]) => new RegExp(`\\b${cls}\\b`).test(specBody))
+      .map(([cls, alias]) => `import { ${cls} } from '${alias}';`)
+      .join('\n');
 
     const nodeImportsBlock = extraNodeImports.length > 0 ? extraNodeImports.join('\n') + '\n' : '';
     const specCode = `${nodeImportsBlock}import { test, expect } from '${fixtureAlias}';
-${builderImportLines ? builderImportLines + '\n' : ''}
+${activeBuilderImportLines ? activeBuilderImportLines + '\n' : ''}
 test.describe(${JSON.stringify(`${tape.title} [${tagsSuffix}] (Compiled from Session Tape: ${scenarioId})`)}, () => {
   test(${JSON.stringify(`${tape.title} ${tagsSuffix}`)}, async ({ ${finalFixtures.join(', ')} }) => {
 ${specBody}
@@ -1849,10 +1879,14 @@ ${specBody}
     }
     let cur = resolvedTarget;
     while (cur !== resolvedRoot) {
-      if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-        throw new Error(
-          `Security Error: Refusing to write through symbolic link: ${path.relative(resolvedRoot, cur)}`
-        );
+      try {
+        if (fs.lstatSync(cur).isSymbolicLink()) {
+          throw new Error(
+            `Security Error: Refusing to write through symbolic link: ${path.relative(resolvedRoot, cur)}`
+          );
+        }
+      } catch (err) {
+        if (err?.code !== 'ENOENT') throw err;
       }
       const parent = path.dirname(cur);
       if (parent === cur) break;

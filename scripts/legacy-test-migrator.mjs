@@ -308,26 +308,70 @@ function extractBraceBlock(source, openBraceIdx) {
   let depth = 0;
   let inSingle = false;
   let inDouble = false;
+  let inVerbatim = false;
+  let inLineComment = false;
+  let inBlockComment = false;
   let escaped = false;
   for (let i = openBraceIdx; i < source.length; i++) {
     const ch = source[i];
-    if (escaped) {
-      escaped = false;
+    const next = source[i + 1];
+    if (inLineComment) {
+      if (ch === '\n') inLineComment = false;
       continue;
     }
-    if (ch === '\\') {
-      escaped = true;
+    if (inBlockComment) {
+      if (ch === '*' && next === '/') {
+        inBlockComment = false;
+        i++;
+      }
       continue;
     }
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
+    if (inVerbatim) {
+      if (ch === '"') {
+        if (next === '"') {
+          i++;
+          continue;
+        }
+        inVerbatim = false;
+      }
       continue;
     }
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
+    if (inSingle || inDouble) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (inSingle && ch === "'") inSingle = false;
+      else if (inDouble && ch === '"') inDouble = false;
       continue;
     }
-    if (inSingle || inDouble) continue;
+    if (ch === '/' && next === '/') {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    if (ch === '@' && next === '"') {
+      inVerbatim = true;
+      i++;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      continue;
+    }
     if (ch === '{') depth++;
     else if (ch === '}') {
       depth--;
@@ -1293,6 +1337,23 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
   }
 
   // 4. Extract Page Object method calls if no inline Selenium steps found
+  if (semanticSteps.length === 0 && testEntry.specflowScenario && Array.isArray(testEntry.specflowScenario.steps)) {
+    for (const scStep of testEntry.specflowScenario.steps) {
+      const stepText = String(scStep.text || scStep.bindingMethod || 'workflow step').trim();
+      const isNav = /^given\b/i.test(scStep.keyword || '') && /\b(on|visit|open|navigate)\b/i.test(stepText);
+      semanticSteps.push({
+        stepIndex: semanticSteps.length + 1,
+        intent: `${scStep.keyword || 'When'} ${stepText}`,
+        businessStep: `${scStep.keyword || 'When'} ${stepText}`,
+        action: isNav ? 'goto' : 'click',
+        componentCandidate: uiComponentCandidate,
+        locatorContract: isNav
+          ? { strategy: 'url', value: '/' }
+          : { strategy: 'getByRole', role: 'button', value: stepText.slice(0, 48), nameExact: false },
+      });
+    }
+  }
+
   const slicePoRefs = selectedSlice?.pageObject
     ? [selectedSlice.pageObject]
     : testEntry.pageObjectRefs;
@@ -1304,12 +1365,13 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
         ? mapSeleniumLocatorToContract(firstLoc.byType, firstLoc.selector)
         : { strategy: 'getByRole', role: 'button', value: 'Continue', nameExact: false };
       if (activeIframe) locContract.iframeSelector = activeIframe;
+      const safePoPascal = toPascalCase(String(po).replace(/Page(?:Object)?$/i, '')) || 'Feature';
       semanticSteps.push({
         stepIndex: semanticSteps.length + 1,
         intent: `Execute ${po} interaction`,
         businessStep: `Complete ${po} workflow step`,
         action: 'click',
-        componentCandidate: `${po.replace(/Page(?:Object)?$/i, '')}Component`,
+        componentCandidate: `${safePoPascal}Component`,
         locatorContract: locContract,
         ...(activeDialogAction ? { dialogAction: activeDialogAction } : {}),
       });
@@ -1344,9 +1406,9 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
     });
   } else {
     const firstStepComp = semanticSteps[0]?.componentCandidate || componentName;
-    const compStem = firstStepComp.replace(/(?:StepComponent|Component|Step|Page)$/, '') || firstStepComp;
+    const compStem = toPascalCase(firstStepComp.replace(/(?:StepComponent|Component|Step|Page)$/, '')) || 'Feature';
     const compProp = compStem.charAt(0).toLowerCase() + compStem.slice(1);
-    const pageStem = componentName.replace(/Page(?:Object)?$/i, '');
+    const pageStem = toPascalCase(componentName.replace(/Page(?:Object)?$/i, '')) || 'Feature';
     const pageFixture = `${pageStem.charAt(0).toLowerCase() + pageStem.slice(1)}Page`;
     expectedStates.push({
       description: `Verify ${selectedSlice?.title || testEntry.testMethod} target state is visible`,
@@ -1354,7 +1416,7 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
       assertionType: 'toBeVisible',
       targetComponent: `${pageFixture}.${compProp}`,
       targetProperty: 'primaryHeading',
-      expectedValueRef: `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}Builder.expectedHeading`,
+      expectedValueRef: `${toPascalCase(testEntry.className.replace(/Tests?$/i, '')) || 'Feature'}Builder.expectedHeading`,
     });
   }
 

@@ -135,6 +135,7 @@ export function initOrUpdateMigrationLedger(scanRoot, projectRoot = ROOT) {
     }
   }
 
+  const PROGRESSED_STATUSES = new Set(['compiled', 'live-verified', 'healed', 'parity-verified', 'needs-triage']);
   const ledger = discovery.rationalization.triagedTests.map((t) => {
     const prev = prevEntries.get(t.id);
     const consolidatedInto = consolidatedIntoMap.get(t.id) || null;
@@ -144,6 +145,7 @@ export function initOrUpdateMigrationLedger(scanRoot, projectRoot = ROOT) {
         : consolidatedInto
           ? 'consolidated'
           : 'pending';
+    const nextStatus = prev?.status && PROGRESSED_STATUSES.has(prev.status) ? prev.status : defaultStatus;
     return {
       id: t.id,
       testMethod: t.testMethod || t.name || t.id,
@@ -155,9 +157,9 @@ export function initOrUpdateMigrationLedger(scanRoot, projectRoot = ROOT) {
       seederStrategy: t.seederProfile?.primaryStrategy || 'standalone',
       prefixKey: t.prefixKey || null,
       consolidatedInto,
-      status: prev?.status && prev.status !== 'pending' ? prev.status : defaultStatus,
+      status: nextStatus,
       targetSpec: prev?.targetSpec || null,
-      skipReason: t.skipReason || prev?.skipReason || null,
+      skipReason: nextStatus === 'skipped-quarantine' ? (t.skipReason || prev?.skipReason || null) : null,
       updatedAt: prev?.updatedAt || new Date().toISOString(),
     };
   });
@@ -171,10 +173,12 @@ export function initOrUpdateMigrationLedger(scanRoot, projectRoot = ROOT) {
     };
   });
 
+  const relScanRoot = path.relative(projectRoot, safeScan).replace(/\\/g, '/') || '.';
   const manifest = {
     schemaVersion: '2.0.0',
     updatedAt: new Date().toISOString(),
-    scanRoot: path.relative(projectRoot, safeScan).replace(/\\/g, '/') || '.',
+    scanRoot: relScanRoot,
+    legacySourceRoot: relScanRoot,
     summary: discovery.rationalization.summary,
     squadBreakdown: discovery.rationalization.squadBreakdown,
     wave0Prereqs,
@@ -598,7 +602,7 @@ export function executeWaveBatch(
     } catch (err) {
       item.status = 'needs-triage';
       item.lastError = String(err.message || err).slice(0, 240);
-      item.nextAction = `node scripts/legacy-test-migrator.mjs --legacy ${item.id}`;
+      item.nextAction = `node scripts/migrate-skill.mjs --legacy ${item.id}`;
       item.updatedAt = new Date().toISOString();
       results.push({ id: item.id, status: 'needs-triage', lastError: item.lastError, nextAction: item.nextAction });
     }
@@ -829,6 +833,10 @@ function main() {
       throw new Error(`No migration ledger found at ${MIGRATION_MANIFEST_REL_PATH}. Pass --scan <legacy-dir>.`);
     }
     manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (!manifest.summary || !Array.isArray(manifest.ledger)) {
+      const upgradeScanRoot = path.resolve(ROOT, manifest.scanRoot || manifest.legacySourceRoot || '.');
+      manifest = initOrUpdateMigrationLedger(upgradeScanRoot, ROOT);
+    }
   }
 
   const selection = selectNextWaveBatch(manifest, { squad, wave, batchSize });

@@ -55,6 +55,28 @@ function isForbiddenIpv4(ip, { allowLoopback = false, allowPrivateNet = false } 
   return false;
 }
 
+function expandIpv6Groups(rawIp) {
+  let ip = String(rawIp || '').trim().toLowerCase();
+  const lastColon = ip.lastIndexOf(':');
+  if (lastColon !== -1 && ip.slice(lastColon + 1).includes('.')) {
+    const v4 = ip.slice(lastColon + 1).split('.').map(Number);
+    if (v4.length !== 4 || v4.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    const hi = ((v4[0] << 8) | v4[1]).toString(16);
+    const lo = ((v4[2] << 8) | v4[3]).toString(16);
+    ip = `${ip.slice(0, lastColon)}:${hi}:${lo}`;
+  }
+  const halves = ip.split('::');
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - (left.length + right.length);
+  if (halves.length === 1 ? left.length !== 8 : missing < 0) return null;
+  const groups = halves.length === 2 ? [...left, ...Array(missing).fill('0'), ...right] : left;
+  const nums = groups.map((g) => parseInt(g || '0', 16));
+  if (nums.length !== 8 || nums.some((n) => !Number.isFinite(n) || n < 0 || n > 0xffff)) return null;
+  return nums;
+}
+
 export function isForbiddenIpAddress(rawIp, { allowLoopback = false, allowPrivateNet = false } = {}) {
   const ip = String(rawIp || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
   if (!ip) return true;
@@ -65,18 +87,22 @@ export function isForbiddenIpAddress(rawIp, { allowLoopback = false, allowPrivat
     return isForbiddenIpv4(ip, { allowLoopback, allowPrivateNet });
   }
   if (family === 6) {
-    if (ip === '::' || ip === '0:0:0:0:0:0:0:0') return true;
-    if (ip === '::1' || ip === '0:0:0:0:0:0:0:1') return !allowLoopback;
-    if (/^fe[89ab][0-9a-f]:/.test(ip)) return true; // Link-local fe80::/10
-    if (/^fd00:ec2::/.test(ip)) return true; // AWS EC2 IMDSv2 IPv6 metadata (always forbidden)
-    if (/^f[cd][0-9a-f]{2}:/.test(ip)) return !allowPrivateNet; // ULA fc00::/7
-    // IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:a9fe:a9fe)
-    const v4Dotted = ip.match(/^(?:0*:)*ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-    if (v4Dotted) return isForbiddenIpv4(v4Dotted[1], { allowLoopback, allowPrivateNet });
-    const v4Hex = ip.match(/^(?:0*:)*ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-    if (v4Hex) {
-      const hi = parseInt(v4Hex[1], 16);
-      const lo = parseInt(v4Hex[2], 16);
+    const groups = expandIpv6Groups(ip);
+    if (!groups) return true;
+    const isAllZero = groups.every((g) => g === 0);
+    if (isAllZero) return true; // ::/128
+    const isLoopback = groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1;
+    if (isLoopback) return !allowLoopback; // ::1/128 (canonical & non-canonical)
+    if ((groups[0] & 0xff00) === 0xff00) return true; // Multicast ff00::/8
+    if ((groups[0] & 0xffc0) === 0xfe80) return true; // Link-local fe80::/10
+    if (groups[0] === 0xfd00 && groups[1] === 0x0ec2) return true; // AWS EC2 IMDSv2 IPv6 metadata
+    if ((groups[0] & 0xfe00) === 0xfc00) return !allowPrivateNet; // ULA fc00::/7
+    if (groups[0] === 0x0064 && groups[1] === 0xff9b) return true; // NAT64 64:ff9b::/96
+    // IPv4-mapped (::ffff:0:0/96) or IPv4-compatible (::/96) IPv6
+    const zeroPrefix5 = groups.slice(0, 5).every((g) => g === 0);
+    if (zeroPrefix5 && (groups[5] === 0xffff || groups[5] === 0x0000)) {
+      const hi = groups[6];
+      const lo = groups[7];
       const dotted = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
       return isForbiddenIpv4(dotted, { allowLoopback, allowPrivateNet });
     }
@@ -119,12 +145,12 @@ export function assertSafeTargetHttpUrl(rawUrl, { label = 'URL', env = process.e
     throw new Error(`Security Error: Embedded credentials in ${label} are forbidden.`);
   }
   const host = parsed.hostname.toLowerCase();
-  const bareHost = host.replace(/^\[|\]$/g, '');
-  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  const bareHost = host.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  const isLocalHost = bareHost === 'localhost' || bareHost === '127.0.0.1' || bareHost === '::1';
   const allowedHosts = new Set(
     String(env.ALLOWED_TARGET_HOSTS || '')
       .split(',')
-      .map((h) => h.trim().toLowerCase())
+      .map((h) => h.trim().toLowerCase().replace(/\.+$/, ''))
       .filter(Boolean)
   );
   const effectiveAllowPrivate =
@@ -138,7 +164,7 @@ export function assertSafeTargetHttpUrl(rawUrl, { label = 'URL', env = process.e
   if (
     FORBIDDEN_HOSTS.has(host) ||
     FORBIDDEN_HOSTS.has(bareHost) ||
-    /^169\.254\./.test(host) ||
+    /^169\.254\./.test(bareHost) ||
     /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.)/i.test(host) ||
     /^\[?64:ff9b:/i.test(host) ||
     /^\[fe[89ab][0-9a-f]:/i.test(host) ||

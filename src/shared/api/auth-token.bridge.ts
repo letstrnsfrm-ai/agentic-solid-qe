@@ -41,21 +41,37 @@ const FORBIDDEN_METADATA_HOSTS = new Set([
   'instance-data',
 ]);
 
+function decodeHexIpv4Mapped(bare: string): string | null {
+  const m = bare.match(/^(?:0*:)*ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!m) return null;
+  const hi = parseInt(m[1], 16);
+  const lo = parseInt(m[2], 16);
+  return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+}
+
 function isForbiddenTargetUrl(parsed: URL): boolean {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true;
   if (parsed.username || parsed.password) return true;
   const hostLower = parsed.hostname.toLowerCase();
-  const bare = hostLower.replace(/^\[|\]$/g, '');
-  const isLocal = hostLower === 'localhost' || hostLower === '127.0.0.1' || hostLower === '[::1]';
+  const bare = hostLower.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  const isLocal = bare === 'localhost' || bare === '127.0.0.1' || bare === '::1';
   if (isLocal) return false;
+  const mappedV4 = decodeHexIpv4Mapped(bare);
+  const checkHost = mappedV4 || bare;
   if (
     FORBIDDEN_METADATA_HOSTS.has(hostLower) ||
     FORBIDDEN_METADATA_HOSTS.has(bare) ||
-    /^169\.254\./.test(hostLower) ||
-    /^\[?64:ff9b:/i.test(hostLower) ||
-    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|127\.|0\.)/i.test(hostLower) ||
-    /^\[fe[89ab][0-9a-f]:/i.test(hostLower) ||
-    /^\[fd00:ec2::/i.test(hostLower)
+    FORBIDDEN_METADATA_HOSTS.has(checkHost) ||
+    /^169\.254\./.test(checkHost) ||
+    /^127\./.test(checkHost) ||
+    /^0\./.test(checkHost) ||
+    bare === '::' ||
+    bare === '0:0:0:0:0:0:0:0' ||
+    /^64:ff9b:/i.test(bare) ||
+    /^fe[89ab][0-9a-f]:/i.test(bare) ||
+    /^ff[0-9a-f]{2}:/i.test(bare) ||
+    /^fd00:ec2::/i.test(bare) ||
+    /^::[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i.test(bare)
   ) {
     return true;
   }
@@ -63,11 +79,10 @@ function isForbiddenTargetUrl(parsed: URL): boolean {
     process.env.CORTEX_ALLOW_PRIVATE_NET === '1' || process.env.CORTEX_ALLOW_PRIVATE_NET === 'true';
   if (!allowPrivate) {
     if (
-      /^10\./.test(bare) ||
-      /^192\.168\./.test(bare) ||
-      /^172\.(?:1[6-9]|2\d|3[01])\./.test(bare) ||
-      /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(bare) ||
-      /^0\./.test(bare) ||
+      /^10\./.test(checkHost) ||
+      /^192\.168\./.test(checkHost) ||
+      /^172\.(?:1[6-9]|2\d|3[01])\./.test(checkHost) ||
+      /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(checkHost) ||
       /^f[cd][0-9a-f]{2}:/i.test(bare)
     ) {
       return true;
@@ -117,11 +132,12 @@ export class AuthTokenBridge {
     if (relToAuth.startsWith('..') || path.isAbsolute(relToAuth)) {
       return null;
     }
-    if (fs.existsSync(authRoot) && fs.lstatSync(authRoot).isSymbolicLink()) {
-      return null;
-    }
-    if (fs.existsSync(resolved) && fs.lstatSync(resolved).isSymbolicLink()) {
-      return null;
+    for (const candidate of [authRoot, resolved]) {
+      try {
+        if (fs.lstatSync(candidate).isSymbolicLink()) return null;
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') return null;
+      }
     }
     if (fs.existsSync(workspaceRoot)) {
       try {
@@ -273,8 +289,9 @@ export class AuthTokenBridge {
 
     if (filteredCookies.length > 0) {
       const serialized = filteredCookies
-        .map((c) => `${c.name}=${sanitizeHeaderValue(String(c.value ?? ''))}`)
-        .filter((pair) => !pair.endsWith('='))
+        .map((c) => [c.name, sanitizeHeaderValue(String(c.value ?? ''))] as const)
+        .filter(([, val]) => val.length > 0)
+        .map(([name, val]) => `${name}=${val}`)
         .join('; ');
       if (serialized) {
         headers['Cookie'] = serialized;

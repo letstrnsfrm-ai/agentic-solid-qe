@@ -153,7 +153,10 @@ function loadTapeById(rootDir, tapeId) {
 function collectShards(rootDir, { route = '', squad = '' } = {}) {
   const shardFiles = [
     ...walkFiles(path.join(rootDir, '.agents/domain/shards'), (f) => f.endsWith('.md')),
-    ...walkFiles(path.join(rootDir, '.agents/domain/domains'), (f) => f.includes('/shards/') && f.endsWith('.md')),
+    ...walkFiles(
+      path.join(rootDir, '.agents/domain/domains'),
+      (f) => f.replace(/\\/g, '/').includes('/shards/') && f.endsWith('.md')
+    ),
   ];
   const normRoute = String(route || '').trim().toLowerCase();
   const routeSlug = normRoute.replace(/^\/+/, '');
@@ -251,10 +254,21 @@ const NON_TEST_TAGS = new Set([
 ]);
 
 function inspectSpec(rootDir, specArg) {
-  const resolved = path.isAbsolute(specArg) ? specArg : path.join(rootDir, specArg);
-  if (!fs.existsSync(resolved)) return null;
+  const resolvedRoot = path.resolve(rootDir);
+  const resolved = path.resolve(resolvedRoot, String(specArg || ''));
+  const relCheck = path.relative(resolvedRoot, resolved);
+  if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) return null;
+  try {
+    if (fs.lstatSync(resolved).isSymbolicLink()) return null;
+    const realRoot = fs.realpathSync(resolvedRoot);
+    const realTarget = fs.realpathSync(resolved);
+    const realRel = path.relative(realRoot, realTarget);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) return null;
+  } catch {
+    return null;
+  }
   const src = readTextSafe(resolved);
-  const rel = path.relative(rootDir, resolved).replace(/\\/g, '/');
+  const rel = path.relative(resolvedRoot, resolved).replace(/\\/g, '/');
   const tags = [...new Set([...src.matchAll(/@[a-zA-Z0-9_-]+/g)].map((m) => m[0]))].filter(
     (t) => !NON_TEST_TAGS.has(t)
   );

@@ -40,19 +40,35 @@ const FORBIDDEN_CHECKPOINT_HOSTS = new Set([
   'instance-data',
 ]);
 
+function decodeHexIpv4Mapped(bare: string): string | null {
+  const m = bare.match(/^(?:0*:)*ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!m) return null;
+  const hi = parseInt(m[1], 16);
+  const lo = parseInt(m[2], 16);
+  return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+}
+
 function isForbiddenCheckpointHost(rawHost: string): boolean {
   const host = rawHost.toLowerCase();
-  const bare = host.replace(/^\[|\]$/g, '');
-  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  const bare = host.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  const isLocal = bare === 'localhost' || bare === '127.0.0.1' || bare === '::1';
   if (isLocal) return false;
+  const mappedV4 = decodeHexIpv4Mapped(bare);
+  const checkHost = mappedV4 || bare;
   if (
     FORBIDDEN_CHECKPOINT_HOSTS.has(host) ||
     FORBIDDEN_CHECKPOINT_HOSTS.has(bare) ||
-    /^169\.254\./.test(host) ||
-    /^\[?64:ff9b:/i.test(host) ||
-    /^\[(?:0*:)*ffff:(?:a9fe:|169\.254\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|127\.|0\.)/i.test(host) ||
-    /^\[fe[89ab][0-9a-f]:/i.test(host) ||
-    /^\[fd00:ec2::/i.test(host)
+    FORBIDDEN_CHECKPOINT_HOSTS.has(checkHost) ||
+    /^169\.254\./.test(checkHost) ||
+    /^127\./.test(checkHost) ||
+    /^0\./.test(checkHost) ||
+    bare === '::' ||
+    bare === '0:0:0:0:0:0:0:0' ||
+    /^64:ff9b:/i.test(bare) ||
+    /^fe[89ab][0-9a-f]:/i.test(bare) ||
+    /^ff[0-9a-f]{2}:/i.test(bare) ||
+    /^fd00:ec2::/i.test(bare) ||
+    /^::[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i.test(bare)
   ) {
     return true;
   }
@@ -60,11 +76,10 @@ function isForbiddenCheckpointHost(rawHost: string): boolean {
     process.env.CORTEX_ALLOW_PRIVATE_NET === '1' || process.env.CORTEX_ALLOW_PRIVATE_NET === 'true';
   if (!allowPrivate) {
     if (
-      /^10\./.test(bare) ||
-      /^192\.168\./.test(bare) ||
-      /^172\.(?:1[6-9]|2\d|3[01])\./.test(bare) ||
-      /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(bare) ||
-      /^0\./.test(bare) ||
+      /^10\./.test(checkHost) ||
+      /^192\.168\./.test(checkHost) ||
+      /^172\.(?:1[6-9]|2\d|3[01])\./.test(checkHost) ||
+      /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(checkHost) ||
       /^f[cd][0-9a-f]{2}:/i.test(bare)
     ) {
       return true;
@@ -101,8 +116,12 @@ function assertNoSymlinkEscape(rootDir: string, targetPath: string): void {
   }
   let cur = resolvedTarget;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      throw new Error(`Refusing symlinked path inside workspace: ${path.relative(resolvedRoot, cur)}`);
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(`Refusing symlinked path inside workspace: ${path.relative(resolvedRoot, cur)}`);
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;
@@ -231,8 +250,11 @@ export async function restoreCheckpoint(
     await context.addInitScript(
       ({ origin, local, session }: { origin: string; local: Record<string, string>; session: Record<string, string> }) => {
         if (window.location.origin !== origin) return;
+        const FLAG = '__asqe_checkpoint_hydrated__';
+        if (window.sessionStorage.getItem(FLAG) === '1') return;
         for (const [k, v] of Object.entries(local)) window.localStorage.setItem(k, v);
         for (const [k, v] of Object.entries(session)) window.sessionStorage.setItem(k, v);
+        window.sessionStorage.setItem(FLAG, '1');
       },
       { origin: targetOrigin, local: localEntries, session: sessionEntries }
     );

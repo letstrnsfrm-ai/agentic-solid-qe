@@ -23,7 +23,10 @@
       "@fixtures/*": ["src/fixtures/*"],
       "@data/*": ["src/data/*"],
       "@domains/*": ["src/domains/*"],
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": ["src/shared/*"],
+      "@steps/*": ["src/steps/*"],
+      "@seeders/*": ["src/seeders/*"],
+      "@api/*": ["src/api/*"]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "playwright.config.ts"]

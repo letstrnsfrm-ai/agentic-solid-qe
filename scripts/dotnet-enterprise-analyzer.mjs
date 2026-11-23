@@ -117,20 +117,39 @@ export function buildInheritanceMap(csFiles, scanRoot) {
 
     for (const cm of classMatches) {
       const clsName = cm[1];
-      const baseList = (cm[2] || '')
+      const rawBases = (cm[2] || '').replace(/\bwhere\b[\s\S]*$/i, '');
+      // Strip balanced generic <...> arguments before splitting on ','
+      let strippedBases = '';
+      let depth = 0;
+      for (const ch of rawBases) {
+        if (ch === '<') depth++;
+        else if (ch === '>') depth = Math.max(0, depth - 1);
+        else if (depth === 0) strippedBases += ch;
+      }
+      const baseList = strippedBases
         .split(',')
-        .map((s) => s.trim().replace(/<.*$/, '').split('.').pop())
+        .map((s) => s.trim().split('.').pop())
         .filter((s) => s && !/^I[A-Z]/.test(s) && s !== 'IDisposable');
       const baseClass = baseList[0] || null;
-      if (!classMap.has(clsName)) {
+      const existing = classMap.get(clsName);
+      if (!existing) {
         classMap.set(clsName, {
           className: clsName,
           file: relPath,
           baseClass,
-          setupHooks,
+          setupHooks: [...setupHooks],
           pageObjectFields: [...new Set(pageObjectFields)],
-          authSignals,
+          authSignals: [...new Set(authSignals)],
         });
+      } else {
+        if (!existing.baseClass && baseClass) existing.baseClass = baseClass;
+        for (const h of setupHooks) {
+          if (!existing.setupHooks.some((eh) => eh.method === h.method && eh.attribute === h.attribute)) {
+            existing.setupHooks.push(h);
+          }
+        }
+        existing.pageObjectFields = [...new Set([...existing.pageObjectFields, ...pageObjectFields])];
+        existing.authSignals = [...new Set([...existing.authSignals, ...authSignals])];
       }
     }
   }
@@ -292,6 +311,7 @@ export function parseSpecFlowSuite(scanRoot, resolveSquadForFile = () => 'core')
       if (/^Background:/i.test(line)) {
         flushCurrent();
         inBackground = true;
+        backgroundSteps = [];
         pendingTags = [];
         continue;
       }
@@ -310,6 +330,7 @@ export function parseSpecFlowSuite(scanRoot, resolveSquadForFile = () => 'core')
       if (/^Examples:/i.test(line) && current) {
         inExamples = true;
         exampleHeaders = [];
+        pendingTags = [];
         continue;
       }
       if (inExamples && line.startsWith('|') && current) {
@@ -465,11 +486,13 @@ export function rationalizeLegacySuite(tests = [], { minPrefixReuse = 2 } = {}) 
     }
 
     // Structural fingerprint for near-duplicate / data-variation consolidation
-    const normalizedNameStem = String(t.testMethod || t.name || t.id)
-      .replace(/(?:With|For|Using|When)[A-Z0-9][A-Za-z0-9_]*$/g, '')
-      .replace(/\d+$/g, '')
-      .toLowerCase();
-    const fp = `${squad}|${t.kind || 'e2e'}|${(t.pageObjectRefs || []).join(',')}|${normalizedNameStem}`;
+    const rawName = String(t.testMethod || t.name || t.id);
+    const strippedStem = rawName
+      .replace(/(?<=.{3,})(?:With|For|Using|When)[A-Z0-9][A-Za-z0-9_]*$/g, '')
+      .replace(/\d+$/g, '');
+    const normalizedNameStem = (strippedStem || rawName).toLowerCase();
+    const classScope = String(t.className || t.file || '').toLowerCase();
+    const fp = `${squad}|${classScope}|${t.kind || 'e2e'}|${(t.pageObjectRefs || []).join(',')}|${normalizedNameStem}`;
     if (!fingerprintBuckets.has(fp)) fingerprintBuckets.set(fp, []);
     fingerprintBuckets.get(fp).push(t);
 

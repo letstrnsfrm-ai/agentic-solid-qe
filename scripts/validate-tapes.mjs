@@ -405,6 +405,9 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         errors.push(`${stepLabel} Invalid or missing locatorContract.strategy.`);
       } else {
         checkUnknownKeys(step.locatorContract, VALID_LOCATOR_KEYS, `${stepLabel} locatorContract`, errors);
+        if (typeof step.locatorContract.value !== 'string') {
+          errors.push(`${stepLabel} locatorContract.value must be a string.`);
+        }
         if (step.locatorContract.parentScope) {
           checkUnknownKeys(
             step.locatorContract.parentScope,
@@ -412,6 +415,18 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
             `${stepLabel} parentScope`,
             errors
           );
+          const validParentStrategies = new Set(['getByRole', 'getByLabel', 'getByTestId', 'locator']);
+          if (
+            !step.locatorContract.parentScope.strategy ||
+            !validParentStrategies.has(step.locatorContract.parentScope.strategy)
+          ) {
+            errors.push(
+              `${stepLabel} Invalid parentScope.strategy '${step.locatorContract.parentScope.strategy}'.`
+            );
+          }
+          if (typeof step.locatorContract.parentScope.value !== 'string' || !step.locatorContract.parentScope.value.trim()) {
+            errors.push(`${stepLabel} parentScope.value must be a non-empty string.`);
+          }
           if (
             step.locatorContract.parentScope.filterTextRef !== undefined &&
             !isSafeMemberRef(step.locatorContract.parentScope.filterTextRef)
@@ -532,10 +547,42 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
       if (!isSafeMemberRef(state.targetProperty)) {
         errors.push(`[${file}] Invalid expectedStates.targetProperty '${state.targetProperty}'.`);
       }
+      if (state.actor !== undefined) {
+        if (
+          typeof state.actor !== 'string' ||
+          !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(state.actor) ||
+          (declaredActors.size > 0 && !declaredActors.has(state.actor))
+        ) {
+          errors.push(`[${file}] Invalid expectedStates.actor '${state.actor}'.`);
+        }
+      }
+      if (state.maxDiffPixelRatio !== undefined) {
+        if (
+          typeof state.maxDiffPixelRatio !== 'number' ||
+          Number.isNaN(state.maxDiffPixelRatio) ||
+          state.maxDiffPixelRatio < 0 ||
+          state.maxDiffPixelRatio > 1
+        ) {
+          errors.push(`[${file}] Invalid expectedStates.maxDiffPixelRatio '${state.maxDiffPixelRatio}'. Must be a number in [0, 1].`);
+        }
+      }
+      if (state.maskSelectors !== undefined) {
+        if (
+          !Array.isArray(state.maskSelectors) ||
+          state.maskSelectors.length > 10 ||
+          state.maskSelectors.some((s) => typeof s !== 'string' || !s.trim())
+        ) {
+          errors.push(`[${file}] Invalid expectedStates.maskSelectors. Must be an array of <=10 non-empty strings.`);
+        }
+      }
+      const capVarMatch =
+        typeof state.expectedValueRef === 'string'
+          ? state.expectedValueRef.match(/^capturedVariable:([a-zA-Z][a-zA-Z0-9_]*)$/)
+          : null;
       const isCapturedVarRef =
-        typeof state.expectedValueRef === 'string' &&
-        /^capturedVariable:[a-zA-Z][a-zA-Z0-9_]*$/.test(state.expectedValueRef) &&
-        !hasForbiddenIdentifierSegment(state.expectedValueRef);
+        Boolean(capVarMatch) &&
+        !hasForbiddenIdentifierSegment(state.expectedValueRef) &&
+        (declaredVars.size === 0 || declaredVars.has(capVarMatch[1]));
       const isSafeUrlPathRef =
         state.assertionType === 'toHaveURL' &&
         typeof state.expectedValueRef === 'string' &&
@@ -585,7 +632,7 @@ if (isMain) {
       continue;
     }
 
-    if (typeof tape.scenarioId === 'string' && tape.scenarioId) {
+    if (tape && typeof tape === 'object' && typeof tape.scenarioId === 'string' && tape.scenarioId) {
       if (seenScenarioIds.has(tape.scenarioId)) {
         errors.push(
           `[${file}] Duplicate scenarioId '${tape.scenarioId}' (already defined in ${seenScenarioIds.get(tape.scenarioId)}).`

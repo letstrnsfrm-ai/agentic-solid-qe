@@ -732,6 +732,7 @@ export async function discoverAndSeedLiveShards(
   const allowPrivateNet =
     process.env.CORTEX_ALLOW_PRIVATE_NET === '1' || process.env.CORTEX_ALLOW_PRIVATE_NET === 'true';
   await assertSafeResolvedCloudTarget(targetUrl, { allowPrivateNet });
+  const parsedBase = new URL(targetUrl);
   const discoveredLinks = [];
   const seenRoutes = new Set();
   const skipRoutes = new Set(['/', '/#', '/about', '/contact', '/privacy', '/terms', '/cdn-cgi']);
@@ -1158,6 +1159,18 @@ export async function runOrchestratorLoop(
       continue;
     }
 
+    if (bp.nextAction.skill === '04-ci-pipeline') {
+      const ciRes = ensureCiPipelineConfigured(rootDir);
+      didMutate = didMutate || ciRes.status === 'created';
+      stepsExecuted.push({
+        step: stepIdx + 1,
+        skill: '04-ci-pipeline',
+        action: ciRes.status,
+        file: ciRes.file,
+      });
+      continue;
+    }
+
     // Priority 6/7: No further mutating auto-actions; exit drain loop cleanly to run Tier-2 final verify once
     stoppedReason = 'drained-clean';
     humanGate = bp.nextAction.humanGate;
@@ -1304,6 +1317,12 @@ export async function runAutonomousStep(
     }
     if (finalVerify && !finalVerify.ok) {
       // Verification failed -> record decision and return so next cycle triages/heals with fresh blueprint instead of double-verifying
+      session.cycleCount = (session.cycleCount || 0) + 1;
+      const failedStageName =
+        typeof finalVerify.failedStage === 'string'
+          ? finalVerify.failedStage
+          : finalVerify.failedStage?.stage || 'tests';
+      const isStaticGate = ['typecheck', 'auditSolid', 'validateTapes', 'domainGraph'].includes(failedStageName);
       const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
       const decision = recordAutonomousDecision(
         rootDir,
@@ -1311,15 +1330,28 @@ export async function runAutonomousStep(
         {
           cycle: session.cycleCount,
           gateId: 'final-verify',
-          skill: '03-drift-healer',
+          skill: isStaticGate ? 'agentic-solid-qe' : '03-drift-healer',
           action: 'final-verify-failed',
-          chosenOptionId: 'triage-next-cycle',
-          chosenLabel: `Final verification failed at ${finalVerify.failedStage || 'tests'}`,
-          rationale: 'Deferring completion so next autonomous cycle can triage/heal with fresh failure artifacts.',
-          outcome: `failed:${finalVerify.failedStage || 'tests'}`,
+          chosenOptionId: isStaticGate ? 'pause-static-gate' : 'triage-next-cycle',
+          chosenLabel: `Final verification failed at ${failedStageName}`,
+          rationale: isStaticGate
+            ? `Static gate '${failedStageName}' failed; pausing for human review rather than spinning.`
+            : 'Deferring completion so next autonomous cycle can triage/heal with fresh failure artifacts.',
+          outcome: `failed:${failedStageName}`,
         },
         { nowMs }
       );
+      if (isStaticGate) {
+        session.status = 'paused-checkin';
+        saveAutonomousSession(rootDir, session);
+        const digest = formatCheckinDigest(session, updatedBp, {
+          trigger: 'checkin',
+          message: `Final verification failed at static gate '${failedStageName}'.`,
+          nowMs,
+        });
+        if (!quiet) console.log(digest);
+        return { status: 'paused-checkin', action: 'final-verify-failed', decision, verify: finalVerify, digest, session, blueprint: updatedBp };
+      }
       return { status: 'active', action: 'final-verify-failed', decision, verify: finalVerify, session, blueprint: updatedBp };
     } else {
       session.status = 'completed';

@@ -16,17 +16,21 @@ export class RelativeDateHelper {
    * Returns an ISO YYYY-MM-DD date `years` in the past (e.g. driver DOB for age brackets or NCB years).
    */
   static yearsAgo(years: number, baseDate: Date = new Date()): string {
-    const target = new Date(baseDate.getTime());
-    target.setUTCFullYear(target.getUTCFullYear() - years);
-    return target.toISOString().slice(0, 10);
+    const targetYear = baseDate.getUTCFullYear() - years;
+    const month = baseDate.getUTCMonth();
+    const lastDay = new Date(Date.UTC(targetYear, month + 1, 0)).getUTCDate();
+    const day = Math.min(baseDate.getUTCDate(), lastDay);
+    return new Date(Date.UTC(targetYear, month, day)).toISOString().slice(0, 10);
   }
 
   /**
    * Returns an ISO YYYY-MM-DD date `months` in the past (e.g. prior motor/home claim date).
    */
   static monthsAgo(months: number, baseDate: Date = new Date()): string {
-    const target = new Date(baseDate.getTime());
-    target.setUTCMonth(target.getUTCMonth() - months);
-    return target.toISOString().slice(0, 10);
+    const year = baseDate.getUTCFullYear();
+    const targetMonth = baseDate.getUTCMonth() - months;
+    const lastDay = new Date(Date.UTC(year, targetMonth + 1, 0)).getUTCDate();
+    const day = Math.min(baseDate.getUTCDate(), lastDay);
+    return new Date(Date.UTC(year, targetMonth, day)).toISOString().slice(0, 10);
   }
 }
