@@ -217,10 +217,10 @@ function slugifyId(rawName, indexPrefix = '06') {
 
 function runWorkspaceDiscovery() {
   const scanRoot = sourceArg ? path.resolve(ROOT, sourceArg) : ROOT;
-  if (!isWithinDir(scanRoot, ROOT)) {
-    console.error(
-      `❌ Security Error: Discovery path '${sourceArg}' resolves outside the repository workspace ('${ROOT}').`
-    );
+  try {
+    assertNoSymlinkEscape(ROOT, scanRoot, 'discovery path');
+  } catch (err) {
+    console.error(`❌ ${err.message}`);
     process.exit(1);
   }
   const relFromScan = (p) => path.relative(scanRoot, p).replace(/\\/g, '/');
@@ -1182,7 +1182,7 @@ function scaffoldAndIndexDomainShard(appliedList) {
       ? utilityScripts.map((s) => `- **Precondition Seeder (\`${s.fileName}\`):** \`${s.canonicalCommand}\``)
       : ['- Restore `.auth/<persona>.json` (`storageState`) or invoke `UserBuilder.standardUser()`.'];
 
-  const absShardPath = path.join(ROOT, targetDomainShard);
+  const absShardPath = assertNoSymlinkEscape(ROOT, path.join(ROOT, targetDomainShard), 'target domain shard');
   const parentHubRel = squadArg
     ? `.agents/domain/domains/${squadArg}/index.md`
     : '.agents/domain/domain-memory.md';
@@ -1219,7 +1219,7 @@ ${testIdsLines.join('\n')}
 
   const domainMemoryPath = path.join(ROOT, '.agents/domain/domain-memory.md');
   if (squadArg) {
-    const absSquadHub = path.join(ROOT, parentHubRel);
+    const absSquadHub = assertNoSymlinkEscape(ROOT, path.join(ROOT, parentHubRel), 'squad domain hub');
     if (!fs.existsSync(absSquadHub)) {
       fs.mkdirSync(path.dirname(absSquadHub), { recursive: true });
       const hubBody = `# Domain Sub-Hub: ${squadArg} (Tier 1 Bounded Context)
@@ -1255,6 +1255,7 @@ ${testIdsLines.join('\n')}
     }
 
     if (fs.existsSync(domainMemoryPath)) {
+      assertNoSymlinkEscape(ROOT, domainMemoryPath, 'domain-memory.md');
       const memContent = fs.readFileSync(domainMemoryPath, 'utf8');
       if (!memContent.includes(parentHubRel) && memContent.split('\n').length < MAX_DOMAIN_LINES) {
         const updatedMem = insertRowIntoDomainMemoryTable(
@@ -1272,6 +1273,7 @@ ${testIdsLines.join('\n')}
       }
     }
   } else if (fs.existsSync(domainMemoryPath)) {
+    assertNoSymlinkEscape(ROOT, domainMemoryPath, 'domain-memory.md');
     const memContent = fs.readFileSync(domainMemoryPath, 'utf8');
     if (!memContent.includes(path.basename(absShardPath)) && memContent.split('\n').length < MAX_DOMAIN_LINES) {
       const updatedMem = insertRowIntoDomainMemoryTable(
@@ -1322,6 +1324,7 @@ function registerSkillInAgentsAndCopilot(appliedList) {
   const agentsPath = path.join(ROOT, 'AGENTS.md');
   const skillRelPath = `.agents/skills/${defaultSkillId}/SKILL.md`;
   if (fs.existsSync(agentsPath)) {
+    assertNoSymlinkEscape(ROOT, agentsPath, 'AGENTS.md');
     const content = fs.readFileSync(agentsPath, 'utf8');
     if (!content.includes(skillRelPath) && !content.includes(`\`${defaultSkillId}\``)) {
       const lines = content.split('\n');
@@ -1353,6 +1356,7 @@ function registerSkillInAgentsAndCopilot(appliedList) {
 
   const copilotPath = path.join(ROOT, '.github/copilot-instructions.md');
   if (fs.existsSync(copilotPath)) {
+    assertNoSymlinkEscape(ROOT, copilotPath, 'copilot-instructions.md');
     const content = fs.readFileSync(copilotPath, 'utf8');
     if (!content.includes(skillRelPath)) {
       const entry = `\n- **${skillTitle} (\`${defaultSkillId}\`):** Follow \`${skillRelPath}\` (${skillDescription}).\n`;

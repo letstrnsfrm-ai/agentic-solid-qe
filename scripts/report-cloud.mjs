@@ -98,9 +98,11 @@ export function isForbiddenIpAddress(rawIp, { allowLoopback = false, allowPrivat
     if (groups[0] === 0xfd00 && groups[1] === 0x0ec2) return true; // AWS EC2 IMDSv2 IPv6 metadata
     if ((groups[0] & 0xfe00) === 0xfc00) return !allowPrivateNet; // ULA fc00::/7
     if (groups[0] === 0x0064 && groups[1] === 0xff9b) return true; // NAT64 64:ff9b::/96
-    // IPv4-mapped (::ffff:0:0/96) or IPv4-compatible (::/96) IPv6
+    // IPv4-mapped (::ffff:0:0/96), IPv4-compatible (::/96), or RFC 2765 IPv4-translated (::ffff:0:0:0/96) IPv6
     const zeroPrefix5 = groups.slice(0, 5).every((g) => g === 0);
-    if (zeroPrefix5 && (groups[5] === 0xffff || groups[5] === 0x0000)) {
+    const isIpv4Translated =
+      groups.slice(0, 4).every((g) => g === 0) && groups[4] === 0xffff && groups[5] === 0x0000;
+    if ((zeroPrefix5 && (groups[5] === 0xffff || groups[5] === 0x0000)) || isIpv4Translated) {
       const hi = groups[6];
       const lo = groups[7];
       const dotted = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
@@ -123,7 +125,7 @@ export function assertSafeTargetHttpUrl(rawUrl, { label = 'URL', env = process.e
   // Reject non-standard integer/hex/octal IP representations before URL normalization converts them
   const rawHostMatch = rawUrl.trim().match(/^https?:\/\/([^/?#]+)/i);
   if (rawHostMatch) {
-    const rawHostOnly = rawHostMatch[1].split('@').pop().split(':')[0].toLowerCase();
+    const rawHostOnly = rawHostMatch[1].split('@').pop().split(':')[0].toLowerCase().replace(/\.+$/, '');
     if (/^(?:0x[0-9a-f]+|\d+|0[0-7]+)(?:\.(?:0x[0-9a-f]+|0[0-7]+|\d+)){0,3}$/i.test(rawHostOnly)) {
       if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(rawHostOnly) || /(?:^|\.)0\d+/.test(rawHostOnly)) {
         throw new Error(`Security Error: Non-canonical numeric/octal/hex IP host '${rawHostOnly}' in ${label} is forbidden (SSRF protection).`);

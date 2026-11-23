@@ -452,9 +452,10 @@ function parsePageObjectLocators(content, language) {
   const locators = [];
   const seen = new Set();
   const pushLoc = (fieldName, byType, selector) => {
-    if (!fieldName || seen.has(fieldName)) return;
-    seen.add(fieldName);
-    locators.push({ fieldName, byType: String(byType).toLowerCase(), selector });
+    const normalized = toCamelCase(fieldName);
+    if (!fieldName || !normalized || normalized === 'root' || seen.has(normalized)) return;
+    seen.add(normalized);
+    locators.push({ fieldName: normalized, byType: String(byType).toLowerCase(), selector });
   };
 
   if (language === 'java') {
@@ -488,6 +489,22 @@ function parsePageObjectLocators(content, language) {
   return locators;
 }
 
+function stripBalancedAngles(str) {
+  let out = '';
+  let depth = 0;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === '<') {
+      depth++;
+    } else if (ch === '>' && depth > 0) {
+      depth--;
+    } else if (depth === 0) {
+      out += ch;
+    }
+  }
+  return out;
+}
+
 function parsePageObjectMethods(content, language) {
   const methods = [];
   const seen = new Set();
@@ -500,11 +517,24 @@ function parsePageObjectMethods(content, language) {
     const name = m[1];
     if (seen.has(name) || /^(?:get|is|equals|hashCode|toString)$/i.test(name)) continue;
     seen.add(name);
-    const rawParams = (m[2] || '').trim();
+    const rawParams = stripBalancedAngles((m[2] || '').trim());
+    const usedParams = new Set();
     const params = rawParams
       ? rawParams
           .split(',')
-          .map((p) => p.trim().split(/\s+/).pop())
+          .map((p) => {
+            const withoutDefault = p.split('=')[0].trim();
+            const token = withoutDefault.split(/\s+/).pop() || '';
+            const clean = token.replace(/[^A-Za-z0-9_$]/g, '');
+            if (!clean || /^[0-9]/.test(clean)) return '';
+            let candidate = clean;
+            let suffix = 2;
+            while (usedParams.has(candidate)) {
+              candidate = `${clean}${suffix++}`;
+            }
+            usedParams.add(candidate);
+            return candidate;
+          })
           .filter(Boolean)
       : [];
     methods.push({ name: toCamelCase(name), params });
@@ -919,9 +949,13 @@ function extractTestMethodsFromFile(filePath, scanRoot, pageObjectNames) {
       body,
       /\b(?:driver\.get\s*\(|Navigate\(\)\.GoToUrl|\.navigate\(\)\.to\()/g
     );
+    const apiCallBody = body.replace(
+      /\b(?:webDriver|driver|browser|map|hashMap|props|properties|json|jsonObject|list|arrayList|headers|cookies|params|config|env|session|cache|store|context|optional|future)\s*\.\s*get\s*\(/gi,
+      '__nonApiGet('
+    );
     const apiCallCount = countPattern(
-      body,
-      /\b(?:given\s*\(|\.get\s*\(|\.post\s*\(|\.put\s*\(|\.delete\s*\(|GetAsync|PostAsync|PutAsync|DeleteAsync|ExecuteAsync|RestRequest)\b/g
+      apiCallBody,
+      /(?:\bgiven\s*\(|\.(?:get|post|put|patch|delete)\s*\(|\b(?:GetAsync|PostAsync|PutAsync|PatchAsync|DeleteAsync|ExecuteAsync|RestRequest)\b)/g
     );
 
     const pageObjectRefs = [];
@@ -1255,8 +1289,12 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
   const activeDialogAction = alertMatch ? alertMatch[1].toLowerCase() : null;
 
   // 1. Extract API calls (RestAssured / RestSharp / HttpClient)
+  const sanitizedApiBody = body.replace(
+    /\b(?:webDriver|driver|browser|map|hashMap|props|properties|json|jsonObject|list|arrayList|headers|cookies|params|config|env|session|cache|store|context|optional|future)\s*\.\s*get\s*\(/gi,
+    '__nonApiGet('
+  );
   const apiMatches = [
-    ...body.matchAll(/\.(get|post|put|patch|delete)\s*\(\s*"([^"]+)"\s*\)/gi),
+    ...sanitizedApiBody.matchAll(/\.(get|post|put|patch|delete)\s*\(\s*"([^"]+)"\s*\)/gi),
     ...body.matchAll(/(Get|Post|Put|Patch|Delete)Async\s*\(\s*"([^"]+)"/gi),
     ...body.matchAll(/new\s+RestRequest\s*\(\s*"([^"]+)"\s*,\s*Method\.(\w+)/gi),
   ];
@@ -1667,11 +1705,15 @@ function scaffoldDataBuilder(match, params, datasets, dataModels) {
   const builderKebab = slugifyKebab(baseName);
 
   // Collect fields from matching dataModel or parameterization params
-  const matchingModel = Object.values(dataModels || {}).find(
-    (m) =>
-      m.name.toLowerCase().includes(baseName.toLowerCase()) ||
-      baseName.toLowerCase().includes(m.name.replace(/(?:Data|Dto|Payload|Request|Model)$/i, '').toLowerCase())
-  );
+  const matchingModel = Object.values(dataModels || {}).find((m) => {
+    const modelLower = m.name.toLowerCase();
+    const baseLower = baseName.toLowerCase();
+    const stem = m.name.replace(/(?:Data|Dto|Payload|Request|Model|User|Input)$/i, '').toLowerCase();
+    return (
+      (baseLower.length > 0 && modelLower.includes(baseLower)) ||
+      (stem.length > 0 && baseLower.includes(stem))
+    );
+  });
 
   const fields = matchingModel?.fields?.length
     ? matchingModel.fields

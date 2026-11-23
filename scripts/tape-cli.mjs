@@ -253,7 +253,7 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
         throw new Error(`Security Error: Disallowed identifier '${ident}' in --set-data reference '${item.ref}'.`);
       }
     }
-    if (/(?:password|passcode|secret|token|api[_-]?key|ssn|cvv|pin|otp)/i.test(propName)) {
+    if (/(?:password|passcode|secret|token|api[_-]?key|ssn|cvv|\bpin\b|_pin|pin_|\botp\b|_otp|otp_)/i.test(propName)) {
       throw new Error(`Security Error: Refusing to write sensitive property '${propName}' via --set-data. Use environment variables.`);
     }
     const serializedVal = JSON.stringify(String(item.value ?? ''));
@@ -279,24 +279,53 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
     let content = readCurrent(targetFile);
     const safeMethodRe = escapeRegExp(methodName);
     const safePropRe = escapeRegExp(propName);
-    const methodRe = new RegExp(
-      `(static\\s+${safeMethodRe}\\s*\\([^)]*\\)(?:\\s*:\\s*(?:\\{[^}]*\\}|[^{]+))?\\s*\\{\\s*return\\s*\\{)([\\s\\S]*?)(\\s*\\};?)`
+    const methodHeadRe = new RegExp(
+      `static\\s+${safeMethodRe}\\s*\\([^)]*\\)(?:\\s*:\\s*(?:\\{[^}]*\\}|[^{]+))?\\s*\\{\\s*return\\s*\\{`
     );
-    const mm = content.match(methodRe);
-    if (mm) {
+    const headMatch = content.match(methodHeadRe);
+    if (headMatch) {
+      const openBraceIdx = headMatch.index + headMatch[0].length - 1;
+      let depth = 0;
+      let quote = null;
+      let closeBraceIdx = -1;
+      for (let i = openBraceIdx; i < content.length; i++) {
+        const ch = content[i];
+        if (quote) {
+          if (ch === '\\') {
+            i++;
+            continue;
+          }
+          if (ch === quote) quote = null;
+          continue;
+        }
+        if (ch === "'" || ch === '"' || ch === '`') {
+          quote = ch;
+          continue;
+        }
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            closeBraceIdx = i;
+            break;
+          }
+        }
+      }
+      if (closeBraceIdx < 0) {
+        throw new Error(`Malformed return object in '${builderClass}.${methodName}()'.`);
+      }
+      const bodyStr = content.slice(openBraceIdx + 1, closeBraceIdx);
       const propRe = new RegExp(
         `(\\b${safePropRe}\\s*:\\s*)(?:'(?:\\\\.|[^'\\\\])*'|"(?:\\\\.|[^"\\\\])*"|-?\\d+(?:\\.\\d+)?|true|false|null|[^,\\n}]+)(,?)`
       );
-      if (propRe.test(mm[2])) {
-        const updatedBody = mm[2].replace(propRe, (_, p1, p2) => `${p1}${serializedVal}${p2}`);
-        content = content.replace(methodRe, (_, m1, _m2, m3) => `${m1}${updatedBody}${m3}`);
+      let updatedBody;
+      if (propRe.test(bodyStr)) {
+        updatedBody = bodyStr.replace(propRe, (_, p1, p2) => `${p1}${serializedVal}${p2}`);
       } else {
-        const sep = mm[2].trimEnd().endsWith(',') || mm[2].trim() === '' ? '' : ',';
-        content = content.replace(
-          methodRe,
-          (_, m1, m2, m3) => `${m1}${m2}${sep}\n      ${propName}: ${serializedVal},${m3}`
-        );
+        const sep = bodyStr.trimEnd().endsWith(',') || bodyStr.trim() === '' ? '' : ',';
+        updatedBody = `${bodyStr.trimEnd()}${sep}\n      ${propName}: ${serializedVal},\n    `;
       }
+      content = `${content.slice(0, openBraceIdx + 1)}${updatedBody}${content.slice(closeBraceIdx)}`;
     } else if (new RegExp(`\\bstatic\\s+${safeMethodRe}\\s*\\(`).test(content)) {
       throw new Error(
         `Cannot safely patch non-literal return body in '${builderClass}.${methodName}()' (${path.relative(rootDir, targetFile)}).`

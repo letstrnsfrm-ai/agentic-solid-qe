@@ -106,7 +106,7 @@ function assertSafeOutputPath(projectRoot, relOutPath) {
 export function initOrUpdateMigrationLedger(scanRoot, projectRoot = ROOT) {
   const safeScan = assertSafeLegacyScanRoot(scanRoot, projectRoot);
   const discovery = discoverLegacyTests(safeScan);
-  const manifestPath = path.join(projectRoot, MIGRATION_MANIFEST_REL_PATH);
+  const manifestPath = assertSafeOutputPath(projectRoot, MIGRATION_MANIFEST_REL_PATH);
   let existing = null;
   if (fs.existsSync(manifestPath)) {
     try {
@@ -673,10 +673,13 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
   const squadMap = new Map();
   for (const e of ledger) {
     const sq = e.squad || 'core';
-    if (!squadMap.has(sq)) squadMap.set(sq, { squad: sq, total: 0, done: 0, compiled: 0, triage: 0, skipped: 0 });
+    if (!squadMap.has(sq)) {
+      squadMap.set(sq, { squad: sq, total: 0, done: 0, compiled: 0, triage: 0, skipped: 0, consolidated: 0 });
+    }
     const row = squadMap.get(sq);
     row.total++;
-    if (['live-verified', 'healed', 'parity-verified', 'consolidated'].includes(e.status)) row.done++;
+    if (['live-verified', 'healed', 'parity-verified'].includes(e.status)) row.done++;
+    else if (e.status === 'consolidated') row.consolidated++;
     else if (e.status === 'compiled') row.compiled++;
     else if (e.status === 'needs-triage') row.triage++;
     else if (e.status === 'skipped-quarantine') row.skipped++;
@@ -684,10 +687,11 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
 
   const squadBarsHtml = [...squadMap.values()]
     .map((s) => {
-      const denom = Math.max(1, s.total - s.skipped);
+      const denom = Math.max(1, s.total - s.skipped - s.consolidated);
       const pct = Math.min(100, Math.round((s.done / denom) * 100));
+      const consolidatedSuffix = s.consolidated > 0 ? ` &middot; ${s.consolidated} consolidated` : '';
       return `<div class="squad-row">
-        <div class="squad-meta"><strong>${escapeHtml(s.squad)}</strong><span>${s.done}/${denom} verified (${pct}%) &middot; ${s.compiled} compiled &middot; ${s.triage} triage &middot; ${s.skipped} quarantined</span></div>
+        <div class="squad-meta"><strong>${escapeHtml(s.squad)}</strong><span>${s.done}/${denom} verified (${pct}%) &middot; ${s.compiled} compiled &middot; ${s.triage} triage &middot; ${s.skipped} quarantined${consolidatedSuffix}</span></div>
         <div class="bar-bg"><div class="bar-fill" style="width:${pct}%"></div></div>
       </div>`;
     })

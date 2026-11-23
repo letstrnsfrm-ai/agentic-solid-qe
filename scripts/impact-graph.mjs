@@ -529,7 +529,8 @@ export function buildImpactGraph(rootDir = process.cwd()) {
     const props = new Map();
     const propFixtureDeps = new Map();
     const autoDeps = new Set();
-    if (!meta || visiting.has(fixRel)) return { props, propFixtureDeps, autoDeps };
+    const autoPropNames = new Set();
+    if (!meta || visiting.has(fixRel)) return { props, propFixtureDeps, autoDeps, autoPropNames };
     visiting.add(fixRel);
 
     for (const [k, v] of meta.props.entries()) {
@@ -539,6 +540,7 @@ export function buildImpactGraph(rootDir = process.cwd()) {
       propFixtureDeps.set(k, new Set(v));
     }
     for (const d of meta.autoDeps) autoDeps.add(d);
+    for (const ap of meta.autoPropNames || []) autoPropNames.add(ap);
 
     for (const parentFix of meta.mergedFrom) {
       const parentRes = getResolvedFixture(parentFix, visiting);
@@ -551,6 +553,7 @@ export function buildImpactGraph(rootDir = process.cwd()) {
         for (const dep of v) propFixtureDeps.get(k).add(dep);
       }
       for (const d of parentRes.autoDeps) autoDeps.add(d);
+      for (const ap of parentRes.autoPropNames || []) autoPropNames.add(ap);
     }
 
     // Transitively propagate fixture-to-fixture dependencies (e.g., checkoutPage -> loginPage)
@@ -575,7 +578,15 @@ export function buildImpactGraph(rootDir = process.cwd()) {
       }
     }
 
-    const res = { props, propFixtureDeps, autoDeps };
+    // Any { auto: true } fixture that depends on sibling fixtures propagates those deps to autoDeps
+    for (const autoProp of autoPropNames) {
+      const autoPropTargets = props.get(autoProp);
+      if (autoPropTargets) {
+        for (const tf of autoPropTargets) autoDeps.add(tf);
+      }
+    }
+
+    const res = { props, propFixtureDeps, autoDeps, autoPropNames };
     resolvedFixtureCache.set(fixRel, res);
     return res;
   };

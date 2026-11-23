@@ -96,27 +96,69 @@ export function parseSolutionSquads(scanRoot) {
 export function buildInheritanceMap(csFiles, scanRoot) {
   const classMap = new Map(); // ClassName -> { file, baseClass, setupHooks[], pageObjectFields[], authSignals[] }
 
+  const extractClassBody = (src, startFrom) => {
+    const braceIdx = src.indexOf('{', startFrom);
+    if (braceIdx < 0) return '';
+    let depth = 0;
+    let quote = null;
+    for (let i = braceIdx; i < src.length; i++) {
+      const ch = src[i];
+      if (quote) {
+        if (ch === '\\') {
+          i++;
+          continue;
+        }
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '/' && src[i + 1] === '/') {
+        while (i < src.length && src[i] !== '\n') i++;
+        continue;
+      }
+      if (ch === '/' && src[i + 1] === '*') {
+        i += 2;
+        while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
+        i++;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        continue;
+      }
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) return src.slice(braceIdx + 1, i);
+      }
+    }
+    return src.slice(braceIdx + 1);
+  };
+
   for (const file of csFiles) {
     const content = fs.readFileSync(file, 'utf8');
     const relPath = path.relative(scanRoot, file).replace(/\\/g, '/');
     const classMatches = [...content.matchAll(/\b(?:public|internal)?\s*(?:abstract\s+|sealed\s+|partial\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^>]+>)?(?:\s*:\s*([A-Za-z_][A-Za-z0-9_.<>,\s]+))?/g)];
 
-    const setupHooks = [];
-    for (const m of content.matchAll(/\[(OneTimeSetUp|SetUp|ClassInitialize|TestInitialize|BeforeScenario|BeforeFeature)\b[^\]]*\][\s\S]{0,120}?\b(?:public|protected|private)\s+(?:async\s+)?(?:Task|void)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
-      setupHooks.push({ attribute: m[1], method: m[2] });
-    }
-
-    const pageObjectFields = [...content.matchAll(/\b([A-Z][A-Za-z0-9_]*(?:Page|PageObject|Component|Client|Seeder|Helper))\s+_?[a-z][A-Za-z0-9_]*/g)].map(
-      (m) => m[1]
-    );
-
-    const authSignals = [];
-    if (/\b(?:Login|SignIn|Authenticate|GetAccessToken|AzureAd|Okta|WindowsAuth|Cookie)\b/i.test(content)) {
-      authSignals.push('auth-setup');
-    }
-
     for (const cm of classMatches) {
       const clsName = cm[1];
+      const clsBody = extractClassBody(content, (cm.index || 0) + cm[0].length);
+
+      const setupHooks = [];
+      for (const m of clsBody.matchAll(
+        /\[(OneTimeSetUp|SetUp|ClassInitialize|TestInitialize|BeforeScenario|BeforeFeature)\b[^\]]*\][\s\S]{0,160}?\b(?:public|protected|private|internal)\s+(?:(?:static|virtual|override|new|sealed|async)\s+)*(?:Task|void)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g
+      )) {
+        setupHooks.push({ attribute: m[1], method: m[2] });
+      }
+
+      const pageObjectFields = [...clsBody.matchAll(/\b([A-Z][A-Za-z0-9_]*(?:Page|PageObject|Component|Client|Seeder|Helper))\s+_?[a-z][A-Za-z0-9_]*/g)].map(
+        (m) => m[1]
+      );
+
+      const authSignals = [];
+      if (/\b(?:Login|SignIn|Authenticate|GetAccessToken|AzureAd|Okta|WindowsAuth|Cookie)\b/i.test(clsBody)) {
+        authSignals.push('auth-setup');
+      }
+
       const rawBases = (cm[2] || '').replace(/\bwhere\b[\s\S]*$/i, '');
       // Strip balanced generic <...> arguments before splitting on ','
       let strippedBases = '';

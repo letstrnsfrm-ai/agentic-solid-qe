@@ -42,7 +42,7 @@ const FORBIDDEN_METADATA_HOSTS = new Set([
 ]);
 
 function decodeHexIpv4Mapped(bare: string): string | null {
-  const m = bare.match(/^(?:0*:)*ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  const m = bare.match(/^(?:0*:)*ffff:(?:0+:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
   if (!m) return null;
   const hi = parseInt(m[1], 16);
   const lo = parseInt(m[2], 16);
@@ -242,7 +242,10 @@ export class AuthTokenBridge {
     }
 
     const headers: Record<string, string> = {};
-    const keyRegex = options?.tokenKeyPattern ?? /(?:access_token|id_token|jwt|auth_token|bearer)/i;
+    const rawKeyRegex = options?.tokenKeyPattern ?? /(?:access_token|id_token|jwt|auth_token|bearer)/i;
+    const keyRegex = /[gy]/.test(rawKeyRegex.flags)
+      ? new RegExp(rawKeyRegex.source, rawKeyRegex.flags.replace(/[gy]/g, ''))
+      : rawKeyRegex;
 
     for (const originEntry of state.origins ?? []) {
       if (

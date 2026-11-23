@@ -249,8 +249,8 @@ if (fs.existsSync(domainIndexFile)) {
         `[Domain Shard Cap] ${shardRel} has ${shardLines} lines (max ${MAX_DOMAIN_LINES}). Compact duplicates or split into sub-feature shards.`
       );
     }
-    const squadDir = path.dirname(path.dirname(shard));
-    const parentHub = path.join(squadDir, 'index.md');
+    const squadName = path.relative(domainsRoot, shard).split(path.sep)[0];
+    const parentHub = path.join(domainsRoot, squadName, 'index.md');
     const parentHubContent = fs.existsSync(parentHub) ? fs.readFileSync(parentHub, 'utf8') : '';
     if (
       !parentHubContent.includes(path.basename(shard)) &&
@@ -582,7 +582,7 @@ for (const file of specFiles) {
     );
   }
 
-  if (/\bimport\s+(?!type\b)[^;]*?\bfrom\s+['"]@playwright\/test['"]/.test(codeWithoutComments)) {
+  if (/^\s*import\s+(?!type\b)(?:(?!\bimport\b)[^;])*?\bfrom\s+['"]@playwright\/test['"]/m.test(codeWithoutComments)) {
     violations.push(
       `[OCP/ISP Fixture Rule] ${specRel} imports directly from '@playwright/test'. Import { test, expect } from '@fixtures/app.fixture' (or a mergeTests domain fixture) instead.`
     );
@@ -754,13 +754,13 @@ const allCodeAndArtifactFiles = [
 ];
 
 const TS_SENSITIVE_ASSIGN_REGEX =
-  /\b(password|passcode|pin|userPin|cardPin|securityPin|otp|cvv|cvc|ssn|secret|clientSecret|client_secret|privateKey|private_key|accessKey|access_key|apiKey|api_key|authToken|auth_token|accessToken|access_token|refreshToken|refresh_token|bearerToken)\s*[:=]\s*(['"`])([^'"`]+)\2/gi;
+  /\b(password|passcode|pin|userPin|cardPin|securityPin|otp|cvv|cvc|ssn|secret|clientSecret|client_secret|privateKey|private_key|accessKey|access_key|apiKey|api_key|authToken|auth_token|accessToken|access_token|refreshToken|refresh_token|bearerToken)\s*[:=]\s*(['"`])((?:\\.|(?!\2)[^\\\r\n])+)\2/gi;
 
 const TS_SENSITIVE_ENV_FALLBACK_REGEX =
-  /\bprocess\.env\.([A-Za-z0-9_]+)\s*(?:\?\?|\|\|)\s*(['"`])([^'"`]+)\2/g;
+  /\bprocess\.env\.([A-Za-z0-9_]+)\s*(?:\?\?|\|\|)\s*(['"`])((?:\\.|(?!\2)[^\\\r\n])+)\2/g;
 
 const ARTIFACT_CREDENTIAL_ASSIGN_REGEX =
-  /\b(password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token)\s*[:=]\s*(['"`])([^'"`$\n]{4,})\2/gi;
+  /\b(password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token)\s*[:=]\s*(['"`])((?:\\.|(?!\2)[^\\$\r\n]){4,})\2/gi;
 
 for (const targetFile of allCodeAndArtifactFiles) {
   const rawText = fs.readFileSync(targetFile, 'utf8');

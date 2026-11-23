@@ -486,7 +486,8 @@ export function compileSessionTape({
     const specContents = specFiles.map((f) => fs.readFileSync(f, 'utf8'));
     const uncompiled = allTapeFiles.find((tf) => {
       const id = path.basename(tf, '.json');
-      return !specContents.some((sc) => sc.includes(id));
+      const idRe = new RegExp(`(?<![a-z0-9-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9-])`);
+      return !specContents.some((sc) => idRe.test(sc));
     });
     tapePath = uncompiled || allTapeFiles[0];
   }
@@ -859,13 +860,19 @@ export class ${clientClass} implements ApiClientContract {
     const propNameOnPage = ensureSafeLocatorPropName(toCamelCase(stem) || 'widget');
     const existing = existingClasses.get(compClass);
 
-    // Map each step to a locator property name
+    // Map each step to a locator property name (disambiguating colliding names with different expressions)
     const stepLocatorProps = new Map(); // propName -> locatorExpr
     for (const s of steps) {
-      const propName = deriveLocatorPropertyName(s);
+      const basePropName = deriveLocatorPropertyName(s);
+      const expr = buildLocatorExpression(s.locatorContract, 'this.root');
+      let propName = basePropName;
+      let suffix = 2;
+      while (stepLocatorProps.has(propName) && stepLocatorProps.get(propName) !== expr) {
+        propName = `${basePropName}${suffix++}`;
+      }
       s.__compiledComponentProp = propNameOnPage;
       s.__compiledLocatorProp = propName;
-      stepLocatorProps.set(propName, buildLocatorExpression(s.locatorContract, 'this.root'));
+      stepLocatorProps.set(propName, expr);
     }
 
     // Add any expectedState targetProperty that maps to this component's propNameOnPage or className
@@ -1007,9 +1014,10 @@ ${propInits ? propInits + '\n' : ''}${extraInits ? extraInits + '\n' : ''}  }
   // 5. Analyze Composed Page Object(s) & Actor Mapping
   // Determine required Page classes from expectedStates (`targetComponent: "loginPage.form"`) or default scenario Page
   const pageRequirements = new Map(); // pageFixtureProp -> { pageClassName, subComponents: Map(subProp -> CompDescriptor), actorId }
-  const defaultStem = toPascalCase(
+  const rawDefaultStem = toPascalCase(
     resolvedSquad ? scenarioId.replace(new RegExp(`^${resolvedSquad}-`), '') : scenarioId
   );
+  const defaultStem = /^\d/.test(rawDefaultStem) ? `Scenario${rawDefaultStem}` : rawDefaultStem;
   const defaultPageClass = `${defaultStem}Page`;
   const defaultPageFixture = toCamelCase(defaultPageClass);
 
@@ -1137,7 +1145,21 @@ ${compInits ? compInits + '\n' : ''}  }
           return '/';
         })()
       )}): Promise<void> {
-    await this.page.goto(routePath);
+    const resolved = ${(() => {
+      if (tape.baseUrl && domainGraph?.targetApp?.baseUrl) {
+        try {
+          const tapeOrigin = new URL(tape.baseUrl).origin;
+          const appOrigin = new URL(domainGraph.targetApp.baseUrl).origin;
+          if (tapeOrigin !== appOrigin) {
+            return `routePath.startsWith('/') ? new URL(routePath, ${JSON.stringify(tapeOrigin)}).toString() : routePath`;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      return 'routePath';
+    })()};
+    await this.page.goto(resolved);
   }
 }
 `;
@@ -1360,7 +1382,7 @@ export class ${flowClass} implements FlowContract<void, Record<string, string>> 
         .join('\n');
 
       fixtureContent = fixtureContent.replace(
-        /(base\.extend<[^>]+>\(\{)/,
+        /([A-Za-z_][A-Za-z0-9_]*\.extend<[^>]+>\(\{)/,
         (_, m1) => `${m1}\n${implLines}`
       );
 
@@ -1529,14 +1551,13 @@ export { expect };
           stmt = `await ${apiFix}.executeRequest(${endpointArg}${payloadArg});`;
         }
       } else if (step.action === 'goto') {
-        let targetRoute = step.locatorContract?.value || step.pageRoute || '/';
-        let isCrossOrigin = /^https?:\/\//i.test(targetRoute);
+        const targetRoute = step.locatorContract?.value || step.pageRoute || '/';
+        const isAbsoluteUrl = /^https?:\/\//i.test(targetRoute);
+        let isCrossOriginRelative = false;
         if (targetRoute.startsWith('/') && tape.baseUrl && domainGraph?.targetApp?.baseUrl) {
           try {
-            const tapeOrigin = new URL(tape.baseUrl).origin;
-            const appOrigin = new URL(domainGraph.targetApp.baseUrl).origin;
-            if (tapeOrigin !== appOrigin) {
-              isCrossOrigin = true;
+            if (new URL(tape.baseUrl).origin !== new URL(domainGraph.targetApp.baseUrl).origin) {
+              isCrossOriginRelative = true;
             }
           } catch {
             /* keep relative targetRoute */
@@ -1544,9 +1565,12 @@ export { expect };
         }
         if (primaryPageFixture) {
           groupMatchKeys.add(primaryPageFixture);
-          stmt = isCrossOrigin
-            ? `await ${primaryPageFixture}.open();`
-            : `await ${primaryPageFixture}.open(${JSON.stringify(targetRoute)});`;
+          const firstGotoRoute = (tape.semanticSteps || []).find((s) => s.action === 'goto')?.locatorContract?.value || (tape.semanticSteps || []).find((s) => s.action === 'goto')?.pageRoute || '/';
+          if (isAbsoluteUrl || (isCrossOriginRelative && targetRoute === firstGotoRoute)) {
+            stmt = `await ${primaryPageFixture}.open();`;
+          } else {
+            stmt = `await ${primaryPageFixture}.open(${JSON.stringify(targetRoute)});`;
+          }
         }
       } else if (step.action === 'route') {
         if (!injectedFixtures.includes('page')) injectedFixtures.push('page');
@@ -1837,7 +1861,13 @@ ${hydrateBlock}
               injectedFixtures.push(apiDesc.fixtureProp);
             }
             const methodPart = parsedSeed.callExpression.slice(parsedSeed.builderClass.length + 1);
-            seedCallStmt = `await ${apiDesc.fixtureProp}.${methodPart};`;
+            const methodNameOnly = methodPart.split('(')[0].trim();
+            const existingApiMeta = existingClasses.get(parsedSeed.builderClass);
+            if (existingApiMeta && existingApiMeta.members.has(methodNameOnly)) {
+              seedCallStmt = `await ${apiDesc.fixtureProp}.${methodPart};`;
+            } else {
+              seedCallStmt = `await ${apiDesc.fixtureProp}.executeRequest('/api/v1/seed');`;
+            }
           } else {
             seedCallStmt = `await ${parsedSeed.callExpression};`;
           }

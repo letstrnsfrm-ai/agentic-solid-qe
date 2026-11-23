@@ -10,9 +10,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = process.cwd();
-const DEFAULT_OUT = path.join(ROOT, 'reports', 'system-map.html');
+let ROOT = process.cwd();
 const MAX_FILE_BYTES = 1024 * 1024;
+const NON_TEST_TAGS = new Set([
+  '@playwright',
+  '@fixtures',
+  '@data',
+  '@pages',
+  '@components',
+  '@contracts',
+  '@domains',
+  '@shared',
+  '@steps',
+  '@seeders',
+  '@api',
+]);
 
 function isWithinDir(targetPath, baseDir) {
   const relPath = path.relative(baseDir, targetPath);
@@ -78,7 +90,7 @@ function readShards() {
           .split(',')
           .map((s) => s.trim().replace(/^`|`$/g, ''))
           .filter(Boolean);
-    const routes = [...new Set([...content.matchAll(/`(\/[a-zA-Z0-9._/-]*)`/g)].map((m) => m[1]))];
+    const routes = [...new Set([...content.matchAll(/`(\/[a-zA-Z0-9._:/{}-]*)`/g)].map((m) => m[1]))];
     const relFile = rel(filePath);
     return { id: relFile, file: relFile, title, ownerSquad, lastVerified, capabilities, routes };
   });
@@ -195,7 +207,9 @@ function readSpecs() {
   const specFiles = walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
   return specFiles.map((filePath) => {
     const content = fs.readFileSync(filePath, 'utf8');
-    const tags = [...new Set([...content.matchAll(/@[a-z0-9-]+/g)].map((m) => m[0]))];
+    const tags = [...new Set([...content.matchAll(/@[a-z0-9-]+/g)].map((m) => m[0]))].filter(
+      (t) => !NON_TEST_TAGS.has(t)
+    );
     const tests = [...content.matchAll(/test\(\s*['"`]([^'"`]+)['"`]/g)].map((m) => m[1]);
     const tapeMatch = content.match(/Compiled from Session Tape:\s*([a-z0-9-]+)/i);
     return {
@@ -241,7 +255,8 @@ function readSrcInventory() {
   return layers;
 }
 
-export function collectSystemKnowledge() {
+export function collectSystemKnowledge(rootDir = process.cwd()) {
+  ROOT = path.resolve(rootDir);
   const env = readDomainMemory();
   const shards = readShards();
   const tapes = readTapes();
@@ -526,8 +541,14 @@ renderCoverage();
 </html>`;
 }
 
-export function buildSystemMap({ outPath = DEFAULT_OUT, quiet = false, jsonOnly = false } = {}) {
-  const resolvedRoot = path.resolve(ROOT);
+export function buildSystemMap({
+  rootDir = process.cwd(),
+  outPath = path.join(rootDir, 'reports', 'system-map.html'),
+  quiet = false,
+  jsonOnly = false,
+} = {}) {
+  ROOT = path.resolve(rootDir);
+  const resolvedRoot = ROOT;
   const resolvedOut = path.resolve(resolvedRoot, outPath);
   if (!isWithinDir(resolvedOut, resolvedRoot)) {
     throw new Error(`Security Error: Refusing to write outside workspace: ${outPath}`);
@@ -547,7 +568,7 @@ export function buildSystemMap({ outPath = DEFAULT_OUT, quiet = false, jsonOnly 
     if (parent === cur) break;
     cur = parent;
   }
-  const model = collectSystemKnowledge();
+  const model = collectSystemKnowledge(resolvedRoot);
   if (jsonOnly) {
     if (!quiet) console.log(JSON.stringify(model, null, 2));
     return { model, outPath: resolvedOut };
@@ -562,13 +583,23 @@ export function buildSystemMap({ outPath = DEFAULT_OUT, quiet = false, jsonOnly 
   return { model, outPath: resolvedOut };
 }
 
-const isMain =
-  Boolean(process.argv[1]) &&
-  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
 if (isMain) {
   const args = process.argv.slice(2);
+  const outEq = args.find((a) => a.startsWith('--out='));
   const outIdx = args.indexOf('--out');
-  const outPath = outIdx !== -1 && args[outIdx + 1] ? args[outIdx + 1] : DEFAULT_OUT;
+  const outPath = outEq
+    ? outEq.slice('--out='.length)
+    : outIdx !== -1 && args[outIdx + 1]
+      ? args[outIdx + 1]
+      : path.join(process.cwd(), 'reports', 'system-map.html');
   const jsonOnly = args.includes('--json');
-  buildSystemMap({ outPath, jsonOnly });
+  buildSystemMap({ rootDir: process.cwd(), outPath, jsonOnly });
 }
