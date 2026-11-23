@@ -1412,6 +1412,66 @@ export class ${flowClass} implements FlowContract<void, Record<string, string>> 
     }
   }
 
+  // 6b. Optional --emit-seeder: promote mutating networkContracts into a <300ms StateSeederContract and register in app.fixture.ts (#34, #51)
+  if (emitSeeder) {
+    const mutatingContracts = (tape.networkContracts || []).filter((nc) =>
+      ['POST', 'PUT', 'PATCH'].includes(String(nc?.method || '').toUpperCase())
+    );
+    if (mutatingContracts.length > 0) {
+      const primary = mutatingContracts[0];
+      const httpMethod = String(primary.method || 'POST').toLowerCase();
+      const seederStem = toPascalCase(scenarioId);
+      const seederClass = seederStem.endsWith('Seeder') ? seederStem : `${seederStem}Seeder`;
+      const seederRel = `${baseSrcDir}/seeders/${toKebabCase(scenarioId)}-seeder.ts`;
+      const endpointPath = String(primary.urlPattern || '/api/v1/seed');
+      const fallbackBaseUrl = String(tape.apiBaseUrl || tape.baseUrl || '');
+      const urlLine = /^https?:\/\//i.test(endpointPath)
+        ? `    const url = ${JSON.stringify(endpointPath)};`
+        : `    const url = \`\${this.baseUrl.replace(/\\/$/, '')}${endpointPath}\`;`;
+      const seederCode = `import type { APIRequestContext } from '@playwright/test';
+import type { StateSeederContract } from '@contracts/state-seeder.contract';
+
+export class ${seederClass} implements StateSeederContract<Record<string, unknown>, Record<string, unknown>> {
+  constructor(
+    private readonly request: APIRequestContext,
+    private readonly baseUrl: string = process.env.API_BASE_URL || process.env.BASE_URL || ${JSON.stringify(fallbackBaseUrl)}
+  ) {}
+
+  async seed(payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+${urlLine}
+    const res = await this.request.${httpMethod}(url, { data: payload });
+    if (!res.ok()) {
+      throw new Error(\`${seederClass} failed (\${res.status()}): \${await res.text()}\`);
+    }
+    return (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  }
+
+  async teardown(_handle: Record<string, unknown>): Promise<void> {
+    // Optional post-test cleanup hook
+  }
+}
+`;
+      plannedOperations.push({
+        layer: 'seeder',
+        action: fs.existsSync(path.join(ROOT, seederRel)) ? 'overwrite' : 'create',
+        className: seederClass,
+        file: seederRel,
+        addedMembers: ['seed', 'teardown'],
+        codeContent: seederCode,
+      });
+      allFixtureEntries.push({
+        propName: ensureSafeLocatorPropName(toCamelCase(seederClass)),
+        typeName: seederClass,
+        fixtureType: 'Record<string, unknown>',
+        importAlias: toImportAlias(seederRel),
+        kind: 'seeder',
+        apiBaseUrl: fallbackBaseUrl,
+      });
+    } else {
+      warnings.push('--emit-seeder requested, but tape has no mutating POST/PUT/PATCH networkContracts.');
+    }
+  }
+
   if (fs.existsSync(fixtureFullPath)) {
     let fixtureContent = fs.readFileSync(fixtureFullPath, 'utf8');
     const missingEntries = allFixtureEntries.filter(
@@ -2056,52 +2116,6 @@ ${specBody}
     });
   }
 
-  // 7b. Optional --emit-seeder: promote mutating networkContracts into a <300ms StateSeederContract (#34)
-  if (emitSeeder) {
-    const mutatingContracts = (tape.networkContracts || []).filter((nc) =>
-      ['POST', 'PUT', 'PATCH'].includes(String(nc?.method || '').toUpperCase())
-    );
-    if (mutatingContracts.length > 0) {
-      const primary = mutatingContracts[0];
-      const httpMethod = String(primary.method || 'POST').toLowerCase();
-      const seederStem = toPascalCase(scenarioId);
-      const seederClass = seederStem.endsWith('Seeder') ? seederStem : `${seederStem}Seeder`;
-      const seederRel = `${baseSrcDir}/seeders/${toKebabCase(scenarioId)}-seeder.ts`;
-      const endpointPath = String(primary.urlPattern || '/api/v1/seed');
-      const seederCode = `import type { APIRequestContext } from '@playwright/test';
-import type { StateSeederContract } from '@contracts/state-seeder.contract';
-
-export class ${seederClass} implements StateSeederContract<Record<string, unknown>, Record<string, unknown>> {
-  constructor(
-    private readonly request: APIRequestContext,
-    private readonly baseUrl: string = process.env.API_BASE_URL || process.env.BASE_URL || ''
-  ) {}
-
-  async seed(payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-    const url = ${JSON.stringify(endpointPath)}.startsWith('http')
-      ? ${JSON.stringify(endpointPath)}
-      : \`\${this.baseUrl.replace(/\\/$/, '')}${endpointPath}\`;
-    const res = await this.request.${httpMethod}(url, { data: payload });
-    if (!res.ok()) {
-      throw new Error(\`${seederClass} failed (\${res.status()}): \${await res.text()}\`);
-    }
-    return (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  }
-}
-`;
-      plannedOperations.push({
-        layer: 'seeder',
-        action: fs.existsSync(path.join(ROOT, seederRel)) ? 'overwrite' : 'create',
-        className: seederClass,
-        file: seederRel,
-        addedMembers: ['seed'],
-        codeContent: seederCode,
-      });
-    } else {
-      warnings.push('--emit-seeder requested, but tape has no mutating POST/PUT/PATCH networkContracts.');
-    }
-  }
-
   // 8. Apply File Operations & Synchronize Domain Shard Published Capabilities
   const assertNoSymlinkWrite = (targetAbs, label) => {
     const resolvedRoot = path.resolve(ROOT);
@@ -2192,6 +2206,7 @@ export class ${seederClass} implements StateSeederContract<Record<string, unknow
     scenarioId,
     sourceTape: rel(tapePath),
     charter: tape.charter,
+    emitSeeder: Boolean(emitSeeder),
     targetLayout: resolvedSquad ? `federated-squad (${resolvedSquad})` : 'global-flat (src/)',
     squad: resolvedSquad,
     publishedCapabilities: [...publishedCapabilities],
@@ -2235,7 +2250,7 @@ export function formatCompactCompileReport(report) {
   lines.push(
     report.mode === 'applied'
       ? `NEXT    | npm run verify:fast`
-      : `NEXT    | npx cortex compile ${report.scenarioId} --apply --compact`
+      : `NEXT    | npx cortex compile ${report.scenarioId}${report.emitSeeder ? ' --emit-seeder' : ''} --apply --compact`
   );
   return lines.join('\n');
 }

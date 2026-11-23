@@ -1,7 +1,18 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.14",
+  "latestVersion": "0.48.15",
   "releases": [
+    {
+      "version": "0.48.15",
+      "date": "2026-11-23",
+      "highlights": [
+        "fix(migrate-skill): exclude built-in agent-browser core skill from migrate --discover legacy candidates (#50)",
+        "fix(compile-tape): register --emit-seeder in app.fixture.ts, resolve endpoint URL at compile time with tape.baseUrl fallback, and preserve --emit-seeder in dry-run NEXT hint (#51)"
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.15."
+      ]
+    },
     {
       "version": "0.48.14",
       "date": "2026-11-23",

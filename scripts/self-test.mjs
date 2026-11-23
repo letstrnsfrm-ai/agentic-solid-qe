@@ -6509,3 +6509,90 @@ test('v0.48.14 regression suite: #27, #28, #29, #32, #33, #34, #37, #39, #41, #4
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('v0.48.15 regression suite: #50 (agent-browser core skill) & #51 (--emit-seeder fixture registration, URL & NEXT hint)', async () => {
+  const { compileSessionTape, formatCompactCompileReport } = await import('./compile-tape.mjs');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-v4815-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://example.com', '--name', 'V4815']);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    // #50: migrate --discover must not flag built-in .agents/skills/agent-browser
+    const discRes = runNode(path.join(tmpDir, 'scripts/migrate-skill.mjs'), ['--discover'], tmpDir);
+    assert.equal(discRes.status, 0, discRes.stderr);
+    const jsonStart = discRes.stdout.indexOf('{');
+    const discJson = JSON.parse(discRes.stdout.slice(jsonStart));
+    const flaggedAgentBrowser = (discJson.discoveredLegacySkillsAndPrompts || []).some((x) =>
+      String(x.sourcePath || '').includes('agent-browser')
+    );
+    assert.equal(flaggedAgentBrowser, false, 'agent-browser core skill must not be flagged as legacy');
+
+    // #51: --emit-seeder registers fixture in app.fixture.ts, resolves URL at compile time, uses tape.baseUrl, and preserves --emit-seeder in dry-run NEXT hint
+    const tape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'seeder-wire-p0',
+      title: 'Seeder Wire Flow',
+      charter: 'happy-path-baseline',
+      tags: ['@p0', '@smoke'],
+      recordedAt: '2026-11-23T00:00:00.000Z',
+      baseUrl: 'https://shop.example.com',
+      persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standard' },
+      preconditions: [],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'click Buy',
+          businessStep: 'Complete purchase',
+          pageRoute: '/orders',
+          action: 'click',
+          componentCandidate: 'OrdersSectionComponent',
+          locatorContract: { strategy: 'getByRole', role: 'button', value: 'Buy' },
+        },
+      ],
+      networkContracts: [
+        { urlPattern: '/api/orders', method: 'POST', expectedStatus: 201, clientCandidate: 'OrdersApiClient' },
+      ],
+      expectedStates: [
+        {
+          description: 'Confirmation visible',
+          businessStep: 'Complete purchase',
+          assertionType: 'toBeVisible',
+          targetComponent: 'OrdersSectionComponent',
+          targetProperty: 'confirmationHeading',
+          expectedValueRef: 'true',
+          locatorContract: { strategy: 'getByRole', role: 'heading', value: 'Confirmed' },
+        },
+      ],
+    };
+    fs.mkdirSync(path.join(tmpDir, '.exploratory/tapes'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.exploratory/tapes/seeder-wire-p0.json'), JSON.stringify(tape, null, 2));
+
+    const dryReport = compileSessionTape({
+      tapeInput: 'seeder-wire-p0',
+      apply: false,
+      emitSeeder: true,
+      rootDir: tmpDir,
+      skipMap: true,
+    });
+    const compactDry = formatCompactCompileReport(dryReport);
+    assert.ok(compactDry.includes('npx cortex compile seeder-wire-p0 --emit-seeder --apply --compact'), compactDry);
+
+    const appliedReport = compileSessionTape({
+      tapeInput: 'seeder-wire-p0',
+      apply: true,
+      emitSeeder: true,
+      rootDir: tmpDir,
+      skipMap: true,
+    });
+    const seederOp = appliedReport.operations.find((o) => o.layer === 'seeder');
+    assert.ok(seederOp, 'expected seeder operation');
+    const seederSrc = fs.readFileSync(path.join(tmpDir, seederOp.file), 'utf8');
+    assert.ok(!seederSrc.includes(".startsWith('http')"), 'endpoint URL must be resolved at compile time');
+    assert.ok(seederSrc.includes('"https://shop.example.com"'), 'baseUrl must default to tape.baseUrl');
+
+    const fixtureSrc = fs.readFileSync(path.join(tmpDir, 'src/fixtures/app.fixture.ts'), 'utf8');
+    assert.ok(fixtureSrc.includes('SeederWireP0Seeder'), 'seeder must be registered in app.fixture.ts');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
