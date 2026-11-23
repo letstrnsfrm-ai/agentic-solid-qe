@@ -541,10 +541,13 @@ export function rankAndSelectGateOption(blueprint, session) {
           })
         : null;
     const matchedRaw = routeMatchedShard ? shardToString(routeMatchedShard) : '';
+    const matchedSlug = matchedRaw
+      ? path.basename(matchedRaw, '.md').replace(/[^a-z0-9-]/gi, '-').toLowerCase()
+      : '';
 
     if (
       isItemQuarantined(session, currentShard) ||
-      (routeMatchedShard && (!currentShard || !matchedRaw.includes(currentShard)))
+      (routeMatchedShard && (!currentShard || matchedSlug !== currentShard))
     ) {
       const target = routeMatchedShard || unquarantinedShards[0];
       if (!target) {
@@ -573,9 +576,23 @@ export function rankAndSelectGateOption(blueprint, session) {
   }
 
   if (options.length === 0) {
+    const defaultId = next.skill || 'default-action';
+    const namespacedKey = next.skill ? `${next.skill}:${defaultId}` : defaultId;
+    if (
+      isItemQuarantined(session, namespacedKey) ||
+      isItemQuarantined(session, defaultId) ||
+      (next.command && isItemQuarantined(session, next.command))
+    ) {
+      return {
+        chosen: null,
+        alternatives: [],
+        rationale: `Single deterministic action '${namespacedKey}' is currently quarantined.`,
+        allQuarantined: true,
+      };
+    }
     return {
       chosen: {
-        id: next.skill || 'default-action',
+        id: defaultId,
         label: next.why || next.command || 'Execute next recommended action',
         command: next.command || '',
       },
@@ -695,6 +712,8 @@ export function isObjectiveComplete(blueprint, session) {
     const slug = path.basename(String(raw), '.md').toLowerCase();
     return !isItemQuarantined(session, raw) && !isItemQuarantined(session, slug);
   });
+  const hiddenUncovered = Math.max(0, (h.uncoveredShards || 0) - uncovered.length);
+  const remainingUncovered = activeUncovered.length + hiddenUncovered;
 
   if (focus === 'heal' && h.failingTestArtifacts === 0) {
     return { complete: true, reason: 'All failing test artifacts resolved (0 failures remaining).' };
@@ -706,7 +725,7 @@ export function isObjectiveComplete(blueprint, session) {
 
   if (
     focus === 'baseline' &&
-    activeUncovered.length === 0 &&
+    remainingUncovered === 0 &&
     h.domainShards > 0 &&
     h.uncompiledTapes === 0 &&
     h.failingTestArtifacts === 0 &&
@@ -723,7 +742,7 @@ export function isObjectiveComplete(blueprint, session) {
     h.ciConfigured &&
     h.uncompiledTapes === 0 &&
     h.failingTestArtifacts === 0 &&
-    activeUncovered.length === 0
+    remainingUncovered === 0
   ) {
     const hasExpansionOptions = (blueprint?.nextAction?.gatePayload?.options || []).some(
       (o) => o.id !== 'verify-suite' && !isItemQuarantined(session, o.id)

@@ -108,9 +108,10 @@ export function resolveInstalledVersion(targetRoot) {
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       const upgradeScript = pkg.scripts?.['upgrade:skills'] || '';
-      const tagMatch = upgradeScript.match(/#v?(\d+\.\d+\.\d+(?:-[a-z0-9.]+)?)/i);
+      const tagMatch = upgradeScript.match(/#v?(\d+\.\d+\.\d+(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?)/i);
       if (tagMatch) {
-        return { version: normalizeVersion(tagMatch[1]), source: 'package.json (upgrade:skills)' };
+        const ver = normalizeVersion(tagMatch[1]);
+        if (ver) return { version: ver, source: 'package.json (upgrade:skills)' };
       }
     } catch {
       /* ignore malformed package.json */
@@ -270,14 +271,15 @@ function isAllowedUpgradePatchTarget(targetRel) {
 
 export function collectPendingPatches(targetRoot) {
   const patchesDir = path.join(targetRoot, '.agents/upgrade-patches');
+  if (!fs.existsSync(patchesDir)) return [];
   try {
-    if (fs.lstatSync(patchesDir).isSymbolicLink()) return [];
-  } catch (err) {
-    if (err?.code === 'ENOENT') return [];
-    throw err;
+    assertSafePatchDestination(targetRoot, patchesDir, 'upgrade-patches directory');
+  } catch {
+    return [];
   }
   const results = [];
   for (const patchPath of walkPatches(patchesDir)) {
+    assertSafePatchDestination(targetRoot, patchPath, 'upgrade patch file');
     const relFromPatches = path.relative(patchesDir, patchPath).replace(/\\/g, '/');
     let targetRel = relFromPatches;
     if (relFromPatches === 'playwright.config.ts.new') targetRel = 'playwright.config.ts';

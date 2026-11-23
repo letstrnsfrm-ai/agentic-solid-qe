@@ -1,7 +1,17 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.10",
+  "latestVersion": "0.48.11",
   "releases": [
+    {
+      "version": "0.48.11",
+      "date": "2026-11-23",
+      "highlights": [
+        "Framework Hardening Batch #6 (40 Defects Fixed across 20 core engine scripts & `src/shared/`): Normalized manifest pruning & Windows drive/system root + dangling symlink guards in `sync-skills.mjs`; fixed nested squad hub derivation, semicolon-less `import` + `import type`, and opposite-quote credential bypasses in `audit-solid.mjs`; rejected directory specs and matched `Compiled from Session Tape:` in `context-pack.mjs`; blocked `storageStatePath` traversal/symlinks and substring squad/tape matches in `analyze-coverage.mjs`; added symlink/confinement guards, stale `totalShards` dedup, and parameterized routes in `build-domain-graph.mjs`; replaced frozen `ROOT`, filtered `NON_TEST_TAGS`, and added `--out=` & parameterized routes in `build-system-map.mjs`; merged `autoPropNames` across fixtures in `impact-graph.mjs`; blocked RFC 2765 IPv4-translated IPv6 (`::ffff:0:0:0/96`) & trailing-dot IPv4 SSRF bypasses across `report-cloud.mjs`, `explore-handshake.ts`, and `auth-token.bridge.ts`; made `explore-handshake.ts` paths dynamic, validated URL before `addCookies()`, and stripped `g`/`y` flags from `tokenKeyPattern`; fixed empty-options quarantine spin loop, exact shard slug matching, and `hiddenUncovered` in `autonomous-mode.mjs`; fixed static-gate `'checkin-interval'` pause, `--json` stdout cleanliness, and unquarantined `retry-failed` logging in `orchestrate.mjs`; added symlink confinement to `verify-fast.mjs`; hardened `computeTokenFootprint`, `capToTokens`, and anchored `summarizePlaywrightRun` counts in `cli-output.mjs`; fixed hyphenated prerelease & patch destination checks in `upgrade-framework.mjs`; blocked dangling symlinks, numeric REST component names, digit-starting identifiers, relative URL contract queries, and missing `portalBaseUrl` in `explore-session.mjs`; fixed digit-starting page stems, multi-route cross-origin `Page.open()`, colliding component locator disambiguation, `seedClientRef` fallback, arbitrary fixture `.extend`, and boundary auto-selection in `compile-tape.mjs`; prevented `toBeEnabled`/`toBeChecked` false `locator-drift` and balanced `frameLocator` chains in `heal-drift.mjs`; blocked sensitive `capturesVariable`, invalid `networkContracts`, and protocol-relative `toHaveURL` in `validate-tapes.mjs`; word-bounded `pin`/`otp` & balanced `return { ... }` scanning in `tape-cli.mjs`; excluded `driver.get()`/`map.get()`, deduplicated locators/params with generic/default stripping, and guarded empty model stems in `legacy-test-migrator.mjs`; isolated per-class brace bodies and `static`/`virtual`/`override`/`async` hooks in `dotnet-enterprise-analyzer.mjs`; guarded manifest writes and excluded `consolidated` from squad burn-down in `migration-wave-factory.mjs`; and enforced `assertNoSymlinkEscape` across `--discover`, domain shards, and registry writes in `migrate-skill.mjs`."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.11 Framework Hardening Batch #6."
+      ]
+    },
     {
       "version": "0.48.10",
       "date": "2026-11-23",

@@ -127,8 +127,25 @@ const tapes = tapeFiles.map((f) => {
       }
     }
     const tapeMissingSessions = [];
+    const resolvedRoot = path.resolve(ROOT);
     for (const sessRel of requiredSessions) {
-      if (!fs.existsSync(path.join(ROOT, sessRel))) {
+      const sessAbs = path.resolve(resolvedRoot, String(sessRel || ''));
+      const relCheck = path.relative(resolvedRoot, sessAbs);
+      let isValidFile = false;
+      if (relCheck && !relCheck.startsWith('..') && !path.isAbsolute(relCheck)) {
+        try {
+          const st = fs.lstatSync(sessAbs);
+          if (!st.isSymbolicLink() && st.isFile()) {
+            const realRoot = fs.realpathSync(resolvedRoot);
+            const realSess = fs.realpathSync(sessAbs);
+            const realRel = path.relative(realRoot, realSess);
+            isValidFile = !realRel.startsWith('..') && !path.isAbsolute(realRel);
+          }
+        } catch {
+          isValidFile = false;
+        }
+      }
+      if (!isValidFile) {
         missingAuthSessionSet.add(sessRel);
         tapeMissingSessions.push(sessRel);
       }
@@ -279,8 +296,17 @@ const defectFiles = walkFiles(path.join(ROOT, 'defects'), '.md').filter(
 );
 const openDefects = defectFiles.map((f) => path.relative(ROOT, f));
 
-const matchSquad = (p) =>
-  !filterSquad || String(p || '').toLowerCase().includes(filterSquad);
+const squadBoundaryRe = filterSquad
+  ? new RegExp(`(?:^|[/\\\\._-])${filterSquad.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:[/\\\\._-]|$)`, 'i')
+  : null;
+const matchSquad = (p) => {
+  if (!filterSquad) return true;
+  const s = String(p || '').replace(/\\/g, '/').toLowerCase();
+  if (s.includes(`/domains/${filterSquad}/`) || s.startsWith(`domains/${filterSquad}/`)) return true;
+  if (s.startsWith(`tests/${filterSquad}/`)) return true;
+  const base = path.basename(s);
+  return Boolean(squadBoundaryRe && squadBoundaryRe.test(base));
+};
 
 // 5. Existing SOLID Architecture (Global + Domain-Scoped) — filter by relative path before basename
 const relPath = (f) => path.relative(ROOT, f).replace(/\\/g, '/');
@@ -436,8 +462,10 @@ if (fs.existsSync(migrationManifestPath)) {
       const hasCompiledSpec =
         Array.isArray(item.tapes) &&
         item.tapes.some((tp) => {
-          const sid = path.basename(tp, '.json');
-          return specsWithContent.some((s) => s.rawContent.includes(sid));
+          const sid = path.basename(String(tp || ''), '.json').trim();
+          if (!sid) return false;
+          const sidRe = new RegExp(`(?<![a-z0-9-])${sid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9-])`);
+          return specsWithContent.some((s) => path.basename(s.file, '.spec.ts') === sid || sidRe.test(s.rawContent));
         });
       const effectiveStatus = hasCompiledSpec ? 'verified' : item.status || 'discovered';
       countsByStatus[effectiveStatus] = (countsByStatus[effectiveStatus] || 0) + 1;
@@ -583,9 +611,14 @@ export function formatCompactCoverage(report) {
   return lines.join('\n');
 }
 
-const isMain =
-  Boolean(process.argv[1]) &&
-  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
 if (isMain) {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {

@@ -6001,6 +6001,211 @@ test('framework-hardening-batch-5: SemVer prerelease, OSC/capToTokens/summarizeP
   }
 });
 
+test('framework-hardening-batch-6: SSRF, autonomous quarantine, compiler, healer, tape-cli & migration invariants', async () => {
+  const { isForbiddenIpAddress, assertSafeTargetHttpUrl } = await import('./report-cloud.mjs');
+  const { rankAndSelectGateOption, isObjectiveComplete } = await import('./lib/autonomous-mode.mjs');
+  const { capToTokens, summarizePlaywrightRun } = await import('./lib/cli-output.mjs');
+  const { compileSessionTape } = await import('./compile-tape.mjs');
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const { classifyFailureRootCause } = await import('./heal-drift.mjs');
+  const { buildInheritanceMap } = await import('./dotnet-enterprise-analyzer.mjs');
+  const { generateMigrationDashboard } = await import('./migration-wave-factory.mjs');
+
+  // 1. Cluster 1: RFC 2765 IPv4-translated IPv6 & trailing-dot IPv4 SSRF guards
+  assert.equal(isForbiddenIpAddress('::ffff:0:127.0.0.1'), true, 'Expected RFC 2765 ::ffff:0:127.0.0.1 to be forbidden');
+  assert.equal(isForbiddenIpAddress('::ffff:0:7f00:1'), true, 'Expected hex RFC 2765 ::ffff:0:7f00:1 to be forbidden');
+  assert.throws(
+    () => assertSafeTargetHttpUrl('https://169.254.169.254./latest/meta-data'),
+    /forbidden|private|loopback|numeric/i,
+    'Expected trailing-dot metadata IPv4 to be rejected'
+  );
+  assert.throws(
+    () => assertSafeTargetHttpUrl('https://0x7f000001./api/runs'),
+    /forbidden|private|loopback|numeric/i,
+    'Expected trailing-dot hex IPv4 to be rejected'
+  );
+
+  // 2. Cluster 2: autonomous-mode empty-options quarantine & hiddenUncovered, cli-output capToTokens & anchored Playwright summary
+  const quarantinedChoice = rankAndSelectGateOption(
+    {
+      nextAction: {
+        skill: '01-cli-explorer',
+        command: 'npx cortex orchestrate --explore start --route /orders',
+        gatePayload: { options: [] },
+      },
+      queuePreview: { uncoveredShards: ['/orders'] },
+    },
+    { quarantined: [{ key: '01-cli-explorer:01-cli-explorer', failures: 3 }] }
+  );
+  assert.equal(quarantinedChoice.chosen, null, 'Expected quarantined empty-options gate to pause instead of spinning');
+  assert.equal(quarantinedChoice.allQuarantined, true, 'Expected allQuarantined=true for quarantined empty-options gate');
+  const objRes = isObjectiveComplete(
+    {
+      healthSnapshot: { uncoveredShards: 3, automatedSpecs: 1, uncompiledTapes: 0, failingTestArtifacts: 0 },
+      queuePreview: { uncoveredShards: ['/a'] },
+    },
+    { quarantined: [{ key: '/a', failures: 3 }], objectives: { focus: 'full' } }
+  );
+  assert.equal(objRes.complete, false, 'Expected hidden uncovered shards to prevent premature objective completion');
+  assert.ok(capToTokens('hello world this is a long text', 2).length <= 8, 'Expected capToTokens to respect tiny maxTokens');
+  const pwSummary = summarizePlaywrightRun(
+    '  ok 1 tests/a.spec.ts:5:1 › shows 3 failed attempts banner\n  1 passed (1.2s)\n'
+  );
+  assert.equal(pwSummary.passed, 1);
+  assert.equal(pwSummary.failed, 0, 'Expected test title "3 failed" not to inflate failed count');
+
+  // 3. Cluster 3: digit-starting scenarioId, colliding locators, multi-route cross-origin open(), validate-tapes, heal-drift
+  const vErrors = validateTapeObject({
+    schemaVersion: '1.0.0',
+    scenarioId: 'sec-test',
+    goal: 'verify validation',
+    baseUrl: 'https://example.com',
+    persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standard()' },
+    networkContracts: 'not-an-array',
+    semanticSteps: [
+      {
+        stepIndex: 1,
+        intent: 'capture token',
+        businessStep: 'Capture secret',
+        pageRoute: '/login',
+        action: 'apiCall',
+        componentCandidate: 'AuthApiClient',
+        capturesVariable: 'authToken',
+        locatorContract: { strategy: 'apiEndpoint', value: '/api/auth' },
+      },
+    ],
+    expectedStates: [
+      {
+        description: 'check url',
+        assertionType: 'toHaveURL',
+        targetComponent: 'AuthPage',
+        targetProperty: 'page',
+        expectedValueRef: '//evil.com/phish',
+      },
+    ],
+  });
+  assert.ok(vErrors.length > 0, 'Expected invalid tape to fail validation');
+  assert.ok(vErrors.some((e) => /networkContracts/i.test(e)), 'Expected non-array networkContracts error');
+  assert.ok(vErrors.some((e) => /capturesVariable/i.test(e)), 'Expected sensitive capturesVariable error');
+  assert.ok(vErrors.some((e) => /expectedStates\.expectedValueRef.*evil\.com/i.test(e)), 'Expected protocol-relative toHaveURL error');
+
+  const cls = classifyFailureRootCause({
+    errorText: 'Error: expect(locator).toBeEnabled() failed\nLocator: getByRole(\'button\', { name: \'Submit\' })\nExpected: enabled\nReceived: disabled\nCall log:\n  - locator resolved to <button disabled>Submit</button>',
+  });
+  assert.notEqual(cls.category, 'locator-drift', 'Expected disabled resolved button not to be misclassified as locator-drift');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-batch6-'));
+  try {
+    fs.mkdirSync(path.join(tmpRoot, '.exploratory/tapes'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'src/fixtures'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, 'src/fixtures/app.fixture.ts'),
+      `import { test as base } from '@playwright/test';\nexport const test = base.extend<{}>({});\nexport { expect } from '@playwright/test';\n`
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, '.exploratory/tapes/2fa-login.json'),
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        scenarioId: '2fa-login',
+        title: 'Verify 2FA login',
+        charter: 'happy-path-baseline',
+        recordedAt: '2026-11-23T00:00:00Z',
+        baseUrl: 'https://auth.example.com',
+        persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standard()' },
+        preconditions: [],
+        networkContracts: [],
+        semanticSteps: [
+          {
+            stepIndex: 1,
+            intent: 'open step 1',
+            businessStep: 'Open authentication page',
+            pageRoute: '/step1',
+            action: 'goto',
+            componentCandidate: 'AuthSection',
+            locatorContract: { strategy: 'url', value: '/step1' },
+          },
+          {
+            stepIndex: 2,
+            intent: 'open step 2',
+            businessStep: 'Navigate to verification step',
+            pageRoute: '/step2',
+            action: 'goto',
+            componentCandidate: 'AuthSection',
+            locatorContract: { strategy: 'url', value: '/step2' },
+          },
+          {
+            stepIndex: 3,
+            intent: 'click first delete',
+            businessStep: 'Remove first backup code',
+            pageRoute: '/step2',
+            action: 'click',
+            componentCandidate: 'AuthSection',
+            locatorContract: { strategy: 'getByRole', role: 'button', value: 'Delete', nth: 0 },
+          },
+          {
+            stepIndex: 4,
+            intent: 'click second delete',
+            businessStep: 'Remove second backup code',
+            pageRoute: '/step2',
+            action: 'click',
+            componentCandidate: 'AuthSection',
+            locatorContract: { strategy: 'getByRole', role: 'button', value: 'Delete', nth: 1 },
+          },
+        ],
+        expectedStates: [
+          {
+            description: 'verify step 2 url',
+            assertionType: 'toHaveURL',
+            targetComponent: 'AuthSection',
+            targetProperty: 'page',
+            expectedValueRef: '/step2',
+          },
+        ],
+      })
+    );
+    const plan = compileSessionTape({ rootDir: tmpRoot, tapeInput: '2fa-login', apply: true });
+    const pageOp = plan.operations.find((o) => o.layer === 'page');
+    const compOp = plan.operations.find((o) => o.layer === 'component');
+    assert.ok(/^[A-Za-z_]/.test(pageOp.className), `Expected valid TS identifier for digit-starting scenarioId, got ${pageOp.className}`);
+    const compContent = fs.readFileSync(path.join(tmpRoot, compOp.file), 'utf8');
+    assert.ok(compContent.includes('deleteButton') && compContent.includes('deleteButton2'), 'Expected colliding locators to be disambiguated');
+    const pageContent = fs.readFileSync(path.join(tmpRoot, pageOp.file), 'utf8');
+    assert.ok(pageContent.includes('new URL(routePath'), 'Expected cross-origin Page.open() to resolve multi-route relative paths');
+
+    // 4. Cluster 4: dotnet per-class isolation & migration dashboard consolidated exclusion
+    const csFile = path.join(tmpRoot, 'MultiClass.cs');
+    fs.writeFileSync(
+      csFile,
+      `public class BaseAuth { [OneTimeSetUp] public static async Task Init() { Authenticate(); } }\npublic class OtherClass { public void Foo() {} }\n`
+    );
+    const classMap = buildInheritanceMap([csFile], tmpRoot);
+    const baseNode = classMap.get('BaseAuth');
+    const otherNode = classMap.get('OtherClass');
+    assert.ok(baseNode && baseNode.setupHooks.some((h) => h.method === 'Init'), 'Expected static async setup hook on BaseAuth');
+    assert.ok(otherNode && otherNode.setupHooks.length === 0, 'Expected OtherClass not to inherit BaseAuth hooks from same file');
+    assert.equal(otherNode.authSignals.length, 0, 'Expected OtherClass not to leak BaseAuth auth signals');
+
+    fs.mkdirSync(path.join(tmpRoot, '.agents/domain'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/migration-manifest.json'),
+      JSON.stringify({
+        schemaVersion: '2.0.0',
+        ledger: [
+          { id: 't1', squad: 'checkout', wave: 1, status: 'live-verified' },
+          { id: 't2', squad: 'checkout', wave: 1, status: 'consolidated', consolidatedInto: 't1' },
+          { id: 't3', squad: 'checkout', wave: 1, status: 'compiled' },
+        ],
+      })
+    );
+    const dash = generateMigrationDashboard(tmpRoot, 'reports/b6-dashboard.html');
+    const dashHtml = fs.readFileSync(path.join(tmpRoot, 'reports/b6-dashboard.html'), 'utf8');
+    assert.ok(dash && dashHtml.includes('1/2 verified (50%)'), 'Expected consolidated entry excluded from squad done and denom');
+    assert.ok(dashHtml.includes('1 consolidated'), 'Expected consolidated count surfaced in squad bar');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 
 
 

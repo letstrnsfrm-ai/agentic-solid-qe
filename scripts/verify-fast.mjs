@@ -48,6 +48,27 @@ export function sanitizeSpecList(specs = [], rootDir = process.cwd()) {
     if (rel.startsWith('..') || path.isAbsolute(rel)) {
       throw new Error(`Security Error: Spec path escapes workspace root: '${raw}'.`);
     }
+    let cur = abs;
+    while (cur !== resolvedRoot) {
+      try {
+        if (fs.lstatSync(cur).isSymbolicLink()) {
+          throw new Error(`Security Error: Refusing symlinked spec path: '${raw}'.`);
+        }
+      } catch (err) {
+        if (err?.code !== 'ENOENT') throw err;
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    if (fs.existsSync(abs) && fs.existsSync(resolvedRoot)) {
+      const realRoot = fs.realpathSync(resolvedRoot);
+      const realAbs = fs.realpathSync(abs);
+      const realRel = path.relative(realRoot, realAbs);
+      if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+        throw new Error(`Security Error: Spec realpath escapes workspace root: '${raw}'.`);
+      }
+    }
     clean.push(normalized);
   }
   return [...new Set(clean)];

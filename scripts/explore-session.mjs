@@ -28,7 +28,7 @@ const LIVE_STATE_FILE = path.join(EXPLORATORY_DIR, 'live-explore-state.json');
 const LIVE_DRAFT_TAPE_FILE = path.join(EXPLORATORY_DIR, 'live-draft-tape.json');
 
 const SAFE_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
-const SENSITIVE_FIELD_RE = /(pass(word|code)?|secret|token|api[-_]?key|ssn|social|cvv|cvc|card|pin|otp|mfa|auth)/i;
+const SENSITIVE_FIELD_RE = /(pass(word|code)?|secret|token|api[-_]?key|ssn|social|cvv|cvc|card|\bpin\b|_pin|pin_|\botp\b|_otp|otp_|mfa|auth)/i;
 const SENSITIVE_VALUE_RE = /^(sk_|pk_|ghp_|gho_|Bearer\s+|eyJ[A-Za-z0-9_-]+\.|[0-9]{3}-[0-9]{2}-[0-9]{4}|(?:\d[ -]*?){13,16})$/;
 const FORBIDDEN_IDENTIFIERS = new Set([
   '__proto__',
@@ -81,8 +81,12 @@ export function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
   }
   let cur = resolvedTarget;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      throw new Error(`Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`);
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(`Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`);
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;
@@ -251,9 +255,13 @@ export function redactInputToBuilderRef(fieldMeta = {}, value = '', scenarioId =
     const parts = rawName.split(' ').filter(Boolean);
     prop = parts[0] + parts.slice(1).map((p) => p[0].toUpperCase() + p.slice(1)).join('');
   }
+  if (/^\d/.test(prop) || FORBIDDEN_IDENTIFIERS.has(prop)) {
+    prop = `field${prop[0].toUpperCase()}${prop.slice(1)}`;
+  }
   const redacted = isSensitiveInput(fieldMeta, value);
+  const safeBuilderClass = /^\d/.test(builderClass) ? `Scenario${builderClass}` : builderClass;
   return {
-    dataBuilderRef: `${builderClass}.standard().${prop}`,
+    dataBuilderRef: `${safeBuilderClass}.standard().${prop}`,
     redacted,
   };
 }
@@ -276,14 +284,17 @@ export function parseNetworkContracts(networkOutput = '', existing = []) {
     try {
       if (/^https?:\/\//i.test(urlPath)) {
         urlPath = new URL(urlPath).pathname;
+      } else {
+        urlPath = urlPath.split(/[?#]/)[0];
       }
     } catch {
-      /* keep raw */
+      urlPath = urlPath.split(/[?#]/)[0];
     }
     // Skip static assets
     if (/\.(js|css|png|jpg|jpeg|svg|ico|woff2?|map)(\?|$)/i.test(urlPath)) continue;
-    const statusMatch = line.match(/\b([2-5]\d{2})\b/);
-    const expectedStatus = statusMatch ? Number(statusMatch[1]) : 200;
+    const afterUrl = line.slice((m.index || 0) + m[0].length);
+    const statusMatches = [...afterUrl.matchAll(/\b([2-5]\d{2})\b/g)];
+    const expectedStatus = statusMatches.length > 0 ? Number(statusMatches[statusMatches.length - 1][1]) : 200;
     const key = `${method} ${urlPath}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -305,7 +316,8 @@ export function createDraftTape({
   storageStatePath = null,
 } = {}) {
   const safeId = validateSafeId(scenarioId, 'scenarioId');
-  const builderClass = `${safeId.split('-').map((p) => p[0].toUpperCase() + p.slice(1)).join('')}DataBuilder`;
+  const rawBuilderStem = safeId.split('-').map((p) => p[0].toUpperCase() + p.slice(1)).join('');
+  const builderClass = `${/^\d/.test(rawBuilderStem) ? `Scenario${rawBuilderStem}` : rawBuilderStem}DataBuilder`;
   const defaultBuilderRef = `${builderClass}.standard()`;
   return {
     schemaVersion: '1.0.0',
@@ -367,20 +379,19 @@ export function appendRecordedAction(
     .replace(/\/+/g, '/');
   const stepLabel = businessStep || `Complete ${sanitizedRouteLabel} workflow interaction`;
   const existingComp = resolveComponentFromDomainGraph(pageRoute || '/', domainGraph);
+  const routeAlphaSeg = String(pageRoute || 'main')
+    .replace(/^\/+|\/+$/g, '')
+    .split(/[^a-zA-Z0-9]+/)
+    .filter((p) => /^[a-zA-Z]/.test(p))
+    .slice(-1)
+    .map((p) => p[0].toUpperCase() + p.slice(1))
+    .join('');
   const stepObj = {
     stepIndex,
     intent: `${normalizedAction} ${locatorContract.value || locatorContract.role || pageRoute || 'control'}`,
     businessStep: stepLabel,
     pageRoute: pageRoute || '/',
-    componentCandidate:
-      existingComp ||
-      `${String(pageRoute || 'main')
-        .replace(/^\/+|\/+$/g, '')
-        .split(/[^a-zA-Z0-9]+/)
-        .filter(Boolean)
-        .slice(-1)
-        .map((p) => p[0].toUpperCase() + p.slice(1))
-        .join('') || 'Main'}SectionComponent`,
+    componentCandidate: existingComp || `${routeAlphaSeg || 'Main'}SectionComponent`,
     action: normalizedAction,
     ...(normalizedAction === 'press' ? { key: String(value || 'Enter').trim() || 'Enter' } : {}),
     locatorContract,
@@ -400,21 +411,25 @@ export function switchDraftActor(draftTape, { actorId, role, portalBaseUrl, stor
   const safeActor = validateSafeId(actorId, 'actorId');
   if (!Array.isArray(draftTape.actors)) draftTape.actors = [];
   if (!draftTape.actors.some((a) => a.actorId === safeActor)) {
-    const builderClass = `${String(draftTape.scenarioId || 'explore-draft')
+    const rawStem = String(draftTape.scenarioId || 'explore-draft')
       .split('-')
       .filter(Boolean)
       .map((p) => p[0].toUpperCase() + p.slice(1))
-      .join('')}DataBuilder`;
-    const actorMethod = safeActor
-      .split(/[^a-zA-Z0-9]+/)
-      .filter(Boolean)
-      .map((p, idx) => (idx === 0 ? p.toLowerCase() : p[0].toUpperCase() + p.slice(1)))
-      .join('') || 'standard';
+      .join('');
+    const builderClass = `${/^\d/.test(rawStem) ? `Scenario${rawStem}` : rawStem}DataBuilder`;
+    let actorMethod =
+      safeActor
+        .split(/[^a-zA-Z0-9]+/)
+        .filter(Boolean)
+        .map((p, idx) => (idx === 0 ? p.toLowerCase() : p[0].toUpperCase() + p.slice(1)))
+        .join('') || 'standard';
+    if (/^\d/.test(actorMethod)) actorMethod = `actor${actorMethod}`;
+    const resolvedPortalUrl = portalBaseUrl || draftTape.baseUrl;
     draftTape.actors.push({
       actorId: safeActor,
       role: role || safeActor,
       dataBuilderRef: `${builderClass}.${actorMethod}()`,
-      ...(portalBaseUrl ? { portalBaseUrl } : {}),
+      ...(resolvedPortalUrl ? { portalBaseUrl: resolvedPortalUrl } : {}),
       ...(storageStatePath ? { storageStatePath } : {}),
     });
   }

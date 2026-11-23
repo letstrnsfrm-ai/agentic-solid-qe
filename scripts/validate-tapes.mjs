@@ -477,6 +477,10 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
           errors.push(
             `${stepLabel} Invalid capturesVariable '${step.capturesVariable}'. Must be a safe identifier.`
           );
+        } else if (/(?:password|passcode|secret|token|api[_-]?key|ssn|cvv|\bpin\b|\botp\b)/i.test(step.capturesVariable)) {
+          errors.push(
+            `${stepLabel} Security Error: Refusing sensitive capturesVariable '${step.capturesVariable}'.`
+          );
         } else if (declaredVars.size > 0 && !declaredVars.has(step.capturesVariable)) {
           errors.push(
             `${stepLabel} capturesVariable '${step.capturesVariable}' is not declared in root capturedVariables.`
@@ -486,29 +490,35 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
     }
   }
 
-  if (Array.isArray(tape.networkContracts)) {
-    for (const nc of tape.networkContracts) {
-      if (!nc || typeof nc !== 'object' || Array.isArray(nc)) {
-        errors.push(`[${file}] networkContracts entry must be a non-null object.`);
-        continue;
-      }
-      checkUnknownKeys(nc, VALID_NETWORK_KEYS, `[${file} networkContracts]`, errors);
-      if (hasQuerySecretParam(nc.urlPattern)) {
-        errors.push(
-          `[${file}] networkContracts.urlPattern '${nc.urlPattern}' contains a secret query parameter (?api_key=, ?token=, ?password=, etc.).`
-        );
-      }
-      if (nc.clientCandidate !== undefined && !isSafeClassName(nc.clientCandidate)) {
-        errors.push(`[${file}] Invalid networkContracts.clientCandidate '${nc.clientCandidate}'.`);
-      }
-      if (nc.requestBuilderRef !== undefined && !isSafeMemberRef(nc.requestBuilderRef)) {
-        errors.push(`[${file}] Invalid networkContracts.requestBuilderRef '${nc.requestBuilderRef}'.`);
-      }
-      if (
-        nc.method !== undefined &&
-        !['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(String(nc.method))
-      ) {
-        errors.push(`[${file}] Invalid networkContracts.method '${nc.method}'.`);
+  if (tape.networkContracts !== undefined) {
+    if (!Array.isArray(tape.networkContracts)) {
+      errors.push(`[${file}] networkContracts must be an array.`);
+    } else {
+      for (const nc of tape.networkContracts) {
+        if (!nc || typeof nc !== 'object' || Array.isArray(nc)) {
+          errors.push(`[${file}] networkContracts entry must be a non-null object.`);
+          continue;
+        }
+        checkUnknownKeys(nc, VALID_NETWORK_KEYS, `[${file} networkContracts]`, errors);
+        if (typeof nc.urlPattern !== 'string' || !nc.urlPattern.trim()) {
+          errors.push(`[${file}] networkContracts entry missing required 'urlPattern'.`);
+        } else if (hasQuerySecretParam(nc.urlPattern)) {
+          errors.push(
+            `[${file}] networkContracts.urlPattern '${nc.urlPattern}' contains a secret query parameter (?api_key=, ?token=, ?password=, etc.).`
+          );
+        }
+        if (nc.clientCandidate !== undefined && !isSafeClassName(nc.clientCandidate)) {
+          errors.push(`[${file}] Invalid networkContracts.clientCandidate '${nc.clientCandidate}'.`);
+        }
+        if (nc.requestBuilderRef !== undefined && !isSafeMemberRef(nc.requestBuilderRef)) {
+          errors.push(`[${file}] Invalid networkContracts.requestBuilderRef '${nc.requestBuilderRef}'.`);
+        }
+        if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(String(nc.method || ''))) {
+          errors.push(`[${file}] Invalid networkContracts.method '${nc.method}'.`);
+        }
+        if (typeof nc.expectedStatus !== 'number' || !Number.isInteger(nc.expectedStatus) || nc.expectedStatus < 100 || nc.expectedStatus > 599) {
+          errors.push(`[${file}] Invalid networkContracts.expectedStatus '${nc.expectedStatus}'.`);
+        }
       }
     }
   }
@@ -592,6 +602,7 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         state.assertionType === 'toHaveURL' &&
         typeof state.expectedValueRef === 'string' &&
         /^\/[a-zA-Z0-9._/?=&%#:~-]*$/.test(state.expectedValueRef) &&
+        !state.expectedValueRef.startsWith('//') &&
         !state.expectedValueRef.includes('..') &&
         !hasQuerySecretParam(state.expectedValueRef);
       if (

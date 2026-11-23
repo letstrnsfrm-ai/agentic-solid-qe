@@ -283,7 +283,8 @@ function inspectSpec(rootDir, specArg) {
   const relCheck = path.relative(resolvedRoot, resolved);
   if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) return null;
   try {
-    if (fs.lstatSync(resolved).isSymbolicLink()) return null;
+    const st = fs.lstatSync(resolved);
+    if (st.isSymbolicLink() || !st.isFile()) return null;
     const realRoot = fs.realpathSync(resolvedRoot);
     const realTarget = fs.realpathSync(resolved);
     const realRel = path.relative(realRoot, realTarget);
@@ -304,7 +305,9 @@ function inspectSpec(rootDir, specArg) {
         .filter(Boolean)
     ),
   ];
-  const tapeMatch = src.match(/tapes\/([a-zA-Z0-9_-]+)\.json/);
+  const tapeMatch =
+    src.match(/tapes\/([a-zA-Z0-9_-]+)\.json/) ||
+    src.match(/Compiled from Session Tape:\s*([a-zA-Z0-9_-]+)/i);
   return {
     rel,
     tags,

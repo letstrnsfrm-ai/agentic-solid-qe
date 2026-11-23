@@ -1346,7 +1346,7 @@ export async function runAutonomousStep(
         session.status = 'paused-checkin';
         saveAutonomousSession(rootDir, session);
         const digest = formatCheckinDigest(session, updatedBp, {
-          trigger: 'checkin',
+          trigger: 'checkin-interval',
           message: `Final verification failed at static gate '${failedStageName}'.`,
           nowMs,
         });
@@ -1555,10 +1555,12 @@ export async function runAutonomousStep(
       });
     }
 
+    let didQuarantine = false;
     if (!vRes.ok) {
       const fKey = `spec:${applied?.specPath || applied?.componentMatch?.file || 'healed-spec'}`;
       session.failureCounts[fKey] = (session.failureCounts[fKey] || 0) + 1;
       if (session.failureCounts[fKey] >= maxFail || vRes.rolledBack) {
+        didQuarantine = true;
         quarantineAutonomousItem(rootDir, session, {
           key: fKey,
           reason: vRes.rolledBack
@@ -1573,6 +1575,7 @@ export async function runAutonomousStep(
       clearResolvedFailureArtifacts(rootDir);
     }
     const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
+    const healActionLabel = vRes.ok ? 'executed' : didQuarantine ? 'quarantined' : 'retry-failed';
     const decision = recordAutonomousDecision(
       rootDir,
       session,
@@ -1580,7 +1583,7 @@ export async function runAutonomousStep(
         cycle: session.cycleCount,
         gateId,
         skill: '03-drift-healer',
-        action: vRes.ok ? 'executed' : 'quarantined',
+        action: healActionLabel,
         chosenOptionId: isSharedTarget ? 'heal-apply-transactional' : 'heal-apply',
         chosenLabel: vRes.ok
           ? `Auto-healed ${isSharedTarget ? 'shared ' : ''}locator drift (${applied?.componentMatch?.file || 'component'})`
@@ -1594,7 +1597,7 @@ export async function runAutonomousStep(
     );
     const liveUpdate = formatLiveDecisionUpdate(decision, session, updatedBp, nowMs);
     if (!quiet) console.log(liveUpdate);
-    return { status: 'active', action: 'executed', decision, liveUpdate, verify: vRes, session, blueprint: updatedBp };
+    return { status: 'active', action: healActionLabel, decision, liveUpdate, verify: vRes, session, blueprint: updatedBp };
   }
 
   // 5B. Deterministic: 02-solid-architect (batch-compile unquarantined Session Tapes + fast verify)
@@ -1867,6 +1870,7 @@ export async function runAutonomousLoop(
     });
     results.push({ action: last.action, status: last.status, decision: last.decision || null });
     if (
+      last.status !== 'active' ||
       ['checkin-pause', 'checkin-interval', 'max-runtime', 'max-cycles', 'blocker-pause', 'completed', 'stopped', 'delegate-to-agent', 'all-quarantined'].includes(
         last.action
       )
@@ -2101,7 +2105,7 @@ Usage:
       cwd: rootDir,
       stdio: 'inherit',
     });
-    if (res.status === 0 && subCmd === 'finish' && subArgs.includes('--compile')) {
+    if (res.status === 0 && subCmd === 'finish' && subArgs.includes('--compile') && !subArgs.includes('--json')) {
       const updatedBp = buildOrchestrationBlueprint(rootDir);
       console.log('\n' + formatCompactBlueprint(updatedBp));
     }
@@ -2153,8 +2157,10 @@ Usage:
       /"status"\s*:\s*"healed"|^HEAL\s+\|\s+healed\b|Cortex Drift-Healer \(healed\)/m.test(res.stdout || '');
     if (didHeal) {
       clearResolvedFailureArtifacts(rootDir);
-      const updatedBp = buildOrchestrationBlueprint(rootDir);
-      console.log('\n' + formatCompactBlueprint(updatedBp));
+      if (!extraHealArgs.includes('--json')) {
+        const updatedBp = buildOrchestrationBlueprint(rootDir);
+        console.log('\n' + formatCompactBlueprint(updatedBp));
+      }
     }
     process.exit(res.status ?? 1);
   }

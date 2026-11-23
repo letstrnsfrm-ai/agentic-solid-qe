@@ -23,9 +23,15 @@ export interface ExploreHoldOptions {
   scenarioId?: string;
 }
 
-const CHECKPOINTS_DIR = path.resolve(process.cwd(), '.exploratory', 'checkpoints');
-const LIVE_SESSION_FILE = path.resolve(process.cwd(), '.exploratory', 'live-session.json');
-const RELEASE_SENTINEL_FILE = path.resolve(process.cwd(), '.exploratory', 'live-session.release');
+function getCheckpointsDir(): string {
+  return path.resolve(process.cwd(), '.exploratory', 'checkpoints');
+}
+function getLiveSessionFile(): string {
+  return path.resolve(process.cwd(), '.exploratory', 'live-session.json');
+}
+function getReleaseSentinelFile(): string {
+  return path.resolve(process.cwd(), '.exploratory', 'live-session.release');
+}
 
 const FORBIDDEN_CHECKPOINT_HOSTS = new Set([
   '0.0.0.0',
@@ -41,7 +47,7 @@ const FORBIDDEN_CHECKPOINT_HOSTS = new Set([
 ]);
 
 function decodeHexIpv4Mapped(bare: string): string | null {
-  const m = bare.match(/^(?:0*:)*ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  const m = bare.match(/^(?:0*:)*ffff:(?:0+:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
   if (!m) return null;
   const hi = parseInt(m[1], 16);
   const lo = parseInt(m[2], 16);
@@ -144,11 +150,12 @@ function assertNoSymlinkEscape(rootDir: string, targetPath: string): void {
 }
 
 function resolveSafeCheckpointPath(nameOrRelPath: string): string {
+  const checkpointsDir = getCheckpointsDir();
   const isRelPath = nameOrRelPath.startsWith('.exploratory/checkpoints/');
   const target = isRelPath
     ? path.resolve(process.cwd(), nameOrRelPath)
-    : path.resolve(CHECKPOINTS_DIR, `${nameOrRelPath.replace(/[^a-z0-9-]/gi, '-').toLowerCase()}.json`);
-  const rel = path.relative(CHECKPOINTS_DIR, target);
+    : path.resolve(checkpointsDir, `${nameOrRelPath.replace(/[^a-z0-9-]/gi, '-').toLowerCase()}.json`);
+  const rel = path.relative(checkpointsDir, target);
   if (rel.startsWith('..') || path.isAbsolute(rel) || !target.endsWith('.json')) {
     throw new Error(`Unsafe checkpoint path outside .exploratory/checkpoints/: ${nameOrRelPath}`);
   }
@@ -234,14 +241,13 @@ export async function restoreCheckpoint(
     );
   }
   const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8')) as Partial<ExploreCheckpoint>;
-  if (Array.isArray(checkpoint.cookies) && checkpoint.cookies.length > 0) {
-    await context.addCookies(checkpoint.cookies);
-  }
-
   const targetUrl =
     typeof checkpoint.url === 'string' && /^https?:\/\//i.test(checkpoint.url)
       ? assertSafeCheckpointUrl(checkpoint.url)
       : '';
+  if (Array.isArray(checkpoint.cookies) && checkpoint.cookies.length > 0) {
+    await context.addCookies(checkpoint.cookies);
+  }
   const localEntries = checkpoint.localStorage && typeof checkpoint.localStorage === 'object' ? checkpoint.localStorage : {};
   const sessionEntries = checkpoint.sessionStorage && typeof checkpoint.sessionStorage === 'object' ? checkpoint.sessionStorage : {};
 
@@ -291,14 +297,16 @@ export async function holdForExplore(
     readyAt: new Date().toISOString(),
   };
 
-  if (fs.existsSync(RELEASE_SENTINEL_FILE)) {
+  const releaseSentinelFile = getReleaseSentinelFile();
+  const liveSessionFile = getLiveSessionFile();
+  if (fs.existsSync(releaseSentinelFile)) {
     try {
-      fs.unlinkSync(RELEASE_SENTINEL_FILE);
+      fs.unlinkSync(releaseSentinelFile);
     } catch {
       /* ignore */
     }
   }
-  writePrivateJson(LIVE_SESSION_FILE, manifest);
+  writePrivateJson(liveSessionFile, manifest);
 
   if (process.env.PW_EXPLORE_HANDSHAKE === '1') {
     await new Promise<void>((resolve) => {
@@ -309,7 +317,7 @@ export async function holdForExplore(
         resolve();
       };
       const timer = setInterval(() => {
-        if (fs.existsSync(RELEASE_SENTINEL_FILE) || page.isClosed()) {
+        if (fs.existsSync(releaseSentinelFile) || page.isClosed()) {
           cleanup();
         }
       }, 200);

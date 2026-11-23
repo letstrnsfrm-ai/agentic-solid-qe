@@ -532,7 +532,9 @@ export function classifyFailureRootCause({
     httpStatuses.some((s) => s >= 500 && s < 600);
   const isMissingLocatorExpect =
     (/Received:\s*(?:<element\(s\) not found>|hidden)/i.test(err) ||
-      /\bexpect\(locator\)\.(?:toBeVisible|toBeEnabled|toBeAttached|toBeChecked)\b/i.test(err)) &&
+      (/\bexpect\(locator\)\.(?:toBeVisible|toBeAttached)\b/i.test(err) &&
+        !/locator resolved to\s+</i.test(err) &&
+        !/Received:\s*(?:disabled|unchecked|enabled|checked)\b/i.test(err))) &&
     /waiting for /i.test(err);
   const isAssertionMismatch =
     (/\b(?:Expected|Received):/i.test(err) ||
@@ -674,8 +676,33 @@ function findMatchingComponentProperty(projectRoot, failingLocator, specPath) {
         locTokens.every((t) => rhs.toLowerCase().includes(t) || propName.toLowerCase().includes(t));
 
       if (exactMatch || tokenMatch) {
-        const frameMatch = rhs.match(/^(frameLocator\([^)]*\)\.)/);
-        const prefix = frameMatch ? `${basePrefix}${frameMatch[1]}` : basePrefix;
+        let framePrefix = '';
+        if (rhs.startsWith('frameLocator(')) {
+          let i = 'frameLocator('.length;
+          let depth = 1;
+          let quote = null;
+          while (i < rhs.length && depth > 0) {
+            const ch = rhs[i];
+            if (quote) {
+              if (ch === '\\') {
+                i += 2;
+                continue;
+              }
+              if (ch === quote) quote = null;
+            } else if (ch === "'" || ch === '"' || ch === '`') {
+              quote = ch;
+            } else if (ch === '(') {
+              depth++;
+            } else if (ch === ')') {
+              depth--;
+            }
+            i++;
+          }
+          if (depth === 0 && rhs[i] === '.') {
+            framePrefix = rhs.slice(0, i + 1);
+          }
+        }
+        const prefix = framePrefix ? `${basePrefix}${framePrefix}` : basePrefix;
         return {
           filePath: file,
           relPath: path.relative(projectRoot, file).replace(/\\/g, '/'),
@@ -683,6 +710,7 @@ function findMatchingComponentProperty(projectRoot, failingLocator, specPath) {
           lineIndex: i,
           currentExpr: rhs,
           prefix,
+          basePrefix,
         };
       }
     }
@@ -728,10 +756,14 @@ function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
   }
   let cur = resolvedTarget;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      throw new Error(
-        `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
-      );
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(
+          `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
+        );
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;
@@ -928,7 +960,11 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
   if (componentMatch) {
     assertNoSymlinkEscape(projectRoot, componentMatch.filePath, 'component file');
     const compLines = fs.readFileSync(componentMatch.filePath, 'utf8').split('\n');
-    compLines[componentMatch.lineIndex] = `    this.${componentMatch.propertyName} = ${componentMatch.prefix}${cleanExpr};`;
+    const effectivePrefix =
+      cleanExpr.startsWith('frameLocator(') && componentMatch.basePrefix
+        ? componentMatch.basePrefix
+        : componentMatch.prefix;
+    compLines[componentMatch.lineIndex] = `    this.${componentMatch.propertyName} = ${effectivePrefix}${cleanExpr};`;
     fs.writeFileSync(componentMatch.filePath, compLines.join('\n'), 'utf8');
     result.appliedChanges.push(componentMatch.relPath);
   }

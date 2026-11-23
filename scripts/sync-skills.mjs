@@ -218,7 +218,10 @@ function assertSafeTargetDirectory(resolvedTarget, label = 'target directory') {
   if (
     forbiddenExact.has(normalized) ||
     (!isInsideTmp && forbiddenPrefixes.some((prefix) => normalized.startsWith(prefix))) ||
-    (!isInsideTmp && /^[A-Za-z]:\\(?:Windows|Program Files|Users)$/i.test(normalized))
+    (!isInsideTmp &&
+      (/^[A-Za-z]:\\?$/.test(normalized) ||
+        /^[A-Za-z]:\\Users\\?$/i.test(normalized) ||
+        /^[A-Za-z]:\\(?:Windows|Program Files|Program Files \(x86\)|ProgramData)(?:\\|$)/i.test(normalized)))
   ) {
     console.error(`❌ Refusing to run against protected system or home ${label}: '${normalized}'.`);
     process.exit(1);
@@ -235,9 +238,16 @@ function assertSafeTargetDirectory(resolvedTarget, label = 'target directory') {
     console.error(`❌ Refusing to target parent directory '${normalized}' containing SOURCE_ROOT.`);
     process.exit(1);
   }
-  if (fs.existsSync(normalized) && fs.lstatSync(normalized).isSymbolicLink()) {
-    console.error(`❌ Refusing to run against symbolic link ${label}: '${normalized}'.`);
-    process.exit(1);
+  try {
+    if (fs.lstatSync(normalized).isSymbolicLink()) {
+      console.error(`❌ Refusing to run against symbolic link ${label}: '${normalized}'.`);
+      process.exit(1);
+    }
+  } catch (err) {
+    if (err?.code !== 'ENOENT') {
+      console.error(`❌ Unable to inspect ${label}: '${normalized}'.`);
+      process.exit(1);
+    }
   }
 }
 
@@ -1146,6 +1156,7 @@ function backupPreExistingInstructionFiles() {
     const content = fs.readFileSync(existingPath, 'utf8');
     if (content.includes('agentic-solid-qe')) continue;
     const backupDest = path.join(TARGET_ROOT, '.agents/legacy-backups', item.backupName);
+    if (isUnsafeDest(backupDest)) continue;
     if (!fs.existsSync(backupDest)) {
       if (!dryRun) {
         fs.mkdirSync(path.dirname(backupDest), { recursive: true, mode: 0o700 });
@@ -1225,8 +1236,8 @@ const ALLOWED_PRUNE_PREFIXES = [
 ];
 const prunedFiles = [];
 for (const [oldRel, oldHash] of Object.entries(previousManifest.files)) {
-  if (Object.hasOwn(nextManagedFiles, oldRel)) continue;
   const normRel = String(oldRel || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (Object.hasOwn(nextManagedFiles, normRel)) continue;
   if (
     !normRel ||
     path.isAbsolute(normRel) ||
@@ -1458,7 +1469,7 @@ if (squadName) {
     { overwrite: false }
   );
 
-  if (fs.existsSync(targetDomainMemory)) {
+  if (!isUnsafeDest(targetDomainMemory) && fs.existsSync(targetDomainMemory)) {
     const mem = fs.readFileSync(targetDomainMemory, 'utf8');
     const relHub = `.agents/domain/domains/${cleanSquad}/index.md`;
     if (!mem.includes(relHub)) {

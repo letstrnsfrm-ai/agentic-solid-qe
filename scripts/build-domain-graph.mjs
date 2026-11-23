@@ -87,7 +87,7 @@ function parseShardFile(filePath, squadId = 'global', rootDir = process.cwd()) {
   const content = fs.readFileSync(filePath, 'utf8');
   const titleMatch = content.match(/^#\s+(.+)$/m);
   const title = titleMatch ? titleMatch[1].trim() : path.basename(filePath, '.md');
-  const routes = [...new Set([...content.matchAll(/`(\/[a-zA-Z0-9._/-]*)`/g)].map((m) => m[1]))];
+  const routes = [...new Set([...content.matchAll(/`(\/[a-zA-Z0-9._:/{}-]*)`/g)].map((m) => m[1]))];
   const provenance = parseProvenanceMetadata(content);
   const lines = content.split('\n').length;
 
@@ -189,7 +189,25 @@ export function buildDomainGraph({ rootDir = process.cwd(), writeToDisk = true }
     codeownersRules,
   };
 
-  if (writeToDisk && fs.existsSync(domainDir)) {
+  const isUnsafeWritePath = (targetPath) => {
+    const resolvedRoot = path.resolve(rootDir);
+    const resolvedTarget = path.resolve(targetPath);
+    if (!isWithinDir(resolvedTarget, resolvedRoot)) return true;
+    let cur = resolvedTarget;
+    while (cur !== resolvedRoot) {
+      try {
+        if (fs.lstatSync(cur).isSymbolicLink()) return true;
+      } catch (err) {
+        if (err?.code !== 'ENOENT') return true;
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    return false;
+  };
+
+  if (writeToDisk && fs.existsSync(domainDir) && !isUnsafeWritePath(graphOut)) {
     fs.writeFileSync(graphOut, JSON.stringify(graph, null, 2) + '\n', 'utf8');
   }
 
@@ -200,6 +218,24 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
   const domainDir = path.join(rootDir, '.agents/domain');
   const tapesDir = path.join(rootDir, '.exploratory/tapes');
   if (!fs.existsSync(tapesDir)) return [];
+
+  const isUnsafeWritePath = (targetPath) => {
+    const resolvedRoot = path.resolve(rootDir);
+    const resolvedTarget = path.resolve(targetPath);
+    if (!isWithinDir(resolvedTarget, resolvedRoot)) return true;
+    let cur = resolvedTarget;
+    while (cur !== resolvedRoot) {
+      try {
+        if (fs.lstatSync(cur).isSymbolicLink()) return true;
+      } catch (err) {
+        if (err?.code !== 'ENOENT') return true;
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    return false;
+  };
 
   const existingGraph = buildDomainGraph({ rootDir, writeToDisk: false });
   const indexedRoutes = new Set(Object.keys(existingGraph.routeIndex));
@@ -243,10 +279,11 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
     const targetShardsDir = matchedHub
       ? path.join(domainDir, 'domains', matchedHub.squad, 'shards')
       : path.join(domainDir, 'shards');
+    if (isUnsafeWritePath(targetShardsDir)) continue;
     fs.mkdirSync(targetShardsDir, { recursive: true });
 
     const shardPath = path.resolve(targetShardsDir, `${scenarioId}.md`);
-    if (!isWithinDir(shardPath, targetShardsDir) || fs.existsSync(shardPath)) continue;
+    if (!isWithinDir(shardPath, targetShardsDir) || isUnsafeWritePath(shardPath) || fs.existsSync(shardPath)) continue;
 
     const routes = new Set();
     const components = new Set();
@@ -264,7 +301,7 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
       }
     }
     const unindexed = [...routes].filter((r) => !indexedRoutes.has(r));
-    if (unindexed.length === 0 && existingGraph.summary.totalShards > 0) continue;
+    if (unindexed.length === 0 && existingGraph.summary.totalShards + createdShards.length > 0) continue;
 
     const routeList = unindexed.length > 0 ? unindexed : [...routes].length > 0 ? [...routes] : ['/'];
     const routeLines = routeList.map((r) => `- \`${r}\``).join('\n');
@@ -319,14 +356,14 @@ ${actorLines}${networkLines}`;
     const summaryText = String(tape.title || scenarioId).replace(/[\r\n]+/g, ' ').replace(/\|/g, '-').trim();
     if (matchedHub) {
       const hubIndexFile = path.join(rootDir, matchedHub.hubPath);
-      if (fs.existsSync(hubIndexFile)) {
+      if (!isUnsafeWritePath(hubIndexFile) && fs.existsSync(hubIndexFile)) {
         const hubContent = fs.readFileSync(hubIndexFile, 'utf8');
         if (!hubContent.includes(path.basename(shardPath))) {
           const row = `| **${summaryText}** | ${routeSummary} | \`${shardRel}\` | Auto-seeded from Session Tape |\n`;
           fs.appendFileSync(hubIndexFile, (hubContent.endsWith('\n') ? '' : '\n') + row, 'utf8');
         }
       }
-    } else if (fs.existsSync(domainMemoryPath)) {
+    } else if (!isUnsafeWritePath(domainMemoryPath) && fs.existsSync(domainMemoryPath)) {
       const memContent = fs.readFileSync(domainMemoryPath, 'utf8');
       if (!memContent.includes(path.basename(shardPath))) {
         const row = `| **${summaryText}** | \`${ownerSquad}\` | ${routeSummary} | \`${shardRel}\` | Auto-seeded from \`${entry.name}\` |\n`;
@@ -344,9 +381,14 @@ ${actorLines}${networkLines}`;
   return createdShards;
 }
 
-const isMain =
-  Boolean(process.argv[1]) &&
-  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
 if (isMain) {
   const seedFromTapes = process.argv.includes('--seed-from-tapes');
   const skipMap = process.argv.includes('--skip-map');

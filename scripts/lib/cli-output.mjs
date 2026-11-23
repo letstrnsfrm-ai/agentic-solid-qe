@@ -33,13 +33,25 @@ export function estimateTokens(text = '') {
   return Math.ceil(Math.max(words * 1.35, s.length / 4));
 }
 
-function walkMarkdownFiles(dir) {
+function walkMarkdownFiles(dir, rootDir = dir) {
   if (!fs.existsSync(dir)) return [];
+  const resolvedRoot = path.resolve(rootDir);
+  let cur = path.resolve(dir);
+  while (cur !== resolvedRoot) {
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) return [];
+    } catch {
+      return [];
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walkMarkdownFiles(full));
+    if (entry.isDirectory()) out.push(...walkMarkdownFiles(full, resolvedRoot));
     else if (entry.name.endsWith('.md')) out.push(full);
   }
   return out.sort();
@@ -50,15 +62,33 @@ function walkMarkdownFiles(dir) {
  * Zero file contents, secrets, or paths beyond aggregate numbers are emitted.
  */
 export function computeTokenFootprint(rootDir = process.cwd()) {
+  const resolvedRoot = path.resolve(rootDir);
   const readTok = (relPath) => {
-    const full = path.join(rootDir, relPath);
-    return fs.existsSync(full) ? estimateTokens(fs.readFileSync(full, 'utf8')) : 0;
+    const full = path.resolve(resolvedRoot, relPath);
+    let cur = full;
+    while (cur !== resolvedRoot) {
+      try {
+        if (fs.lstatSync(cur).isSymbolicLink()) return 0;
+      } catch {
+        return 0;
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    try {
+      const st = fs.lstatSync(full);
+      if (st.isSymbolicLink() || !st.isFile()) return 0;
+      return estimateTokens(fs.readFileSync(full, 'utf8'));
+    } catch {
+      return 0;
+    }
   };
   const agentsMdTokens = readTok('AGENTS.md');
   const copilotInstructionsTokens = readTok('.github/copilot-instructions.md');
 
-  const skillsDir = path.join(rootDir, '.agents/skills');
-  const mdFiles = walkMarkdownFiles(skillsDir);
+  const skillsDir = path.join(resolvedRoot, '.agents/skills');
+  const mdFiles = walkMarkdownFiles(skillsDir, resolvedRoot);
   let skillCount = 0;
   let maxSkillTokens = 0;
   let totalSkillTokens = 0;
@@ -150,9 +180,19 @@ export function capToTokens(text = '', maxTokens = 400, hint = 'narrow scope or 
   const clean = stripAnsi(text).replace(/\r\n/g, '\n');
   if (estimateTokens(clean) <= maxTokens) return clean;
   const trimSingleText = (str, suffix) => {
+    if (maxTokens <= 0) return '';
     const suffixTok = estimateTokens(suffix);
     const allowed = Math.max(0, maxTokens - suffixTok);
-    if (allowed === 0) return suffix.slice(0, Math.max(8, maxTokens * 4));
+    if (allowed === 0) {
+      let lo = 0;
+      let hi = suffix.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (estimateTokens(suffix.slice(0, mid)) <= maxTokens) lo = mid;
+        else hi = mid - 1;
+      }
+      return suffix.slice(0, lo);
+    }
     let lo = 0;
     let hi = str.length;
     while (lo < hi) {
@@ -194,10 +234,14 @@ export function summarizePlaywrightRun(stdout = '', stderr = '', { maxFailures =
   const combined = `${cleanOut}\n${cleanErr}`;
 
   const lastCount = (label) => {
-    const lineAnchored = [...combined.matchAll(new RegExp(`^\\s*(\\d+)\\s+${label}\\b`, 'gm'))];
+    const lineAnchored = [
+      ...combined.matchAll(new RegExp(`^\\s*(\\d+)\\s+${label}\\b(?:\\s*\\([^)]+\\))?\\s*$`, 'gm')),
+    ];
     if (lineAnchored.length > 0) return Number(lineAnchored[lineAnchored.length - 1][1]);
-    const anyMatches = [...combined.matchAll(new RegExp(`(\\d+)\\s+${label}\\b`, 'g'))];
-    return anyMatches.length > 0 ? Number(anyMatches[anyMatches.length - 1][1]) : 0;
+    const summaryCombo = [
+      ...combined.matchAll(new RegExp(`(?:^|,)\\s*(\\d+)\\s+${label}\\b(?:\\s*\\([^)]+\\))?(?:\\s*,|\\s*$)`, 'gm')),
+    ];
+    return summaryCombo.length > 0 ? Number(summaryCombo[summaryCombo.length - 1][1]) : 0;
   };
   const passed = lastCount('passed');
   const failed = lastCount('failed');
@@ -216,7 +260,7 @@ export function summarizePlaywrightRun(stdout = '', stderr = '', { maxFailures =
       for (let j = i + 1; j < Math.min(lines.length, i + 18) && excerpt.length <= maxErrorLines; j++) {
         const sub = lines[j].trim();
         if (!sub) continue;
-        if (/^\d+\)\s+\[/.test(sub)) break;
+        if (headerRe.test(sub)) break;
         if (
           /Error:|Timeout|expect\(|Received:|Expected:|waiting for|Locator:|error-context\.md|trace\.zip/i.test(sub)
         ) {
