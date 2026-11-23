@@ -714,6 +714,87 @@ function slugifyShardId(raw) {
   );
 }
 
+const MAX_DISCOVERY_HTML_BYTES = 2 * 1024 * 1024; // 2 MB cap
+
+function sanitizeMarkdownInline(raw, maxLen = 120) {
+  return String(raw ?? '')
+    .replace(/[\r\n\t\x00-\x1f\x7f\u2028\u2029\u202A-\u202E\u2066-\u2069]/g, ' ')
+    .replace(/[`|<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+}
+
+function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedTarget = path.resolve(targetPath);
+  const rel = path.relative(resolvedRoot, resolvedTarget);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Security Error: Path traversal detected for ${label}: '${targetPath}'.`);
+  }
+  let cur = resolvedTarget;
+  while (cur !== resolvedRoot) {
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(
+          `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
+        );
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolvedTarget;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(`Security Error: Realpath escapes workspace root for ${label}.`);
+    }
+  }
+  return resolvedTarget;
+}
+
+async function readBoundedResponseText(res, maxBytes = MAX_DISCOVERY_HTML_BYTES) {
+  const contentLength = Number(res.headers?.get?.('content-length') || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`Security Error: Discovery HTML response exceeds ${maxBytes}-byte safety cap.`);
+  }
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    const text = await res.text();
+    return text.slice(0, maxBytes);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let total = 0;
+  let out = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        break;
+      }
+      out += decoder.decode(value, { stream: true });
+    }
+    out += decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+  return out;
+}
+
 /**
  * Discovers top-level routes from `baseUrl` (via HTML anchor parsing with agent-browser fallback)
  * and scaffolds `.agents/domain/shards/<feature>.md` + registers them in `domain-memory.md`.
@@ -742,16 +823,17 @@ export async function discoverAndSeedLiveShards(
       const activeBase = new URL(baseHref);
       const resolved = new URL(rawHref, activeBase);
       if (resolved.origin !== activeBase.origin) return;
-      const routePath = resolved.pathname.replace(/\/+$/, '') || '/';
-      if (routePath === '/' || skipRoutes.has(routePath)) return;
+      const routePath = sanitizeMarkdownInline(resolved.pathname.replace(/\/+$/, '') || '/', 160);
+      if (!routePath.startsWith('/') || routePath === '/' || skipRoutes.has(routePath)) return;
       if (/\.(js|css|png|jpg|jpeg|svg|ico|pdf|zip|xml|json)$/i.test(routePath)) return;
       if (seenRoutes.has(routePath)) return;
-      const cleanLabel = String(rawText || '')
-        .replace(/<[^>]+>/g, '')
-        .replace(/&#39;/g, "'")
-        .replace(/&amp;/g, '&')
-        .replace(/\s+/g, ' ')
-        .trim();
+      const cleanLabel = sanitizeMarkdownInline(
+        String(rawText || '')
+          .replace(/<[^>]+>/g, '')
+          .replace(/&#39;/g, "'")
+          .replace(/&amp;/g, '&'),
+        80
+      );
       if (!cleanLabel || /^skip to/i.test(cleanLabel)) return;
       seenRoutes.add(routePath);
       discoveredLinks.push({ routePath, title: cleanLabel });
@@ -761,12 +843,13 @@ export async function discoverAndSeedLiveShards(
   };
 
   const addSpaCandidate = (rawId, rawLabel) => {
-    const cleanLabel = String(rawLabel || '')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&#39;/g, "'")
-      .replace(/&amp;/g, '&')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const cleanLabel = sanitizeMarkdownInline(
+      String(rawLabel || '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, '&'),
+      60
+    );
     if (!cleanLabel || cleanLabel.length < 2 || cleanLabel.length > 60 || /^skip to/i.test(cleanLabel)) return;
     const slug = slugifyShardId(rawId || cleanLabel);
     if (!slug || slug === 'home' || slug === 'root') return;
@@ -794,7 +877,7 @@ export async function discoverAndSeedLiveShards(
         continue;
       }
       if (res.ok) {
-        const html = await res.text();
+        const html = await readBoundedResponseText(res, MAX_DISCOVERY_HTML_BYTES);
         for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
           addCandidate(m[1], m[2], fetchUrl);
         }
@@ -809,7 +892,7 @@ export async function discoverAndSeedLiveShards(
           for (const m of html.matchAll(/<button\b[^>]*\b(?:data-tab|data-modal|data-target|aria-controls)\s*=\s*["']#?([^"']+)["'][^>]*>([\s\S]*?)<\/button>/gi)) {
             addSpaCandidate(m[1], m[2]);
           }
-          for (const m of html.matchAll(/<label\b[^>]*>[\s\S]*?<input\b[^>]*\btype\s*=\s*["']radio["'][^>]*>([\s\S]*?)<\/label>/gi)) {
+          for (const m of html.matchAll(/<label\b[^>]*>(?:(?!(?:<\/label>))[\s\S]){0,1000}?<input\b[^>]*\btype\s*=\s*["']radio["'][^>]*>((?:(?!(?:<\/label>))[\s\S]){0,500}?)<\/label>/gi)) {
             addSpaCandidate('', m[1]);
           }
         }
@@ -839,38 +922,48 @@ export async function discoverAndSeedLiveShards(
   const finalRoutes =
     selected.length > 0
       ? selected.slice(0, safeMax)
-      : [{ routePath: parsedBase.pathname || '/', title: `${graph.targetApp?.appName || 'Main'} Landing` }];
+      : [
+          {
+            routePath: sanitizeMarkdownInline(parsedBase.pathname || '/', 160) || '/',
+            title: sanitizeMarkdownInline(`${graph.targetApp?.appName || 'Main'} Landing`, 80),
+          },
+        ];
 
-  const shardsDir = path.join(rootDir, '.agents/domain/shards');
+  const shardsDir = assertNoSymlinkEscape(rootDir, path.join(rootDir, '.agents/domain/shards'), 'domain shards directory');
   fs.mkdirSync(shardsDir, { recursive: true });
   const today = new Date().toISOString().slice(0, 10);
   const createdShards = [];
-  const domainMemoryPath = path.join(rootDir, '.agents/domain/domain-memory.md');
+  const domainMemoryPath = assertNoSymlinkEscape(
+    rootDir,
+    path.join(rootDir, '.agents/domain/domain-memory.md'),
+    'domain-memory.md'
+  );
   let memText = readTextSafe(domainMemoryPath);
 
   for (const item of finalRoutes) {
-    const slug = slugifyShardId(item.title || item.routePath);
+    const safeTitle = sanitizeMarkdownInline(item.title, 80) || 'Feature';
+    const safeRoute = sanitizeMarkdownInline(item.routePath, 160) || '/';
+    const slug = slugifyShardId(safeTitle || safeRoute);
     const shardRel = `.agents/domain/shards/${slug}.md`;
-    const shardAbs = path.join(rootDir, shardRel);
+    const shardAbs = assertNoSymlinkEscape(rootDir, path.join(rootDir, shardRel), shardRel);
     if (!fs.existsSync(shardAbs)) {
-      const shardContent = `# Feature Shard: ${item.title} (${item.routePath})
+      const shardContent = `# Feature Shard: ${safeTitle} (${safeRoute})
 
 - **Owner Squad:** \`@org/qe-core\`
 - **Last Verified:** \`${today}\`
-- **Routes:** \`${item.routePath}\`
+- **Routes:** \`${safeRoute}\`
 - **Published Capabilities:** *(none yet)*
 
 ## 1. Discovered Business Rules & UI Contracts
-- Top-level route \`${item.routePath}\` (${item.title}) discovered during Stage 0 bootstrap.
+- Top-level route \`${safeRoute}\` (${safeTitle}) discovered during Stage 0 bootstrap.
 - Ready for 1-test-at-a-time exploration via \`npx cortex orchestrate --explore start --shard ${slug}\`.
 `;
       fs.writeFileSync(shardAbs, shardContent, 'utf8');
-      createdShards.push({ shardId: slug, route: item.routePath, title: item.title, path: shardRel });
+      createdShards.push({ shardId: slug, route: safeRoute, title: safeTitle, path: shardRel });
     }
     if (memText && !memText.includes(shardRel)) {
       const tableHeader = '| :--- | :--- | :--- | :--- | :--- |';
-      const safeTitle = String(item.title || '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').trim();
-      const row = `| **${safeTitle}** | \`@org/qe-core\` | \`${item.routePath}\` | \`${shardRel}\` | Auto-discovered feature shard |`;
+      const row = `| **${safeTitle}** | \`@org/qe-core\` | \`${safeRoute}\` | \`${shardRel}\` | Auto-discovered feature shard |`;
       if (memText.includes(tableHeader)) {
         memText = memText.replace(tableHeader, () => `${tableHeader}\n${row}`);
       }
@@ -893,7 +986,7 @@ export async function discoverAndSeedLiveShards(
  */
 export function ensureCiPipelineConfigured(rootDir = process.cwd()) {
   const targetRel = '.github/workflows/playwright-ci.yml';
-  const targetAbs = path.join(rootDir, targetRel);
+  const targetAbs = assertNoSymlinkEscape(rootDir, path.join(rootDir, targetRel), targetRel);
   if (fs.existsSync(targetAbs)) {
     return { status: 'already-configured', file: targetRel };
   }

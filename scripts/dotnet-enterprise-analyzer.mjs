@@ -265,10 +265,73 @@ export function parseSpecFlowBindings(csFiles, scanRoot) {
   };
 }
 
-function isSafeRegexPattern(pattern) {
+export function isSafeRegexPattern(pattern) {
   if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > 200) return false;
-  // Reject obvious nested-quantifier ReDoS constructs like (a+)+, (.*)*, (\w+)+
-  if (/\([^)]*[+*?][^)]*\)[+*?{]/.test(pattern)) return false;
+  // Reject backreferences (\1..\9) and excessive repetition counts (>100)
+  if (/\\[1-9]/.test(pattern)) return false;
+  for (const m of pattern.matchAll(/\{(\d+)(?:,(\d*))?\}/g)) {
+    const min = Number(m[1]);
+    const max = m[2] ? Number(m[2]) : min;
+    if (min > 100 || max > 100) return false;
+  }
+  // Track nested group depth to reject quantified groups containing inner quantifiers or alternations (ReDoS)
+  const stack = [];
+  let inClass = false;
+  let prevWasQuantifier = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '\\') {
+      i++;
+      prevWasQuantifier = false;
+      continue;
+    }
+    if (inClass) {
+      if (ch === ']') inClass = false;
+      prevWasQuantifier = false;
+      continue;
+    }
+    if (ch === '[') {
+      inClass = true;
+      prevWasQuantifier = false;
+      continue;
+    }
+    if (ch === '(') {
+      stack.push({ hasQuantifier: false, hasAlternation: false });
+      prevWasQuantifier = false;
+      continue;
+    }
+    if (ch === '|') {
+      if (stack.length > 0) stack[stack.length - 1].hasAlternation = true;
+      prevWasQuantifier = false;
+      continue;
+    }
+    if (ch === ')') {
+      const group = stack.pop();
+      const next = pattern[i + 1] || '';
+      const isQuantified = next === '+' || next === '*' || next === '{';
+      if (group && isQuantified && (group.hasQuantifier || group.hasAlternation)) {
+        return false;
+      }
+      if (stack.length > 0 && group) {
+        if (group.hasQuantifier || isQuantified) stack[stack.length - 1].hasQuantifier = true;
+        if (group.hasAlternation) stack[stack.length - 1].hasAlternation = true;
+      }
+      prevWasQuantifier = false;
+      continue;
+    }
+    if (ch === '+' || ch === '*' || ch === '{') {
+      if (prevWasQuantifier) return false;
+      if (stack.length > 0) stack[stack.length - 1].hasQuantifier = true;
+      prevWasQuantifier = true;
+      continue;
+    }
+    if (ch === '?') {
+      // Allow lazy modifier (? after +/*/}/?) once, but mark group quantified if standalone
+      prevWasQuantifier = false;
+      continue;
+    }
+    prevWasQuantifier = false;
+  }
   return true;
 }
 

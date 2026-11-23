@@ -14,6 +14,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertSafeTargetHttpUrl } from './report-cloud.mjs';
+import { isSafeRegexPattern } from './dotnet-enterprise-analyzer.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1145,8 +1146,14 @@ async function cmdStart(args) {
     const openTarget = ckUrl || currentUrl;
     const ckOrigin = ckUrl ? new URL(ckUrl).origin : null;
     if (Array.isArray(ck.cookies) && ck.cookies.length > 0) {
-      const tmpStateFile = path.join(os.tmpdir(), `asqe-ck-${process.pid}-${Date.now()}.json`);
+      const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-ck-'));
+      const tmpStateFile = path.join(tmpStateDir, 'state.json');
       try {
+        try {
+          fs.chmodSync(tmpStateDir, 0o700);
+        } catch {
+          /* non-POSIX */
+        }
         const origins = ckOrigin
           ? [
               {
@@ -1162,7 +1169,7 @@ async function cmdStart(args) {
         runAgentBrowser(session, ['state', 'load', tmpStateFile], { allowFail: true });
       } finally {
         try {
-          if (fs.existsSync(tmpStateFile)) fs.unlinkSync(tmpStateFile);
+          fs.rmSync(tmpStateDir, { recursive: true, force: true });
         } catch {
           /* ignore */
         }
@@ -1349,8 +1356,8 @@ export function validateSafeCaptureRequest({ varName, from = 'url', expr = '' } 
     throw new Error('Security Error: Capture --expr exceeds 256-character safety limit.');
   }
   if (from === 'url') {
-    if (cleanExpr && /\([^)]*[+*][^)]*\)[+*?{]/.test(cleanExpr)) {
-      throw new Error('Security Error: Capture regex rejected due to nested quantifier (ReDoS protection).');
+    if (cleanExpr && !isSafeRegexPattern(cleanExpr)) {
+      throw new Error('Security Error: Capture regex rejected due to unsafe ReDoS construct or excessive quantifier.');
     }
     return { varName, from, expr: cleanExpr };
   }
