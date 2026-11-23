@@ -415,10 +415,23 @@ const REQUIRE_ENV_HELPER_CODE = `function requireEnv(name: string): string {
 
 `;
 
-function inferDefaultValueForProperty(propName, roleHint = 'standard') {
+/**
+ * A tape is "negative auth" when it was explored with the boundary-analysis charter
+ * or recorded a 401/403 contract. Redacted passwords in such tapes were deliberately
+ * invalid, so they must never resolve to the valid TEST_PASSWORD credential.
+ */
+export function isNegativeAuthTape(tape) {
+  if (String(tape?.charter || '').toLowerCase() === 'boundary-analysis') return true;
+  return (tape?.networkContracts || []).some((nc) => [401, 403].includes(Number(nc?.expectedStatus)));
+}
+
+export const INVALID_PASSWORD_EXPR = "process.env.TEST_INVALID_PASSWORD ?? 'invalid-test-credential'";
+
+export function inferDefaultValueForProperty(propName, roleHint = 'standard', negativeAuth = false) {
   const lower = String(propName || '').toLowerCase();
   if (lower === 'role') return roleHint;
   if (lower.includes('username')) return 'standard_user';
+  if (negativeAuth && lower.includes('password')) return { __envExpr: INVALID_PASSWORD_EXPR };
   if (SENSITIVE_BUILDER_PROP_REGEX.test(toKebabCase(propName).replace(/-/g, '_'))) {
     const envVar = lower.includes('password')
       ? 'TEST_PASSWORD'
@@ -522,6 +535,7 @@ export function compileSessionTape({
 
   // 2. Analyze Data Builder Requirements (DIP)
   const builderRequirements = new Map(); // BuilderClass -> Map(methodName -> Map(propName -> sampleVal))
+  const negativeAuth = isNegativeAuthTape(tape);
   function registerBuilderRef(refStr, roleHint = 'standard') {
     const parsed = parseBuilderRef(refStr);
     if (!parsed || parsed.isCapturedVar) return;
@@ -535,7 +549,7 @@ export function compileSessionTape({
     const propMap = methodMap.get(parsed.methodName);
     if (parsed.topProperty) {
       if (!propMap.has(parsed.topProperty)) {
-        propMap.set(parsed.topProperty, inferDefaultValueForProperty(parsed.topProperty, roleHint));
+        propMap.set(parsed.topProperty, inferDefaultValueForProperty(parsed.topProperty, roleHint, negativeAuth));
       }
     }
   }

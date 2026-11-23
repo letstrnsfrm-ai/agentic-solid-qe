@@ -6214,3 +6214,17 @@ test('framework-hardening-batch-6: SSRF, autonomous quarantine, compiler, healer
 
 
 
+
+test('7. Negative-auth tapes compile invalid password sentinel, not valid TEST_PASSWORD (#35)', async () => {
+  const { isNegativeAuthTape, inferDefaultValueForProperty, INVALID_PASSWORD_EXPR } = await import(
+    './compile-tape.mjs'
+  );
+  assert.equal(isNegativeAuthTape({ charter: 'boundary-analysis' }), true);
+  assert.equal(isNegativeAuthTape({ charter: 'happy-path', networkContracts: [{ expectedStatus: 401 }] }), true);
+  assert.equal(isNegativeAuthTape({ charter: 'happy-path', networkContracts: [{ expectedStatus: 200 }] }), false);
+  assert.deepEqual(inferDefaultValueForProperty('password', 'standard', true), { __envExpr: INVALID_PASSWORD_EXPR });
+  assert.ok(!INVALID_PASSWORD_EXPR.includes('TEST_PASSWORD'));
+  assert.deepEqual(inferDefaultValueForProperty('password', 'standard', false), {
+    __envExpr: "requireEnv('TEST_PASSWORD')",
+  });
+});
