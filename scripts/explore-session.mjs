@@ -1011,7 +1011,29 @@ function getFlagValue(args, flag, fallback = undefined) {
   return args[idx + 1];
 }
 
-function printHelp() {
+function printHelp(subCmd = '') {
+  if (subCmd === 'finish') {
+    console.log(`Usage: cortex explore finish [options]
+
+Finalize & validate Session Tape, release browser, optionally compile, verify single spec, or promote API seeder.
+
+Options:
+  --scenario <id>       Scenario ID for .exploratory/tapes/<id>.json
+  --title "<title>"     Human-readable scenario title
+  --charter <charter>   Valid values: happy-path-baseline, boundary-analysis, state-interruption,
+                        chaos-network-500, multi-persona-auth, api-contract, cross-portal-handoff,
+                        accessibility, visual-regression, e2e-migration
+  --tags "@p0,@smoke"   Comma-separated Playwright execution tags
+  --assert-url <route>  Append a toHaveURL expectedState before finalizing
+  --assert-text "<txt>" Append a toContainText expectedState before finalizing
+  --compile             Compile Session Tape to SOLID TypeScript immediately
+  --verify              Run verify:fast on the compiled spec
+  --emit-seeder         Promote mutating API contracts to a StateSeederContract
+  --keep-browser        Keep browser daemon running after finish
+  --json                Emit structured JSON output
+`);
+    return;
+  }
   console.log(`Usage: cortex explore <subcommand> [options]
 
 Subcommands:
@@ -1023,6 +1045,7 @@ Subcommands:
                 cortex explore act <click|fill|select|check|press|goto|assert> [args...] [--step "<business>"] [--scope main] [--json]
   batch       Execute JSON array of actions/assertions in 1 round-trip with pruned -i delta + errors:
                 cortex explore batch '[["fill","@e2","val"],["click","@e5"],["assert","@e9","toBeVisible"]]' [--step "<business>"] [--scope main] [--json]
+  refresh     Re-hydrate the active refMap from a fresh live snapshot after async XHR/modal transitions
   actor       Switch portal/actor mid-session carrying capturedVariables:
                 cortex explore actor <actorId> [--url <portal-url>] [--auth <.auth/p.json>] [--json]
   capture     Capture a runtime variable (e.g. quoteId) for cross-portal reuse:
@@ -1846,8 +1869,8 @@ async function cmdFinish(args) {
 async function main() {
   const args = process.argv.slice(2);
   const cmd = args[0];
-  if (!cmd || cmd === '--help' || cmd === '-h') {
-    printHelp();
+  if (!cmd || cmd === '--help' || cmd === '-h' || args.slice(1).includes('--help') || args.slice(1).includes('-h')) {
+    printHelp(cmd && !cmd.startsWith('-') ? cmd : '');
     return;
   }
   if (cmd === 'start') return cmdStart(args.slice(1));

@@ -6656,3 +6656,29 @@ test('Bad URL', async ({ page }) => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('CLI guardrails: unknown cortex subcommand fails fast (#55) & explore <subcmd> --help does not execute (#56)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-cli-guard-'));
+  try {
+    // #55: unknown subcommand typo must exit 1, suggest 'compile', and NOT scaffold ./compile-tape/
+    const typoRes = runNode(SYNC_SCRIPT, ['compile-tape', 'demo.json'], tmpDir);
+    assert.equal(typoRes.status, 1);
+    assert.match(typoRes.stderr, /Unknown subcommand 'compile-tape'/);
+    assert.match(typoRes.stderr, /Did you mean 'compile'\?/);
+    assert.equal(fs.existsSync(path.join(tmpDir, 'compile-tape')), false, 'must not create typo directory');
+
+    const typo2 = runNode(SYNC_SCRIPT, ['audti'], tmpDir);
+    assert.equal(typo2.status, 1);
+    assert.match(typo2.stderr, /Did you mean 'audit'\?/);
+
+    // #56: cortex explore finish --help prints finish usage + valid charters and exits 0 without touching session state
+    const helpRes = runNode(path.join(REPO_ROOT, 'scripts/explore-session.mjs'), ['finish', '--help'], tmpDir);
+    assert.equal(helpRes.status, 0, helpRes.stderr);
+    assert.match(helpRes.stdout, /Usage: cortex explore finish/);
+    assert.match(helpRes.stdout, /happy-path-baseline/);
+    assert.match(helpRes.stdout, /boundary-analysis/);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.exploratory')), false, 'must not mutate state on --help');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

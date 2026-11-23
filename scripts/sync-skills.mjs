@@ -152,11 +152,57 @@ for (let i = 0; i < rawArgs.length; i++) {
   }
 }
 
+function suggestClosestSubcommand(input, candidates) {
+  const s = String(input || '').toLowerCase();
+  if (!s) return null;
+  const prefix = candidates.find((c) => c.startsWith(s) || s.startsWith(c));
+  if (prefix) return prefix;
+  const levenshtein = (a, b) => {
+    const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+    for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        dp[i][j] = Math.min(
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+        );
+      }
+    }
+    return dp[a.length][b.length];
+  };
+  let best = null;
+  let bestDist = 3;
+  for (const c of candidates) {
+    const d = levenshtein(s, c);
+    if (d < bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+  return best;
+}
+
 if (positional[0] && ['init', 'sync'].includes(positional[0])) {
   command = positional[0];
   targetArg = positional[1] || '.';
 } else if (positional[0]) {
-  targetArg = positional[0];
+  const p0 = positional[0];
+  const looksLikePath =
+    p0 === '.' ||
+    p0 === '..' ||
+    p0.includes('/') ||
+    p0.includes('\\') ||
+    fs.existsSync(path.resolve(process.cwd(), p0));
+  if (!looksLikePath) {
+    const validCmds = ['init', 'sync', ...Object.keys(subcommandDelegateMap)];
+    const suggestion = suggestClosestSubcommand(p0, validCmds);
+    console.error(
+      `❌ Unknown subcommand '${p0}'.${suggestion ? ` Did you mean '${suggestion}'?` : ''} Run 'npx cortex --help' for usage.`
+    );
+    process.exit(1);
+  }
+  targetArg = p0;
 }
 
 function sanitizeAppName(rawName) {
