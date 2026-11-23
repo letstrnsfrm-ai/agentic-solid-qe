@@ -448,10 +448,81 @@ export function resolveSafeRepoOutputPath(targetPath, flagName, rootDir = ROOT) 
   return resolved;
 }
 
+export function syncReleaseManifests(rootDir, { version, date = null, highlights = [] } = {}) {
+  const cleanVersion = String(version || '').trim().replace(/^v/, '');
+  if (!/^\d+\.\d+\.\d+$/.test(cleanVersion)) {
+    throw new Error(`Invalid release version '${version}'. Expected SemVer X.Y.Z.`);
+  }
+  const isoDate = date || new Date().toISOString().slice(0, 10);
+  const updatedFiles = [];
+
+  const pkgPath = path.join(rootDir, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    if (pkg.version !== cleanVersion) {
+      pkg.version = cleanVersion;
+      fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
+      updatedFiles.push('package.json');
+    }
+  }
+
+  const lockPath = path.join(rootDir, 'package-lock.json');
+  if (fs.existsSync(lockPath)) {
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    let lockChanged = false;
+    if (lock.version !== cleanVersion) {
+      lock.version = cleanVersion;
+      lockChanged = true;
+    }
+    if (lock.packages && lock.packages[''] && lock.packages[''].version !== cleanVersion) {
+      lock.packages[''].version = cleanVersion;
+      lockChanged = true;
+    }
+    if (lockChanged) {
+      fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
+      updatedFiles.push('package-lock.json');
+    }
+  }
+
+  const changelogPath = path.join(rootDir, 'CHANGELOG.json');
+  if (fs.existsSync(changelogPath)) {
+    const changelog = JSON.parse(fs.readFileSync(changelogPath, 'utf8'));
+    let changelogChanged = false;
+    if (changelog.latestVersion !== cleanVersion) {
+      changelog.latestVersion = cleanVersion;
+      changelogChanged = true;
+    }
+    if (!Array.isArray(changelog.releases)) {
+      changelog.releases = [];
+    }
+    if (changelog.releases[0]?.version !== cleanVersion) {
+      const cleanHighlights = (highlights || [])
+        .map((h) => String(h || '').trim())
+        .filter(Boolean)
+        .slice(0, 5);
+      changelog.releases.unshift({
+        version: cleanVersion,
+        date: isoDate,
+        highlights:
+          cleanHighlights.length > 0 ? cleanHighlights : [`Automated release v${cleanVersion}.`],
+        nextActions: [`Run \`npx cortex upgrade\` to sync v${cleanVersion}.`],
+      });
+      changelogChanged = true;
+    }
+    if (changelogChanged) {
+      fs.writeFileSync(changelogPath, `${JSON.stringify(changelog, null, 2)}\n`, 'utf8');
+      updatedFiles.push('CHANGELOG.json');
+    }
+  }
+
+  return { version: cleanVersion, updatedFiles };
+}
+
 function parseCliArgs(argv) {
   const envBefore = process.env.GITHUB_EVENT_BEFORE || null;
   const options = {
     dryRun: false,
+    syncManifests: false,
     output: null,
     jsonMeta: null,
     beforeSha: envBefore ? assertValidSha(envBefore, 'GITHUB_EVENT_BEFORE') : null,
@@ -460,6 +531,8 @@ function parseCliArgs(argv) {
     const arg = argv[i];
     if (arg === '--dry-run') {
       options.dryRun = true;
+    } else if (arg === '--sync-manifests') {
+      options.syncManifests = true;
     } else if (arg === '--output' && argv[i + 1]) {
       options.output = resolveSafeRepoOutputPath(argv[i + 1], '--output');
       i += 1;
@@ -554,6 +627,20 @@ function main() {
     diff,
     compareBaseRef,
   });
+
+  if (options.syncManifests && !options.dryRun) {
+    const commitHighlights = commits
+      .map((c) => String(c.subject || '').trim())
+      .filter((s) => s && !/^Merge (pull request|branch)\b/i.test(s));
+    const uniqueHighlights = [...new Set(commitHighlights)];
+    const syncRes = syncReleaseManifests(ROOT, {
+      version: nextTag,
+      highlights: uniqueHighlights.length > 0 ? uniqueHighlights : [releaseTitle],
+    });
+    if (syncRes.updatedFiles.length > 0) {
+      console.log(`📦 Synced release manifests for ${nextTag}: ${syncRes.updatedFiles.join(', ')}`);
+    }
+  }
 
   if (options.output) {
     fs.mkdirSync(path.dirname(options.output), { recursive: true });
