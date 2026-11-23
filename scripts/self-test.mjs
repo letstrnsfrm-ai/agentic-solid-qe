@@ -6215,6 +6215,21 @@ test('framework-hardening-batch-6: SSRF, autonomous quarantine, compiler, healer
 
 
 
+test('autonomous-mode: resume honors --target-specs override (#31)', async () => {
+  const { startAutonomousSession, resumeAutonomousSession } = await import('./lib/autonomous-mode.mjs');
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-auto-ts-'));
+  try {
+    startAutonomousSession(tmpRoot, { goal: 'g', targetSpecs: 3 });
+    const kept = resumeAutonomousSession(tmpRoot, { goal: 'g2' });
+    assert.equal(kept.objectives.targetSpecs, 3, 'omitting --target-specs keeps existing target');
+    const raised = resumeAutonomousSession(tmpRoot, { targetSpecs: '5' });
+    assert.equal(raised.objectives.targetSpecs, 5);
+    assert.throws(() => resumeAutonomousSession(tmpRoot, { targetSpecs: 'abc' }), /Invalid --target-specs/);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test('7. Negative-auth tapes compile invalid password sentinel, not valid TEST_PASSWORD (#35)', async () => {
   const { isNegativeAuthTape, inferDefaultValueForProperty, INVALID_PASSWORD_EXPR } = await import(
     './compile-tape.mjs'
