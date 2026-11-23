@@ -1,7 +1,17 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.16",
+  "latestVersion": "0.48.17",
   "releases": [
+    {
+      "version": "0.48.17",
+      "date": "2026-11-23",
+      "highlights": [
+        "fix(verify): respect playwright.config.ts workers setting by default and only pass --workers when explicitly set via CLI or PW_WORKERS (#58)"
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.17."
+      ]
+    },
     {
       "version": "0.48.16",
       "date": "2026-11-23",

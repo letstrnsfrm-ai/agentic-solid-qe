@@ -111,6 +111,19 @@ function spawnAsync(command, args, { cwd, env = process.env, inherit = false } =
   });
 }
 
+export function resolveExplicitWorkers(workers = null, env = process.env) {
+  const raw =
+    workers !== null && workers !== undefined && String(workers).trim() !== ''
+      ? workers
+      : env?.PW_WORKERS !== undefined && String(env.PW_WORKERS).trim() !== ''
+        ? env.PW_WORKERS
+        : null;
+  if (raw === null) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.max(1, Math.min(32, Math.floor(n)));
+}
+
 export async function runFastVerify({
   rootDir = process.cwd(),
   fast = false,
@@ -123,13 +136,14 @@ export async function runFastVerify({
   skipTests = false,
   withEngine = false,
   skipMap = fast,
-  workers = 4,
+  workers = null,
   quiet = false,
   compact = false,
 } = {}) {
   const tStart = performance.now();
   const safeSpecs = sanitizeSpecList(specs, rootDir);
-  const safeWorkers = Math.max(1, Math.min(32, Number.isFinite(Number(workers)) ? Math.floor(Number(workers)) : 4));
+  const explicitWorkers = resolveExplicitWorkers(workers);
+  const workerArgs = explicitWorkers !== null ? [`--workers=${explicitWorkers}`] : [];
   const safeMaxAffected = Math.max(1, Number.isFinite(Number(maxAffected)) ? Math.floor(Number(maxAffected)) : 10);
   const captureTests = quiet || compact;
 
@@ -299,9 +313,9 @@ export async function runFastVerify({
       const pwBin = resolveLocalBin('playwright', rootDir);
       const pwArgs = [...pwBin.prefixArgs, 'test'];
       if (effectiveSpecs.length > 0) {
-        pwArgs.push(...effectiveSpecs, '--project=chromium', `--workers=${safeWorkers}`, '--pass-with-no-tests');
+        pwArgs.push(...effectiveSpecs, '--project=chromium', ...workerArgs, '--pass-with-no-tests');
       } else {
-        pwArgs.push('--project=chromium', `--workers=${safeWorkers}`, '--grep', '@smoke|@p0', '--pass-with-no-tests');
+        pwArgs.push('--project=chromium', ...workerArgs, '--grep', '@smoke|@p0', '--pass-with-no-tests');
       }
       if (captureTests) {
         pwArgs.push('--reporter=line');
@@ -357,7 +371,7 @@ export async function runFastVerify({
           'test',
           ...regSpecs,
           '--project=chromium',
-          `--workers=${safeWorkers}`,
+          ...workerArgs,
           '--pass-with-no-tests',
           ...(captureTests ? ['--reporter=line'] : []),
         ];
@@ -438,7 +452,7 @@ Usage:
   const compactOut = !jsonOut && isCompactMode(args);
 
   const specs = [];
-  let workers = 4;
+  let workers = null;
   let baseRef = '';
   let maxAffected = 10;
   for (let i = 0; i < args.length; i++) {
