@@ -6682,3 +6682,48 @@ test('CLI guardrails: unknown cortex subcommand fails fast (#55) & explore <subc
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('verify-fast: respects playwright.config.ts workers by default and only passes --workers when explicit (#58)', async () => {
+  const { resolveExplicitWorkers, runFastVerify } = await import('./verify-fast.mjs');
+  assert.equal(resolveExplicitWorkers(null, {}), null);
+  assert.equal(resolveExplicitWorkers(undefined, { PW_WORKERS: '2' }), 2);
+  assert.equal(resolveExplicitWorkers(1, {}), 1);
+  assert.equal(resolveExplicitWorkers(99, {}), 32);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-vf58-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://example.com', '--name', 'VF58']);
+    assert.equal(initRes.status, 0, initRes.stderr);
+    const binDir = path.join(tmpDir, 'node_modules', '.bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const argsLog = path.join(tmpDir, 'pw-args.log');
+    const tscStub = path.join(binDir, process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
+    const pwStub = path.join(binDir, process.platform === 'win32' ? 'playwright.cmd' : 'playwright');
+    fs.writeFileSync(tscStub, process.platform === 'win32' ? '@exit /b 0\r\n' : '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.writeFileSync(
+      pwStub,
+      process.platform === 'win32'
+        ? `@echo %* > "${argsLog}"\r\n@exit /b 0\r\n`
+        : `#!/bin/sh\necho "$@" > "${argsLog}"\nexit 0\n`,
+      { mode: 0o755 }
+    );
+
+    const prevPwWorkers = process.env.PW_WORKERS;
+    delete process.env.PW_WORKERS;
+    try {
+      const resDefault = await runFastVerify({ rootDir: tmpDir, fast: false, skipMap: true, quiet: true });
+      assert.equal(resDefault.ok, true, JSON.stringify(resDefault.failedStage));
+      const defaultArgs = fs.readFileSync(argsLog, 'utf8');
+      assert.ok(!defaultArgs.includes('--workers='), `Expected no --workers flag by default, got: ${defaultArgs}`);
+
+      const resExplicit = await runFastVerify({ rootDir: tmpDir, fast: false, skipMap: true, workers: 2, quiet: true });
+      assert.equal(resExplicit.ok, true, JSON.stringify(resExplicit.failedStage));
+      const explicitArgs = fs.readFileSync(argsLog, 'utf8');
+      assert.ok(explicitArgs.includes('--workers=2'), `Expected --workers=2 when explicit, got: ${explicitArgs}`);
+    } finally {
+      if (prevPwWorkers !== undefined) process.env.PW_WORKERS = prevPwWorkers;
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
