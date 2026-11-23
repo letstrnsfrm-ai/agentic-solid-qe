@@ -1,7 +1,20 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.15",
+  "latestVersion": "0.48.16",
   "releases": [
+    {
+      "version": "0.48.16",
+      "date": "2026-11-23",
+      "highlights": [
+        "fix(audit-solid): allowlist standard XML/SOAP/W3C xmlns namespace URIs in DIP Hardcoded URL Ban (#53)",
+        "fix(self-test): guard framework-repo-only tests & fixtures so cortex verify --with-engine passes 0-fail in adopter repos (#54)",
+        "fix(cli): reject unknown cortex subcommands with closest-command suggestion instead of scaffolding typo directories (#55)",
+        "fix(explore): intercept --help/-h on any cortex explore <subcommand> and show valid --charter values for finish (#56)"
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.16."
+      ]
+    },
     {
       "version": "0.48.15",
       "date": "2026-11-23",
