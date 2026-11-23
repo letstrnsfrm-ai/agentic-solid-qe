@@ -188,10 +188,14 @@ function getDiffBreakdown(baseRef, headRef = 'HEAD') {
     if (parts.length < 3) continue;
     const added = parts[0] === '-' ? 0 : Number(parts[0]) || 0;
     const deleted = parts[1] === '-' ? 0 : Number(parts[1]) || 0;
-    const filePath = parts.slice(2).join('\t').trim();
+    const rawPath = parts.slice(2).join('\t').trim();
+    const normalizedPath = rawPath
+      .replace(/\{[^{}]*? => ([^{}]*?)\}/g, '$1')
+      .replace(/^.* => /, '')
+      .replace(/\/+/g, '/');
     totalInsertions += added;
     totalDeletions += deleted;
-    statsByFile.set(filePath, { added, deleted });
+    statsByFile.set(normalizedPath, { added, deleted });
   }
 
   const files = [];
@@ -412,10 +416,14 @@ export function resolveSafeRepoOutputPath(targetPath, flagName, rootDir = ROOT) 
   }
   let cur = resolved;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      throw new Error(
-        `Security Error: Refusing to write ${flagName} to symbolic link '${cur === resolved ? targetPath : path.relative(resolvedRoot, cur)}'.`
-      );
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(
+          `Security Error: Refusing to write ${flagName} to symbolic link '${cur === resolved ? targetPath : path.relative(resolvedRoot, cur)}'.`
+        );
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;
@@ -547,6 +555,7 @@ function main() {
   });
 
   if (options.output) {
+    fs.mkdirSync(path.dirname(options.output), { recursive: true });
     fs.writeFileSync(options.output, markdown, 'utf8');
   }
 
@@ -561,6 +570,7 @@ function main() {
   };
 
   if (options.jsonMeta) {
+    fs.mkdirSync(path.dirname(options.jsonMeta), { recursive: true });
     fs.writeFileSync(options.jsonMeta, JSON.stringify(meta, null, 2), 'utf8');
   }
 

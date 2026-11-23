@@ -5271,6 +5271,228 @@ test('framework-hardening-batch-2: cross-origin goto, inline assert role suffix,
   }
 });
 
+test('framework-hardening-batch-3: compact multi-attr refs, ErrorBannerContract, formatCompactCompileReport, multi-actor dataBuilderRef, validateTapeObject null/secret guards, heal-drift consoleErrors/401/parens, context-pack route/traversal, autonomous namespace/elapsed resume, capToTokens, subcommand --help, dangling symlink & SpecFlow', async () => {
+  const { formatCompactOutput, createDraftTape, switchDraftActor, finalizeDraftTape } = await import('./explore-session.mjs');
+  const { formatCompactCompileReport, compileSessionTape } = await import('./compile-tape.mjs');
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const { classifyFailureRootCause, extractFailingLocatorFromError } = await import('./heal-drift.mjs');
+  const { loadTsPathAliases, parseImports } = await import('./impact-graph.mjs');
+  const { buildContextPack } = await import('./context-pack.mjs');
+  const {
+    startAutonomousSession,
+    resumeAutonomousSession,
+    quarantineAutonomousItem,
+    isItemQuarantined,
+    loadAutonomousSession,
+  } = await import('./lib/autonomous-mode.mjs');
+  const { capToTokens } = await import('./lib/cli-output.mjs');
+  const { collectPendingPatches } = await import('./upgrade-framework.mjs');
+  const { applyBuilderDataOverrides } = await import('./tape-cli.mjs');
+
+  // 1. Multi-attribute compact snapshot ref formatting
+  const formatted = formatCompactOutput({
+    status: 'ready',
+    url: 'https://the-internet.herokuapp.com/add_remove_elements/',
+    snapshot: ['- heading "Add/Remove Elements" [level=3, ref=e10]', '- button "Add Element" [ref=e11]'],
+  });
+  assert.match(formatted, /@e10\[heading "Add\/Remove Elements"\]/);
+  assert.match(formatted, /@e11\[button "Add Element"\]/);
+
+  // 2. Multi-actor draft tape populates dataBuilderRef on every actor & passes schema validation
+  const multiDraft = createDraftTape({
+    scenarioId: 'cross-actor-check',
+    baseUrl: 'https://example.com/portal',
+    actor: 'requester',
+    storageStatePath: '.auth/requester.json',
+  });
+  switchDraftActor(multiDraft, {
+    actorId: 'approver',
+    role: 'approver',
+    portalBaseUrl: 'https://example.com/admin',
+    storageStatePath: '.auth/approver.json',
+  });
+  multiDraft.semanticSteps.push({
+    stepIndex: 1,
+    intent: 'Open portal',
+    businessStep: 'Open requester portal',
+    pageRoute: '/portal',
+    componentCandidate: 'PortalComponent',
+    action: 'goto',
+    locatorContract: { strategy: 'url', value: '/portal' },
+    actor: 'requester',
+  });
+  multiDraft.expectedStates.push({
+    description: 'Verify portal visible',
+    assertionType: 'toBeEnabled',
+    targetComponent: 'PortalComponent',
+    targetProperty: 'root',
+    expectedValueRef: 'true',
+  });
+  const finalizedMulti = finalizeDraftTape(multiDraft, 'cross-actor-check');
+  assert.equal(finalizedMulti.persona.storageStatePath, '.auth/requester.json');
+  assert.equal(finalizedMulti.actors.length, 2);
+  assert.deepEqual(validateTapeObject(finalizedMulti, 'cross-actor-check.json'), []);
+
+  // 3. validateTapeObject rejects persona: null, null array elements, and secret query in toHaveURL
+  const badTape = JSON.parse(JSON.stringify(finalizedMulti));
+  badTape.persona = null;
+  badTape.actors = [null];
+  badTape.expectedStates = [{ description: 'x', assertionType: 'toHaveURL', targetComponent: 'A', targetProperty: 'root', expectedValueRef: '/cb?token=secret123' }];
+  const badErrs = validateTapeObject(badTape, 'bad.json');
+  assert.ok(badErrs.some((e) => /persona must be a non-null object/.test(e)));
+  assert.ok(badErrs.some((e) => /actors entry must be a non-null object/.test(e)));
+  assert.ok(badErrs.some((e) => /expectedValueRef/.test(e)));
+
+  // 4. formatCompactCompileReport counts extend-existing / overwrite / reuse-existing
+  const compactRep = formatCompactCompileReport({
+    mode: 'applied',
+    scenarioId: 'demo-p0',
+    operations: [
+      { action: 'create', file: 'tests/demo-p0.spec.ts' },
+      { action: 'extend-existing', file: 'src/pages/demo.page.ts' },
+      { action: 'reuse-existing', file: 'src/components/nav.component.ts' },
+    ],
+  });
+  assert.match(compactRep, /create=1 update=1 reuse=1/);
+
+  // 5. heal-drift: consoleErrors triggers app-regression, stack line :401:12 is NOT auth-drift, balanced parens in locator
+  const consoleClass = classifyFailureRootCause({
+    errorText: 'TimeoutError: waiting for getByRole("button")',
+    consoleErrors: ['Uncaught TypeError: Cannot read properties of undefined'],
+  });
+  assert.equal(consoleClass.category, 'app-regression');
+  const line401Class = classifyFailureRootCause({
+    errorText: 'TimeoutError: waiting for getByRole("button")\n    at tests/checkout.spec.ts:401:12',
+  });
+  assert.equal(line401Class.category, 'locator-drift');
+  const balancedLoc = extractFailingLocatorFromError(
+    "TimeoutError: locator.click: waiting for locator('body').getByRole('button', { name: 'Save (Draft)' })"
+  );
+  assert.equal(balancedLoc, "getByRole('button', { name: 'Save (Draft)' })");
+
+  // 6. capToTokens truncates single-line oversized input and respects small maxTokens
+  const singleLineCapped = capToTokens('x'.repeat(2000), 30, 'use --full');
+  assert.ok(singleLineCapped.length < 400);
+  assert.match(singleLineCapped, /trimmed to <=30 tok/);
+
+  // 7. sync-skills delegates subcommand --help instead of intercepting with global help
+  const subHelp = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts/sync-skills.mjs'), 'gaps', '--help'], {
+    encoding: 'utf8',
+  });
+  assert.equal(subHelp.status, 0);
+  assert.match(subHelp.stdout, /cortex coverage/);
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-batch3-'));
+  try {
+    fs.mkdirSync(path.join(tmpRoot, '.agents/domain/shards'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, '.exploratory/tapes'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'src/domains/billing/data'), { recursive: true });
+
+    // 8. impact-graph: tsconfig.json with https:// $schema parses cleanly & parseImports ignores export const
+    fs.writeFileSync(
+      path.join(tmpRoot, 'tsconfig.json'),
+      JSON.stringify({ $schema: 'https://json.schemastore.org/tsconfig', compilerOptions: { paths: { '@custom/*': ['src/custom/*'] } } })
+    );
+    const aliases = loadTsPathAliases(tmpRoot);
+    assert.deepEqual(aliases['@custom/*'], ['src/custom/*']);
+    fs.writeFileSync(
+      path.join(tmpRoot, 'src/domains/billing/data/invoice.builder.ts'),
+      'export class InvoiceBuilder {\n  static standard() {\n    return {\n      note: "O\\"Brien",\n    };\n  }\n}\n'
+    );
+    const parsedImps = parseImports(
+      path.join(tmpRoot, 'src/index.ts'),
+      'export const CONST = { a: 1 };\nexport { InvoiceBuilder } from "./domains/billing/data/invoice.builder";',
+      tmpRoot,
+      aliases
+    );
+    assert.equal(parsedImps.length, 1);
+    assert.deepEqual(parsedImps[0].symbols, ['InvoiceBuilder']);
+
+    // 9. tape-cli federated builder scan + escaped quote replacement without duplicate key
+    applyBuilderDataOverrides(tmpRoot, [{ ref: 'InvoiceBuilder.standard().note', value: 'Updated' }]);
+    const updatedBuilder = fs.readFileSync(path.join(tmpRoot, 'src/domains/billing/data/invoice.builder.ts'), 'utf8');
+    assert.match(updatedBuilder, /note:\s*"Updated"/);
+    assert.equal((updatedBuilder.match(/\bnote\s*:/g) || []).length, 1);
+
+    // 10. context-pack: --route / does not match /billing shard, and --tape ../../package blocks traversal
+    fs.writeFileSync(path.join(tmpRoot, '.agents/domain/shards/billing.md'), '# Billing\n- `/billing`\n');
+    fs.writeFileSync(path.join(tmpRoot, 'package.json'), JSON.stringify({ name: 'secret-pkg' }));
+    const rootPack = buildContextPack(tmpRoot, { route: '/' });
+    assert.equal(rootPack.shards.length, 0);
+    const travPack = buildContextPack(tmpRoot, { tape: '../../package' });
+    assert.equal(travPack.tape ?? null, null);
+
+    // 11. autonomous-mode: namespace-agnostic quarantine + elapsed-time resume + NaN rejection
+    const t0 = Date.now() - 4 * 60 * 60 * 1000;
+    startAutonomousSession(tmpRoot, { goal: 'Test', interval: '30m', maxRuntime: '1h', maxCycles: 5, nowMs: t0 });
+    const sess = loadAutonomousSession(tmpRoot);
+    quarantineAutonomousItem(tmpRoot, sess, { key: '04-ci-pipeline:ci-init-github', reason: 'loop', nowMs: t0 + 1000 });
+    assert.equal(isItemQuarantined(sess, 'ci-init-github'), true);
+    const now = Date.now();
+    const resumed = resumeAutonomousSession(tmpRoot, { nowMs: now });
+    assert.ok(resumed.schedule.maxRuntimeMs > now - t0);
+    assert.throws(() => resumeAutonomousSession(tmpRoot, { maxCycles: 'abc', nowMs: now }), /Invalid --max-cycles/);
+
+    // 12. upgrade-framework: allowlists synced skill patches & blocks dangling symlink destinations
+    fs.mkdirSync(path.join(tmpRoot, '.agents/upgrade-patches/.agents/skills/01-cli-explorer'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, '.agents/upgrade-patches/.agents/skills/01-cli-explorer/SKILL.md'), '# updated\n');
+    const patches = collectPendingPatches(tmpRoot);
+    assert.ok(patches.some((p) => p.targetRel === '.agents/skills/01-cli-explorer/SKILL.md'));
+
+    // 13. compile-tape: ErrorBannerContract initializes errorBanner & dismissErrorButton + sanitizes UI jargon in step titles
+    fs.writeFileSync(path.join(tmpRoot, '.agents/domain/domain-graph.json'), JSON.stringify({ targetApp: { baseUrl: 'https://example.com' }, shards: [] }));
+    const errTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'error-banner-check',
+      title: 'Error Banner Check',
+      charter: 'boundary-analysis',
+      baseUrl: 'https://example.com/dropdown',
+      recordedAt: new Date().toISOString(),
+      tags: ['@p0'],
+      persona: { role: 'user', dataBuilderRef: 'ErrorBannerCheckDataBuilder.standard()' },
+      preconditions: ['Error banner visible'],
+      networkContracts: [],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'click submit',
+          businessStep: 'Complete /dropdown workflow interaction',
+          pageRoute: '/dropdown',
+          componentCandidate: 'ErrorBannerComponent',
+          action: 'click',
+          locatorContract: { strategy: 'getByRole', role: 'button', value: 'Submit' },
+        },
+      ],
+      expectedStates: [
+        {
+          description: 'Verify count',
+          assertionType: 'toHaveCount',
+          targetComponent: 'ErrorBannerComponent',
+          targetProperty: 'errorBanner',
+          expectedValueRef: 'ErrorBannerCheckDataBuilder.standard().expectedCount',
+        },
+      ],
+    };
+    fs.writeFileSync(path.join(tmpRoot, '.exploratory/tapes/error-banner-check.json'), JSON.stringify(errTape, null, 2));
+    const compRun = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, 'scripts/compile-tape.mjs'), 'error-banner-check', '--apply'],
+      { cwd: tmpRoot, encoding: 'utf8' }
+    );
+    assert.equal(compRun.status, 0, compRun.stderr || compRun.stdout);
+    const compCode = fs.readFileSync(path.join(tmpRoot, 'src/components/error-banner.component.ts'), 'utf8');
+    assert.match(compCode, /readonly errorBanner: Locator;/);
+    assert.match(compCode, /readonly dismissErrorButton: Locator;/);
+    assert.match(compCode, /this\.dismissErrorButton = this\.errorBanner\.getByRole\('button'\);/);
+    const specCode = fs.readFileSync(path.join(tmpRoot, 'tests/error-banner-check.spec.ts'), 'utf8');
+    assert.doesNotMatch(specCode, /test\.step\([^)]*\bdropdown\b/i);
+    assert.match(specCode, /\.toHaveCount\(Number\(/);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
 
 
 

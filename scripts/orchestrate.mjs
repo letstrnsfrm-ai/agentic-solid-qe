@@ -128,9 +128,12 @@ function detectFailingTestArtifacts(rootDir) {
       const parsed = JSON.parse(rawResults);
       const visitSuite = (suite) => {
         for (const spec of suite.specs || []) {
-          const failedTest = (spec.tests || []).some((t) =>
-            (t.results || []).some((r) => r.status === 'failed' || r.status === 'timedOut')
-          );
+          const failedTest = (spec.tests || []).some((t) => {
+            const results = Array.isArray(t.results) ? t.results : [];
+            if (results.length === 0) return false;
+            const last = results[results.length - 1];
+            return last && (last.status === 'failed' || last.status === 'timedOut');
+          });
           if (failedTest) {
             failures.push({
               source: 'playwright-report/results.json',
@@ -195,12 +198,20 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
 
   // Check legacy Java/C# tests in rootDir and immediate parent if initialized inside e2e-playwright/
   let legacyCodeTests = [];
-  const manifestPath = path.join(rootDir, '.agents/domain/legacy-migration-manifest.json');
+  const manifestPath = path.join(rootDir, MIGRATION_MANIFEST_REL_PATH);
   const manifestRaw = readTextSafe(manifestPath);
   if (manifestRaw) {
     try {
       const mm = JSON.parse(manifestRaw);
-      legacyCodeTests = (mm.items || []).filter((i) => i.status !== 'compiled');
+      if (Array.isArray(mm.ledger) || Array.isArray(mm.wave0Prereqs)) {
+        const pendingLedger = (mm.ledger || []).filter((i) => i.status === 'pending');
+        const pendingWave0 = (mm.wave0Prereqs || []).filter((w) => w.status === 'pending');
+        legacyCodeTests = [...pendingWave0, ...pendingLedger];
+      } else if (Array.isArray(mm.items)) {
+        legacyCodeTests = mm.items.filter((i) => i.status !== 'compiled');
+      } else if (mm.items && typeof mm.items === 'object') {
+        legacyCodeTests = Object.values(mm.items).filter((i) => i.status !== 'compiled');
+      }
     } catch {
       /* ignore malformed manifest */
     }
@@ -473,8 +484,8 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
         ? 'All current shards are covered, but no Playwright CI workflow was detected.'
         : `${staleShards.length} domain shard(s) are stale and due for re-verification.`,
       command: !ciConfigured ? 'npx cortex orchestrate --ci-init' : 'npx cortex orchestrate --verify',
-      runArgs: null,
-      npmScript: 'verify',
+      runArgs: !ciConfigured ? [path.join(__dirname, 'orchestrate.mjs'), '--ci-init'] : null,
+      npmScript: !ciConfigured ? null : 'verify',
       autoRunnable: true,
       humanGate: !ciConfigured ? 'Review generated CI pipeline workflow.' : 'None.',
       ...(!ciConfigured
@@ -721,16 +732,15 @@ export async function discoverAndSeedLiveShards(
   const allowPrivateNet =
     process.env.CORTEX_ALLOW_PRIVATE_NET === '1' || process.env.CORTEX_ALLOW_PRIVATE_NET === 'true';
   await assertSafeResolvedCloudTarget(targetUrl, { allowPrivateNet });
-  const parsedBase = new URL(targetUrl);
-
   const discoveredLinks = [];
   const seenRoutes = new Set();
   const skipRoutes = new Set(['/', '/#', '/about', '/contact', '/privacy', '/terms', '/cdn-cgi']);
 
-  const addCandidate = (rawHref, rawText) => {
+  const addCandidate = (rawHref, rawText, baseHref) => {
     try {
-      const resolved = new URL(rawHref, parsedBase.origin);
-      if (resolved.origin !== parsedBase.origin) return;
+      const activeBase = new URL(baseHref);
+      const resolved = new URL(rawHref, activeBase);
+      if (resolved.origin !== activeBase.origin) return;
       const routePath = resolved.pathname.replace(/\/+$/, '') || '/';
       if (routePath === '/' || skipRoutes.has(routePath)) return;
       if (/\.(js|css|png|jpg|jpeg|svg|ico|pdf|zip|xml|json)$/i.test(routePath)) return;
@@ -769,7 +779,7 @@ export async function discoverAndSeedLiveShards(
       if (res.ok) {
         const html = await res.text();
         for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
-          addCandidate(m[1], m[2]);
+          addCandidate(m[1], m[2], fetchUrl);
         }
       }
       break;
@@ -1293,8 +1303,24 @@ export async function runAutonomousStep(
       });
     }
     if (finalVerify && !finalVerify.ok) {
-      // Verification failed -> let next cycle triage/heal rather than declaring complete
-      saveAutonomousSession(rootDir, session);
+      // Verification failed -> record decision and return so next cycle triages/heals with fresh blueprint instead of double-verifying
+      const updatedBp = buildOrchestrationBlueprint(rootDir, { squad });
+      const decision = recordAutonomousDecision(
+        rootDir,
+        session,
+        {
+          cycle: session.cycleCount,
+          gateId: 'final-verify',
+          skill: '03-drift-healer',
+          action: 'final-verify-failed',
+          chosenOptionId: 'triage-next-cycle',
+          chosenLabel: `Final verification failed at ${finalVerify.failedStage || 'tests'}`,
+          rationale: 'Deferring completion so next autonomous cycle can triage/heal with fresh failure artifacts.',
+          outcome: `failed:${finalVerify.failedStage || 'tests'}`,
+        },
+        { nowMs }
+      );
+      return { status: 'active', action: 'final-verify-failed', decision, verify: finalVerify, session, blueprint: updatedBp };
     } else {
       session.status = 'completed';
       recordAutonomousDecision(
@@ -1434,7 +1460,7 @@ export async function runAutonomousStep(
 
     const isHighConfDrift = triage?.rootCause?.category === 'locator-drift' && triage?.autoHealReady === true;
     if (!isHighConfDrift) {
-      const targetKey = `spec:${triage?.spec || bp.queuePreview?.failingArtifacts?.[0]?.title || 'failing-spec'}`;
+      const targetKey = `spec:${triage?.specPath || bp.queuePreview?.failingArtifacts?.[0]?.title || 'failing-spec'}`;
       const category = triage?.rootCause?.category === 'app-regression' ? 'app-regression' : 'ambiguous-drift';
       quarantineAutonomousItem(rootDir, session, {
         key: targetKey,
@@ -2031,7 +2057,7 @@ Usage:
       const updatedBp = buildOrchestrationBlueprint(rootDir);
       console.log('\n' + formatCompactBlueprint(updatedBp));
     }
-    process.exit(res.status ?? 0);
+    process.exit(res.status ?? 1);
   }
 
   const tapeIdx = args.indexOf('--tape');
@@ -2041,7 +2067,7 @@ Usage:
       cwd: rootDir,
       stdio: 'inherit',
     });
-    process.exit(res.status ?? 0);
+    process.exit(res.status ?? 1);
   }
 
   const ctxIdx = args.indexOf('--context');
@@ -2051,13 +2077,19 @@ Usage:
       cwd: rootDir,
       stdio: 'inherit',
     });
-    process.exit(res.status ?? 0);
+    process.exit(res.status ?? 1);
   }
 
   const healIdx = args.indexOf('--heal-action');
   if (healIdx !== -1) {
-    const mode = args[healIdx + 1] || 'dry-run';
-    const extraHealArgs = args.slice(healIdx + 2);
+    const rawNext = args[healIdx + 1];
+    const hasExplicitMode = Boolean(rawNext && !rawNext.startsWith('--'));
+    const mode = hasExplicitMode ? rawNext : 'dry-run';
+    if (mode !== 'dry-run' && mode !== 'apply') {
+      console.error(`❌ Invalid --heal-action mode '${mode}'. Expected 'dry-run' or 'apply'.`);
+      process.exit(1);
+    }
+    const extraHealArgs = args.slice(healIdx + (hasExplicitMode ? 2 : 1));
     const healCliArgs = mode === 'apply' ? ['--apply', ...extraHealArgs] : ['--dry-run', ...extraHealArgs];
     const res = spawnSync(process.execPath, [path.join(__dirname, 'heal-drift.mjs'), ...healCliArgs], {
       cwd: rootDir,
@@ -2068,7 +2100,7 @@ Usage:
       const updatedBp = buildOrchestrationBlueprint(rootDir);
       console.log('\n' + formatCompactBlueprint(updatedBp));
     }
-    process.exit(res.status ?? 0);
+    process.exit(res.status ?? 1);
   }
 
   if (args.includes('--ci-init')) {
@@ -2082,7 +2114,7 @@ Usage:
         cwd: rootDir,
         stdio: 'inherit',
       });
-      process.exit(vRes.status ?? 0);
+      process.exit(vRes.status ?? 1);
     }
     process.exit(0);
   }
@@ -2093,7 +2125,7 @@ Usage:
       cwd: rootDir,
       stdio: 'inherit',
     });
-    process.exit(res.status ?? 0);
+    process.exit(res.status ?? 1);
   }
 
   if (args.includes('--bootstrap')) {
@@ -2228,14 +2260,14 @@ Usage:
           cwd: rootDir,
           stdio: jsonOut ? 'pipe' : 'inherit',
         });
-        process.exit(res.status ?? 0);
+        process.exit(res.status ?? 1);
       } else if (blueprint.nextAction.npmScript) {
         const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
         const res = spawnSync(npmCmd, ['run', blueprint.nextAction.npmScript], {
           cwd: rootDir,
           stdio: jsonOut ? 'pipe' : 'inherit',
         });
-        process.exit(res.status ?? 0);
+        process.exit(res.status ?? 1);
       }
     }
   }

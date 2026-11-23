@@ -386,6 +386,9 @@
             "enum": [
               "toBeVisible",
               "toBeHidden",
+              "toBeEnabled",
+              "toBeDisabled",
+              "toBeChecked",
               "toHaveText",
               "toContainText",
               "toHaveCount",

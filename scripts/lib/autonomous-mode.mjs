@@ -151,10 +151,14 @@ export function startAutonomousSession(
   const maxRuntimeMs = parseDurationMs(maxRuntime, { allowNull: true });
   const normalizedRoutes = normalizeRoutes(routes);
   const safeMaxCycles = Math.max(1, Math.min(500, Math.floor(Number(maxCycles) || DEFAULT_MAX_CYCLES)));
-  const safeTargetSpecs =
-    targetSpecs !== null && targetSpecs !== undefined && String(targetSpecs).trim() !== ''
-      ? Math.max(1, Math.floor(Number(targetSpecs)))
-      : null;
+  const safeTargetSpecs = (() => {
+    if (targetSpecs === null || targetSpecs === undefined || String(targetSpecs).trim() === '') return null;
+    const n = Number(targetSpecs);
+    if (!Number.isFinite(n) || n < 1) {
+      throw new Error(`Invalid --target-specs value '${targetSpecs}'. Expected a positive integer.`);
+    }
+    return Math.max(1, Math.floor(n));
+  })();
 
   const isoNow = new Date(nowMs).toISOString();
   const shortId = crypto.randomBytes(3).toString('hex');
@@ -240,13 +244,18 @@ export function resumeAutonomousSession(
     session.schedule.intervalMs = ms;
     session.schedule.intervalLabel = formatDurationHuman(ms);
   }
+  const elapsedMs = Math.max(0, nowMs - (session.startedAtMs || nowMs));
   if (maxRuntime) {
     session.schedule.maxRuntimeMs = parseDurationMs(maxRuntime, { allowNull: true });
-  } else if (session.schedule.maxRuntimeMs && nowMs - (session.startedAtMs || nowMs) >= session.schedule.maxRuntimeMs) {
-    session.schedule.maxRuntimeMs += session.schedule.intervalMs || DEFAULT_CHECKIN_INTERVAL_MS;
+  } else if (session.schedule.maxRuntimeMs && elapsedMs >= session.schedule.maxRuntimeMs) {
+    session.schedule.maxRuntimeMs = elapsedMs + (session.schedule.intervalMs || DEFAULT_CHECKIN_INTERVAL_MS);
   }
-  if (maxCycles) {
-    session.schedule.maxCycles = Math.max(1, Math.min(500, Math.floor(Number(maxCycles))));
+  if (maxCycles !== null && maxCycles !== undefined && String(maxCycles).trim() !== '') {
+    const parsedCycles = Number(maxCycles);
+    if (!Number.isFinite(parsedCycles) || parsedCycles < 1) {
+      throw new Error(`Invalid --max-cycles value '${maxCycles}'. Expected a positive integer.`);
+    }
+    session.schedule.maxCycles = Math.max(1, Math.min(500, Math.floor(parsedCycles)));
   } else if (session.schedule.maxCycles && (session.cycleCount || 0) >= session.schedule.maxCycles) {
     session.schedule.maxCycles = Math.min(500, session.schedule.maxCycles + DEFAULT_MAX_CYCLES);
   }
@@ -366,11 +375,12 @@ export function isItemQuarantined(session, candidate) {
   if (!session || !Array.isArray(session.quarantined) || session.quarantined.length === 0) return false;
   const hay = String(candidate || '').trim().toLowerCase();
   if (!hay) return false;
-  const hayBare = hay.replace(/^(shard|spec|tape|option):/, '').replace(/\.md$/, '');
+  const hayBare = hay.replace(/^[^:]+:/, '').replace(/\.md$/, '');
   const hayBase = path.basename(hayBare);
   return session.quarantined.some((q) => {
-    const bare = q.key.replace(/^(shard|spec|tape|option):/, '').replace(/\.md$/, '');
-    if (hay === q.key || hayBare === bare || hayBase === bare) return true;
+    const qKey = String(q.key || '').trim().toLowerCase();
+    const bare = qKey.replace(/^[^:]+:/, '').replace(/\.md$/, '');
+    if (hay === qKey || hayBare === bare || hayBase === bare) return true;
     // Also match generated scenario IDs for a quarantined shard (e.g. `login-p0`, `--shard login`)
     const escaped = bare.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`(?:^|--shard\\s+)${escaped}(?:-(?:p[0-2]|negative|a11y))?(?:$|\\s)`).test(hay);

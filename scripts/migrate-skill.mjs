@@ -1268,16 +1268,26 @@ function registerSkillInAgentsAndCopilot(appliedList) {
   const skillRelPath = `.agents/skills/${defaultSkillId}/SKILL.md`;
   if (fs.existsSync(agentsPath)) {
     const content = fs.readFileSync(agentsPath, 'utf8');
-    if (!content.includes(skillRelPath)) {
+    if (!content.includes(skillRelPath) && !content.includes(`\`${defaultSkillId}\``)) {
       const lines = content.split('\n');
       let insertIdx = -1;
+      let isBulletFormat = false;
       for (let i = 0; i < lines.length; i++) {
         if (lines[i].includes('.agents/skills/05-skill-migrator/SKILL.md')) {
           insertIdx = i + 1;
+          isBulletFormat = false;
+          break;
+        }
+        if (/^\s*-\s+`05-skill-migrator`/.test(lines[i])) {
+          insertIdx = i + 1;
+          isBulletFormat = true;
           break;
         }
       }
-      const newRow = `| ${skillDescription.replace(/\|/g, '/')} | \`${defaultSkillId}\` | \`${skillRelPath}\` |`;
+      const compactDesc = skillDescription.replace(/\s+/g, ' ').trim().slice(0, 48);
+      const newRow = isBulletFormat
+        ? `- \`${defaultSkillId}\`: ${compactDesc}`
+        : `| ${skillDescription.replace(/\|/g, '/')} | \`${defaultSkillId}\` | \`${skillRelPath}\` |`;
       if (insertIdx !== -1) {
         lines.splice(insertIdx, 0, newRow);
         fs.writeFileSync(agentsPath, lines.join('\n'), 'utf8');

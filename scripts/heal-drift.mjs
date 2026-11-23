@@ -13,7 +13,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isCompactMode } from './lib/cli-output.mjs';
 import { getFileImpact } from './impact-graph.mjs';
 import { runFastVerify } from './verify-fast.mjs';
@@ -398,29 +398,60 @@ export function parsePlaywrightSnapshotYaml(yamlText) {
 /**
  * Extract failing locator expression from Playwright error text.
  */
+function extractSemanticCallsBalanced(text) {
+  const calls = [];
+  const startRe = /getBy(?:Role|TestId|Label|Placeholder|Text|AltText|Title)\(/g;
+  let m;
+  while ((m = startRe.exec(text)) !== null) {
+    let i = m.index + m[0].length;
+    let depth = 1;
+    let quote = null;
+    while (i < text.length && depth > 0) {
+      const ch = text[i];
+      if (quote) {
+        if (ch === '\\') {
+          i += 2;
+          continue;
+        }
+        if (ch === quote) quote = null;
+      } else if (ch === '\'' || ch === '"' || ch === '`') {
+        quote = ch;
+      } else if (ch === '(') {
+        depth++;
+      } else if (ch === ')') {
+        depth--;
+      }
+      i++;
+    }
+    if (depth === 0) {
+      calls.push(text.slice(m.index, i).trim());
+    }
+  }
+  return calls;
+}
+
 export function extractFailingLocatorFromError(errorText) {
   const text = String(errorText || '');
   // 1. Prefer the full chained expression on `waiting for ...` and extract its leaf semantic locator (e.g. `locator('body').getByRole(...)`)
   const waitingLine = text.match(/waiting for ([^\n]+)/i);
   if (waitingLine) {
     const chain = waitingLine[1].trim();
-    const semanticCalls = [...chain.matchAll(/getBy(?:Role|TestId|Label|Placeholder|Text)\([^)]*\)/g)];
+    const semanticCalls = extractSemanticCallsBalanced(chain);
     if (semanticCalls.length > 0) {
-      return semanticCalls[semanticCalls.length - 1][0].trim();
+      return semanticCalls[semanticCalls.length - 1];
     }
     const singleLoc = chain.match(/^locator\(['"`]([^'"`]+)['"`]\)/i);
     if (singleLoc) return singleLoc[1].trim();
     return chain;
   }
-  const patterns = [
-    /Locator:\s*([^\n]+)/i,
-    /(getBy(?:Role|TestId|Label|Placeholder|Text)\([^)]+\))/,
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) {
-      return (m[1] || m[2] || '').trim();
-    }
+  const locLine = text.match(/Locator:\s*([^\n]+)/i);
+  if (locLine) {
+    const lineCalls = extractSemanticCallsBalanced(locLine[1]);
+    return lineCalls.length > 0 ? lineCalls[lineCalls.length - 1] : locLine[1].trim();
+  }
+  const fallbackCalls = extractSemanticCallsBalanced(text);
+  if (fallbackCalls.length > 0) {
+    return fallbackCalls[fallbackCalls.length - 1];
   }
   return '';
 }
@@ -437,13 +468,21 @@ export function parseErrorContextArtifacts(projectRoot) {
     const content = readTextSafe(file);
     if (!content) continue;
     const specMatch = content.match(/(?:Test|Spec|File):\s*([^\n]+)/i);
+    let mtimeMs = 0;
+    try {
+      mtimeMs = fs.statSync(file).mtimeMs || 0;
+    } catch {
+      /* ignore */
+    }
     artifacts.push({
       file: path.relative(projectRoot, file).replace(/\\/g, '/'),
       specPath: specMatch ? specMatch[1].trim() : null,
       errorText: content,
       failingLocator: extractFailingLocatorFromError(content),
+      mtimeMs,
     });
   }
+  artifacts.sort((a, b) => (b.mtimeMs || 0) - (a.mtimeMs || 0));
   return artifacts;
 }
 
@@ -459,7 +498,7 @@ export function classifyFailureRootCause({
 }) {
   const err = String(errorText || '');
   const has401or403 =
-    /\b(?:401|403|unauthorized|forbidden)\b/i.test(err) ||
+    /(?:HTTP|status|statusCode|responded with)\s*:?\s*(?:401|403)\b|\b(?:unauthorized|forbidden)\b/i.test(err) ||
     httpStatuses.some((s) => s === 401 || s === 403);
   const redirectedToLogin =
     /\/(?:login|signin|sso)\b/i.test(snapshotUrl) && !/login|auth/i.test(String(specPath || ''));
@@ -474,7 +513,7 @@ export function classifyFailureRootCause({
   }
 
   const has5xx =
-    /(?:HTTP|status|statusCode|responded with)\s*:?\s*50[0-4]\b/i.test(err) ||
+    /(?:HTTP|status|statusCode|responded with)\s*:?\s*5\d{2}\b/i.test(err) ||
     httpStatuses.some((s) => s >= 500 && s < 600);
   const isAssertionMismatch =
     (/\b(?:Expected|Received):/i.test(err) ||
@@ -482,13 +521,15 @@ export function classifyFailureRootCause({
       /\bexpect\(locator\)\.(?:toContainText|toHaveText|toHaveValue|toHaveURL)\b.*failed/i.test(err)) &&
     !/TimeoutError.*waiting for/i.test(err);
 
-  if (has5xx || (consoleErrors.length > 0 && isAssertionMismatch) || isAssertionMismatch) {
+  if (has5xx || consoleErrors.length > 0 || isAssertionMismatch) {
     return {
       category: 'app-regression',
-      caseId: has5xx ? 6 : 7,
+      caseId: has5xx ? 6 : consoleErrors.length > 0 && !isAssertionMismatch ? 5 : 7,
       summary: has5xx
         ? 'First-party 5xx API/server error detected during test execution.'
-        : 'Assertion value mismatch (business logic or state regression) — preserve strict expect().',
+        : consoleErrors.length > 0 && !isAssertionMismatch
+          ? 'Uncaught runtime JS/console error detected during test execution.'
+          : 'Assertion value mismatch (business logic or state regression) — preserve strict expect().',
       neverWeakenAssertions: true,
     };
   }
@@ -718,7 +759,20 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
     assertSafePlaywrightLocatorExpr(options.to);
   }
   const artifacts = parseErrorContextArtifacts(projectRoot);
-  const activeArtifact = artifacts[0] || {};
+  let activeArtifact = artifacts[0] || {};
+  if (options.spec) {
+    const normSpec = String(options.spec).replace(/\\/g, '/').toLowerCase();
+    const specBase = path.basename(normSpec, '.spec.ts');
+    activeArtifact =
+      artifacts.find((a) => {
+        const aSpec = String(a.specPath || '').replace(/\\/g, '/').toLowerCase();
+        const aFile = String(a.file || '').replace(/\\/g, '/').toLowerCase();
+        return (
+          (aSpec && (aSpec.includes(normSpec) || normSpec.includes(aSpec))) ||
+          aFile.includes(specBase)
+        );
+      }) || {};
+  }
   const errorText = options.error || activeArtifact.errorText || '';
   const specPath = options.spec || activeArtifact.specPath || '';
   const failingLocator = options.locator || extractFailingLocatorFromError(errorText) || activeArtifact.failingLocator || '';
@@ -1001,7 +1055,15 @@ export function formatCompactHealResult(res) {
 }
 
 // CLI execution
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+const isMain =
+  Boolean(process.argv[1]) &&
+  (() => {
+    try {
+      return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+    } catch {
+      return import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+    }
+  })();
 if (isMain) {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
@@ -1015,8 +1077,11 @@ Usage:
   }
 
   const getArg = (flag) => {
+    const eqPrefix = `${flag}=`;
+    const eqArg = args.find((a) => a.startsWith(eqPrefix));
+    if (eqArg !== undefined) return eqArg.slice(eqPrefix.length) || undefined;
     const idx = args.indexOf(flag);
-    return idx >= 0 && args[idx + 1] ? args[idx + 1] : undefined;
+    return idx >= 0 && args[idx + 1] && !args[idx + 1].startsWith('--') ? args[idx + 1] : undefined;
   };
 
   healDriftWithGuardrail(process.cwd(), {

@@ -278,7 +278,7 @@ export async function runFastVerify({
       if (effectiveSpecs.length > 0) {
         pwArgs.push(...effectiveSpecs, '--project=chromium', `--workers=${safeWorkers}`, '--pass-with-no-tests');
       } else {
-        pwArgs.push('--project=chromium', '--grep', '@smoke|@p0', '--pass-with-no-tests');
+        pwArgs.push('--project=chromium', `--workers=${safeWorkers}`, '--grep', '@smoke|@p0', '--pass-with-no-tests');
       }
       if (captureTests) {
         pwArgs.push('--reporter=line');

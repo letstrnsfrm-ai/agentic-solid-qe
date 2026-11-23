@@ -134,10 +134,13 @@ export function summarizeTapeCompact(tape) {
 
 function loadTapeById(rootDir, tapeId) {
   const safeId = String(tapeId || '').replace(/\.json$/i, '').trim();
-  if (!safeId) return null;
-  const direct = path.join(rootDir, '.exploratory/tapes', `${safeId}.json`);
-  if (fs.existsSync(direct)) return { path: direct, data: readJsonSafe(direct) };
-  const allTapes = walkFiles(path.join(rootDir, '.exploratory/tapes'), (f) => f.endsWith('.json'));
+  if (!safeId || safeId.includes('..') || /[\\/]/.test(safeId)) return null;
+  const tapesRoot = path.resolve(rootDir, '.exploratory/tapes');
+  const direct = path.resolve(tapesRoot, `${safeId}.json`);
+  if ((direct === tapesRoot || direct.startsWith(`${tapesRoot}${path.sep}`)) && fs.existsSync(direct)) {
+    return { path: direct, data: readJsonSafe(direct) };
+  }
+  const allTapes = walkFiles(tapesRoot, (f) => f.endsWith('.json'));
   for (const f of allTapes) {
     const data = readJsonSafe(f);
     if (data?.scenarioId === safeId || path.basename(f, '.json') === safeId) {
@@ -153,6 +156,7 @@ function collectShards(rootDir, { route = '', squad = '' } = {}) {
     ...walkFiles(path.join(rootDir, '.agents/domain/domains'), (f) => f.includes('/shards/') && f.endsWith('.md')),
   ];
   const normRoute = String(route || '').trim().toLowerCase();
+  const routeSlug = normRoute.replace(/^\/+/, '');
   const normSquad = String(squad || '').trim().toLowerCase();
   const shards = [];
   for (const file of shardFiles) {
@@ -166,10 +170,10 @@ function collectShards(rootDir, { route = '', squad = '' } = {}) {
       !normRoute ||
       routes.some((r) => {
         const rl = r.toLowerCase();
-        if (rl === '/') return normRoute === '/';
+        if (rl === '/' || normRoute === '/') return rl === normRoute;
         return rl.includes(normRoute) || normRoute.includes(rl);
       }) ||
-      path.basename(file, '.md').toLowerCase().includes(normRoute.replace(/^\//, ''));
+      (routeSlug.length > 0 && path.basename(file, '.md').toLowerCase().includes(routeSlug));
     if (matchesSquad && matchesRoute) {
       const bullets = content
         .split('\n')

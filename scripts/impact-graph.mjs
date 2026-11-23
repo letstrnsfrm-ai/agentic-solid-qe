@@ -54,9 +54,10 @@ function readTextSafe(filePath) {
 }
 
 function stripComments(code) {
-  return String(code || '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/.*$/gm, '');
+  return String(code || '').replace(
+    /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|\/\*[\s\S]*?\*\/|\/\/.*$/gm,
+    (m) => (m.startsWith('/') ? '' : m)
+  );
 }
 
 function walkTsFiles(dir) {
@@ -167,10 +168,10 @@ export function resolveTsImport(fromFileAbs, specifier, rootDir, pathAliases) {
 export function parseImports(fileAbs, codeNoComments, rootDir, pathAliases) {
   const results = [];
   const importRe =
-    /\b(?:import|export)\s+(?:type\s+)?(?:([\s\S]*?)\s+from\s+)?['"]([^'"]+)['"]/g;
+    /(?:\bimport\s+(?:type\s+)?(?:([^;'"]+?)\s+from\s+)?|\bexport\s+(?:type\s+)?(\*(?:\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*)?|\{[^};]*\})\s+from\s+)['"]([^'"]+)['"]/g;
   for (const m of codeNoComments.matchAll(importRe)) {
-    const clause = (m[1] || '').trim();
-    const specifier = m[2];
+    const clause = (m[1] || m[2] || '').trim();
+    const specifier = m[3];
     const resolvedRel = resolveTsImport(fileAbs, specifier, rootDir, pathAliases);
     if (!resolvedRel) continue;
 
@@ -492,6 +493,9 @@ export function buildImpactGraph(rootDir = process.cwd()) {
     for (const dep of deps) addDirectConsumer(dep, consumer);
   }
   for (const [fixRel, meta] of fixtureMeta.entries()) {
+    for (const parentFix of meta.mergedFrom || []) {
+      addDirectConsumer(parentFix, fixRel);
+    }
     for (const depSet of meta.props.values()) {
       for (const dep of depSet) addDirectConsumer(dep, fixRel);
     }
@@ -502,6 +506,18 @@ export function buildImpactGraph(rootDir = process.cwd()) {
     }
   }
 
+  const collectMergedFixtures = (fixRel, visited = new Set()) => {
+    const meta = fixtureMeta.get(fixRel);
+    if (!meta || !meta.mergedFrom) return visited;
+    for (const parentFix of meta.mergedFrom) {
+      if (!visited.has(parentFix)) {
+        visited.add(parentFix);
+        collectMergedFixtures(parentFix, visited);
+      }
+    }
+    return visited;
+  };
+
   for (const [specRel, meta] of specMeta.entries()) {
     const rootDeps = new Set(meta.directNonFixtureDeps);
     for (const d of meta.directNonFixtureDeps) addDirectConsumer(d, specRel);
@@ -509,6 +525,9 @@ export function buildImpactGraph(rootDir = process.cwd()) {
     for (const fixRel of meta.importedFixtures) {
       addReverseSpec(fixRel, specRel);
       addDirectConsumer(fixRel, specRel);
+      for (const ancestorFix of collectMergedFixtures(fixRel)) {
+        addReverseSpec(ancestorFix, specRel);
+      }
       const resolvedFix = getResolvedFixture(fixRel);
 
       // Auto fixtures always affect every spec using this fixture file

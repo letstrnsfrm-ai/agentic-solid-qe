@@ -1,7 +1,17 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.7",
+  "latestVersion": "0.48.8",
   "releases": [
+    {
+      "version": "0.48.8",
+      "date": "2026-11-22",
+      "highlights": [
+        "Framework Hardening Batch #3 (40 Defects Fixed across 17 core engine scripts): Fixed multi-attribute compact snapshot refs (`[level=3, ref=e10]`), auto-generated UI-jargon step titles, `ErrorBannerContract` missing `dismissErrorButton`/`this.errorBanner` init, multi-page/renamed component step routing, `formatCompactCompileReport` action names, in-place `requireEnv` helper injection, `toHaveCount`/`toMatchObject`/`toBeEnabled`/`toBeDisabled`/`toBeChecked` compilation & schema support, multi-actor `dataBuilderRef` & `--auth` loading, `validateTapeObject` null-element & `toHaveURL` secret-query guards, federated squad scans & escaped-quote/exact-class patching in `tape-cli.mjs`, string-preserving `stripComments()` in `audit-solid.mjs` & `impact-graph.mjs` (restoring URL/secret gates & `$schema` tsconfig parsing), `heal-drift.mjs` `consoleErrors`/HTTP-context `401`/`403`/`5xx`/balanced-parens/`--spec` artifact selection/CLI flags, `impact-graph.mjs` `mergedFrom` reverse-spec edges & `export` regex, `audit-solid.mjs` `RegExp.test()`/external-only unused module/case-insensitive secrets, `context-pack.mjs` `--route /` & tape path traversal, `analyze-coverage.mjs` `--squad` scoping, `orchestrate.mjs` v2 migration manifest/Priority 6 `--ci-init`/flaky retry/`finalVerify` double-run/`triage.specPath`/`--heal-action`/redirect URL resolution/`res.status ?? 1`, `autonomous-mode.mjs` namespace-agnostic quarantine & elapsed-time resume/numeric guards, `verify-fast.mjs` `--workers`, `cli-output.mjs` single-line `capToTokens`, `sync-skills.mjs` subcommand `--help` delegation, dangling-symlink write-escape guards across 7 scripts, `upgrade-framework.mjs` skill/prompt/command patch allowlist & Windows `npx.cmd`, `migrate-skill.mjs` compact `AGENTS.md` registration, `legacy-test-migrator.mjs` SpecFlow/per-method `[Ignore]`/v2 manifest/URL guards, `migration-wave-factory.mjs` `--scaffold-wave0`, `build-system-map.mjs` route coverage, and `generate-release-notes.mjs` rename numstat & nested `mkdirSync`."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.8 Framework Hardening Batch #3."
+      ]
+    },
     {
       "version": "0.48.7",
       "date": "2026-11-22",

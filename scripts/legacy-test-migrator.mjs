@@ -884,6 +884,8 @@ function extractTestMethodsFromFile(filePath, scanRoot, pageObjectNames) {
       complexity,
       wave,
       valueScore,
+      bodyPreview: body,
+      skipMeta: language === 'csharp' ? extractSkipMetadata(`${attrBlock}\n${body}`) : { isSkipped: false, reason: null },
       suggestedSlices: [],
     };
     const setupBody = language === 'csharp' ? extractDotNetSetupHooks(content) : '';
@@ -939,7 +941,10 @@ export function discoverLegacyTests(scanRoot) {
       const inheritedInfo = t.language === 'csharp' ? resolveInheritedSetup(t.className, inheritanceMap) : null;
       const seederProfile =
         t.language === 'csharp' ? detectHybridSeeders(content, t.bodyPreview || '', inheritedInfo) : null;
-      const skipMeta = t.language === 'csharp' ? extractSkipMetadata(content) : { isSkipped: false, reason: null };
+      const skipMeta =
+        t.language === 'csharp'
+          ? t.skipMeta || { isSkipped: false, reason: null }
+          : { isSkipped: false, reason: null };
       const mergedPoRefs = [
         ...new Set([...(t.pageObjectRefs || []), ...(inheritedInfo?.inheritedPageObjects || [])]),
       ];
@@ -979,6 +984,7 @@ export function discoverLegacyTests(scanRoot) {
       isSkipped: sc.isSkipped,
       skipReason: sc.skipReason,
       seederProfile: { primaryStrategy: 'ui-flow-prereq', detected: [] },
+      suggestedSlices: [],
       specflowScenario: sc,
     });
   }
@@ -1064,10 +1070,14 @@ function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
   }
   let cur = resolvedTarget;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      throw new Error(
-        `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
-      );
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(
+          `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
+        );
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;
@@ -1129,7 +1139,7 @@ export function syncDiscoveryToManifest(projectRoot, discovery, legacySourceRoot
       status: prev?.status || 'discovered',
       tapes: prev?.tapes || [],
       specs: prev?.specs || [],
-      slices: t.suggestedSlices.map((s) => s.sliceId),
+      slices: (t.suggestedSlices || []).map((s) => s.sliceId),
     };
   }
 
@@ -1188,11 +1198,16 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
       method = m[1].toUpperCase();
       endpoint = m[2];
     }
-    const urlPath = endpoint.startsWith('http')
-      ? new URL(endpoint).pathname
-      : endpoint.startsWith('/')
-        ? endpoint
-        : `/${endpoint}`;
+    let urlPath;
+    if (/^https?:\/\//i.test(endpoint)) {
+      try {
+        urlPath = new URL(endpoint).pathname;
+      } catch {
+        urlPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+      }
+    } else {
+      urlPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    }
     const clientCandidate = `${toPascalCase(testEntry.className.replace(/Tests?$/i, ''))}ApiClient`;
     semanticSteps.push({
       stepIndex: semanticSteps.length + 1,
@@ -1814,6 +1829,7 @@ export function applyLegacyMigrationPlan(projectRoot, plan, legacySourceRoot = '
     updatedAt: new Date().toISOString(),
     items: {},
   };
+  manifest.items = manifest.items || {};
 
   const prev = manifest.items[plan.legacyTest.id] || {
     id: plan.legacyTest.id,
@@ -1826,7 +1842,7 @@ export function applyLegacyMigrationPlan(projectRoot, plan, legacySourceRoot = '
     valueScore: plan.legacyTest.valueScore,
     tapes: [],
     specs: [],
-    slices: plan.legacyTest.suggestedSlices.map((s) => s.sliceId),
+    slices: (plan.legacyTest.suggestedSlices || []).map((s) => s.sliceId),
   };
 
   if (!prev.tapes.includes(tapeRelPath)) {

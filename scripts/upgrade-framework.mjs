@@ -211,8 +211,12 @@ function assertSafePatchDestination(targetRoot, targetPath, label = 'patch targe
   }
   let cur = resolvedTarget;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      throw new Error(`Security Error: Refusing to access symlinked ${label}: '${path.relative(resolvedRoot, cur)}'.`);
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(`Security Error: Refusing to access symlinked ${label}: '${path.relative(resolvedRoot, cur)}'.`);
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;
@@ -235,10 +239,26 @@ function assertSafePatchDestination(targetRoot, targetPath, label = 'patch targe
   return resolvedTarget;
 }
 
+function isAllowedUpgradePatchTarget(targetRel) {
+  if (ALLOWED_UPGRADE_PATCH_TARGETS.has(targetRel)) return true;
+  if (targetRel === '.agents/domain/session-tape.schema.json' || targetRel === 'CHANGELOG.json') return true;
+  if (
+    targetRel.startsWith('.agents/skills/') ||
+    targetRel.startsWith('.github/prompts/') ||
+    targetRel.startsWith('.claude/commands/')
+  ) {
+    return !targetRel.includes('..');
+  }
+  return false;
+}
+
 export function collectPendingPatches(targetRoot) {
   const patchesDir = path.join(targetRoot, '.agents/upgrade-patches');
-  if (fs.existsSync(patchesDir) && fs.lstatSync(patchesDir).isSymbolicLink()) {
-    return [];
+  try {
+    if (fs.lstatSync(patchesDir).isSymbolicLink()) return [];
+  } catch (err) {
+    if (err?.code === 'ENOENT') return [];
+    throw err;
   }
   const results = [];
   for (const patchPath of walkPatches(patchesDir)) {
@@ -247,7 +267,7 @@ export function collectPendingPatches(targetRoot) {
     if (relFromPatches === 'playwright.config.ts.new') targetRel = 'playwright.config.ts';
     else if (relFromPatches === 'playwright-ci.yml.new') targetRel = '.github/workflows/playwright-ci.yml';
 
-    if (!ALLOWED_UPGRADE_PATCH_TARGETS.has(targetRel)) {
+    if (!isAllowedUpgradePatchTarget(targetRel)) {
       console.warn(`⚠️  Skipped unallowlisted upgrade patch target: ${targetRel}`);
       continue;
     }
@@ -482,9 +502,13 @@ Options:
       })
     : spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', syncFlags, {
         stdio: 'inherit',
-        shell: false,
+        shell: process.platform === 'win32',
       });
-  process.exit(res.status ?? 0);
+  if (res.error) {
+    console.error(`❌ Failed to invoke npx: ${res.error.message}`);
+    process.exit(1);
+  }
+  process.exit(res.status ?? 1);
 }
 
 const isDirectExecution =

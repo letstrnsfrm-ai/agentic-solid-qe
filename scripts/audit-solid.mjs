@@ -307,9 +307,10 @@ if (fs.existsSync(domainIndexFile)) {
 }
 
 function stripComments(code) {
-  return code
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/.*$/gm, '');
+  return String(code || '').replace(
+    /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|\/\*[\s\S]*?\*\/|\/\/.*$/gm,
+    (m) => (m.startsWith('/') ? '' : m)
+  );
 }
 
 // 2. Audit Components & Wizard Steps across src/components, src/steps, src/shared/components, and src/domains/*/{components,steps}
@@ -550,7 +551,7 @@ for (const file of specFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const codeWithoutComments = stripComments(content);
 
-  const testMatches = codeWithoutComments.match(/\btest\s*\(/g) || [];
+  const testMatches = codeWithoutComments.match(/(?<![.\w])test\s*\(/g) || [];
   if (testMatches.length > MAX_TESTS_PER_SPEC) {
     violations.push(
       `[CI Shardability Cap] ${specRel} contains ${testMatches.length} test() blocks (max ${MAX_TESTS_PER_SPEC}). Split into smaller feature-scoped .spec.ts files for balanced CI sharding.`
@@ -630,7 +631,7 @@ for (const file of specFiles) {
   }
 
   // Require business-domain test.step() blocks for HTML report readability
-  if (/\btest\s*\(/.test(codeWithoutComments) && !/\btest\.step\s*\(/.test(codeWithoutComments)) {
+  if (testMatches.length > 0 && !/\btest\.step\s*\(/.test(codeWithoutComments)) {
     violations.push(
       `[BDD/Business Step Rule] ${specRel} does not use test.step(). Wrap high-level business behaviours in await test.step('...', async () => { ... }) so HTML reports show business behaviour instead of implementation steps.`
     );
@@ -653,16 +654,24 @@ for (const file of specFiles) {
 
 // 5b. Dead Code Hygiene: warn on unused Components or Data Builders
 if (!filterSquad && (specFiles.length > 0 || pageFiles.length > 0)) {
-  const combinedUsageCorpus = [...allSrcTsFiles, ...specFiles]
-    .map((f) => fs.readFileSync(f, 'utf8'))
-    .join('\n');
+  const fileContentsStripped = new Map(
+    [...allSrcTsFiles, ...specFiles].map((f) => [f, stripComments(fs.readFileSync(f, 'utf8'))])
+  );
   for (const candidateFile of [...componentFiles, ...allBuilderFiles]) {
-    const code = stripComments(fs.readFileSync(candidateFile, 'utf8'));
+    const code = fileContentsStripped.get(candidateFile) || stripComments(fs.readFileSync(candidateFile, 'utf8'));
     const classMatch = code.match(/\bexport\s+class\s+([A-Za-z0-9_]+)/);
     if (!classMatch) continue;
     const sym = classMatch[1];
-    const occurrences = (combinedUsageCorpus.match(new RegExp(`\\b${sym}\\b`, 'g')) || []).length;
-    if (occurrences <= 1) {
+    const symRe = new RegExp(`\\b${sym}\\b`);
+    let externalRefs = 0;
+    for (const [f, text] of fileContentsStripped.entries()) {
+      if (f === candidateFile) continue;
+      if (symRe.test(text)) {
+        externalRefs++;
+        break;
+      }
+    }
+    if (externalRefs === 0) {
       warnings.push(
         `[Unused Module Warning] ${rel(candidateFile)} exports '${sym}' which is not referenced outside its own file.`
       );
@@ -743,7 +752,7 @@ const allCodeAndArtifactFiles = [
 ];
 
 const TS_SENSITIVE_ASSIGN_REGEX =
-  /\b(password|passcode|pin|userPin|cardPin|securityPin|otp|cvv|cvc|ssn|secret|clientSecret|client_secret|privateKey|private_key|accessKey|access_key|apiKey|api_key|authToken|auth_token|accessToken|access_token|refreshToken|refresh_token|bearerToken)\s*[:=]\s*(['"`])([^'"`]+)\2/g;
+  /\b(password|passcode|pin|userPin|cardPin|securityPin|otp|cvv|cvc|ssn|secret|clientSecret|client_secret|privateKey|private_key|accessKey|access_key|apiKey|api_key|authToken|auth_token|accessToken|access_token|refreshToken|refresh_token|bearerToken)\s*[:=]\s*(['"`])([^'"`]+)\2/gi;
 
 const TS_SENSITIVE_ENV_FALLBACK_REGEX =
   /\bprocess\.env\.([A-Za-z0-9_]+)\s*(?:\?\?|\|\|)\s*(['"`])([^'"`]+)\2/g;
