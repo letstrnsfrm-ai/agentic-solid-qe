@@ -165,10 +165,39 @@ export function assertSafeLegacyScanRoot(resolvedLegacyRoot, workspaceRoot = pro
     );
   }
 
-  if (fs.existsSync(normalizedTarget) && fs.lstatSync(normalizedTarget).isSymbolicLink()) {
-    throw new Error(
-      `Security Error: Refusing to scan symbolic link legacy root '${normalizedTarget}'.`
-    );
+  let cur = normalizedTarget;
+  while (cur !== parentBoundary && cur !== normalizedWorkspace) {
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(
+          `Security Error: Refusing to scan symbolic link legacy root '${normalizedTarget}'.`
+        );
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+
+  if (fs.existsSync(normalizedTarget)) {
+    const realTarget = fs.realpathSync(normalizedTarget);
+    const realParentBoundary = fs.existsSync(parentBoundary)
+      ? fs.realpathSync(parentBoundary)
+      : parentBoundary;
+    const realWorkspace = fs.existsSync(normalizedWorkspace)
+      ? fs.realpathSync(normalizedWorkspace)
+      : normalizedWorkspace;
+    if (
+      forbiddenExact.has(realTarget) ||
+      forbiddenPrefixes.some((prefix) => realTarget.startsWith(prefix)) ||
+      (!isWithinDir(realTarget, realWorkspace) && !isWithinDir(realTarget, realParentBoundary))
+    ) {
+      throw new Error(
+        `Security Error: Legacy root '${normalizedTarget}' realpath escapes allowed scan boundary.`
+      );
+    }
   }
 
   return normalizedTarget;
@@ -1378,6 +1407,7 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
     }
   }
 
+  const fallbackApiClientName = `${toPascalCase(testEntry.className.replace(/Tests?$/i, '')) || 'Feature'}ApiClient`;
   // Fallback step to guarantee minItems: 1
   if (semanticSteps.length === 0) {
     const isApi = testEntry.kind === 'api' || selectedSlice?.type === 'api-seeder';
@@ -1386,7 +1416,7 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
       intent: `Execute ${testEntry.testMethod} flow`,
       businessStep: `Verify ${testEntry.testMethod} behaviour`,
       action: isApi ? 'apiCall' : 'goto',
-      componentCandidate: isApi ? componentName : uiComponentCandidate,
+      componentCandidate: isApi ? networkContracts[0]?.clientCandidate || fallbackApiClientName : uiComponentCandidate,
       locatorContract: isApi
         ? { strategy: 'apiEndpoint', value: '/api/health' }
         : { strategy: 'url', value: '/' },
@@ -1395,12 +1425,12 @@ function extractStepsAndContractsFromBody(body, testEntry, pageObjects, selected
 
   // 5. Extract expected states
   if (selectedSlice?.type === 'api-seeder' || (selectedSlice?.type !== 'ui-phase' && (testEntry.kind === 'api' || networkContracts.length > 0))) {
-    const nc = networkContracts[0] || { clientCandidate: `${componentName}ApiClient`, expectedStatus: 200 };
+    const nc = networkContracts[0] || { clientCandidate: fallbackApiClientName, expectedStatus: 200 };
     expectedStates.push({
       description: `Verify API returns expected HTTP ${nc.expectedStatus} status`,
       businessStep: semanticSteps[0].businessStep,
       assertionType: 'toHaveStatus',
-      targetComponent: nc.clientCandidate || `${componentName}ApiClient`,
+      targetComponent: nc.clientCandidate || fallbackApiClientName,
       targetProperty: 'lastResponse',
       expectedValueRef: `ApiStatus.OK_${nc.expectedStatus}`,
     });

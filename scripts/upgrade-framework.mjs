@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 const DEFAULT_REPO_SLUG = 'letstrnsfrm-ai/agentic-solid-qe';
 const SAFE_REPO_SLUG_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SAFE_SQUAD_NAME_RE = /^[a-z0-9][a-z0-9-]*$/i;
-const SEMVER_TAG_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([a-z0-9.]+))?$/i;
+const SEMVER_TAG_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 
 export function isEnterpriseOfflineMode(env = process.env) {
   return (
@@ -72,7 +72,23 @@ export function compareSemver(aRaw, bRaw) {
   if (!aPre && bPre) return 1;
   if (aPre && !bPre) return -1;
   if (aPre === bPre) return 0;
-  return aPre > bPre ? 1 : -1;
+  const aParts = aPre.split('.');
+  const bParts = bPre.split('.');
+  const len = Math.max(aParts.length, bParts.length);
+  for (let i = 0; i < len; i++) {
+    if (i >= aParts.length) return -1;
+    if (i >= bParts.length) return 1;
+    const ap = aParts[i];
+    const bp = bParts[i];
+    if (ap === bp) continue;
+    const aNum = /^\d+$/.test(ap);
+    const bNum = /^\d+$/.test(bp);
+    if (aNum && bNum) return Number(ap) > Number(bp) ? 1 : -1;
+    if (aNum) return -1;
+    if (bNum) return 1;
+    return ap > bp ? 1 : -1;
+  }
+  return 0;
 }
 
 export function resolveInstalledVersion(targetRoot) {

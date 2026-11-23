@@ -17,11 +17,17 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--help' || argv[i] === '-h') {
       args.help = true;
-    } else if (argv[i] === '--session' && argv[i + 1]) {
+    } else if (argv[i] === '--session') {
+      if (!argv[i + 1] || argv[i + 1].startsWith('-')) {
+        throw new Error(`Missing or invalid value for --session.`);
+      }
       args.session = argv[++i];
     } else if (argv[i].startsWith('--session=')) {
       args.session = argv[i].slice('--session='.length);
-    } else if (argv[i] === '--out' && argv[i + 1]) {
+    } else if (argv[i] === '--out') {
+      if (!argv[i + 1] || argv[i + 1].startsWith('-')) {
+        throw new Error(`Missing or invalid value for --out.`);
+      }
       args.out = argv[++i];
     } else if (argv[i].startsWith('--out=')) {
       args.out = argv[i].slice('--out='.length);
@@ -30,14 +36,14 @@ function parseArgs(argv) {
   return args;
 }
 
-const SAFE_SESSION_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const SAFE_SESSION_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 const SAFE_AUTH_OUT_RE = /^\.auth\/[a-zA-Z0-9_-]+\.json$/;
 
 export function assertSafeSessionName(session) {
   const s = String(session || '').trim();
   if (!SAFE_SESSION_NAME_RE.test(s)) {
     throw new Error(
-      `Security Error: Invalid --session name '${session}'. Must match /^[a-zA-Z0-9_-]{1,64}$/ (no flags or shell characters).`
+      `Security Error: Invalid --session name '${session}'. Must match /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/ (no leading hyphens, flags, or shell characters).`
     );
   }
   return s;
@@ -57,11 +63,17 @@ export function assertSafeAuthOutputPath(outPath, root = process.cwd()) {
   if (relToAuth.startsWith('..') || path.isAbsolute(relToAuth)) {
     throw new Error(`Security Error: Output path '${outPath}' resolves outside '.auth/'.`);
   }
-  if (fs.existsSync(authDir) && fs.lstatSync(authDir).isSymbolicLink()) {
-    throw new Error(`Security Error: Refusing to write to symbolic link directory '.auth'.`);
-  }
-  if (fs.existsSync(resolvedOut) && fs.lstatSync(resolvedOut).isSymbolicLink()) {
-    throw new Error(`Security Error: Refusing to overwrite symbolic link '${outPath}'.`);
+  for (const [candidate, msg] of [
+    [authDir, `Security Error: Refusing to write to symbolic link directory '.auth'.`],
+    [resolvedOut, `Security Error: Refusing to overwrite symbolic link '${outPath}'.`],
+  ]) {
+    try {
+      if (fs.lstatSync(candidate).isSymbolicLink()) {
+        throw new Error(msg);
+      }
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
   }
   if (fs.existsSync(resolvedRoot)) {
     const realRoot = fs.realpathSync(resolvedRoot);
@@ -96,12 +108,15 @@ function runAgentBrowser(session, cmdArgs) {
   return (res.stdout || '').trim();
 }
 
-export function buildStorageState({ cookies = [], origin = '', localStorageEntries = [] }) {
+export function buildStorageState({ cookies = [], origin = '', localStorageEntries = [] } = {}) {
+  const safeCookies = Array.isArray(cookies) ? cookies : [];
+  const safeEntries = Array.isArray(localStorageEntries) ? localStorageEntries : [];
+  const validOrigin = typeof origin === 'string' && origin !== 'null' && /^https?:\/\//i.test(origin) ? origin : '';
   const origins =
-    origin && localStorageEntries.length > 0
-      ? [{ origin, localStorage: localStorageEntries }]
+    validOrigin && safeEntries.length > 0
+      ? [{ origin: validOrigin, localStorage: safeEntries }]
       : [];
-  return { cookies, origins };
+  return { cookies: safeCookies, origins };
 }
 
 function main() {
@@ -118,14 +133,19 @@ function main() {
 
   const cookiesRaw = runAgentBrowser(safeSession, ['cookies', 'get', '--json']);
   const parsedCookies = cookiesRaw ? JSON.parse(cookiesRaw) : [];
-  const cookies = Array.isArray(parsedCookies) ? parsedCookies : parsedCookies.cookies || [];
+  const cookies = Array.isArray(parsedCookies)
+    ? parsedCookies
+    : Array.isArray(parsedCookies?.cookies)
+      ? parsedCookies.cookies
+      : [];
 
   const origin = runAgentBrowser(safeSession, ['eval', '() => location.origin']).replace(/^"|"$/g, '');
   const lsRaw = runAgentBrowser(safeSession, [
     'eval',
     '() => Object.entries(localStorage).map(([name, value]) => ({ name, value }))',
   ]);
-  const localStorageEntries = lsRaw ? JSON.parse(lsRaw) : [];
+  const parsedLs = lsRaw ? JSON.parse(lsRaw) : [];
+  const localStorageEntries = Array.isArray(parsedLs) ? parsedLs : [];
 
   const state = buildStorageState({ cookies, origin, localStorageEntries });
   fs.mkdirSync(authDir, { recursive: true, mode: 0o700 });

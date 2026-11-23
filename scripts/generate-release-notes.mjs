@@ -111,8 +111,7 @@ function parseCommits(rangeSpec) {
       const scope = conventionalMatch && conventionalMatch[2] ? conventionalMatch[2] : null;
       const isBreaking =
         Boolean(conventionalMatch && conventionalMatch[3] === '!') ||
-        /BREAKING[ -]CHANGE/i.test(body) ||
-        /BREAKING[ -]CHANGE/i.test(subject);
+        /^BREAKING[ -]CHANGE:\s/m.test(body);
       const description = conventionalMatch ? conventionalMatch[4].trim() : subject.trim();
 
       return {
@@ -192,7 +191,8 @@ function getDiffBreakdown(baseRef, headRef = 'HEAD') {
     const normalizedPath = rawPath
       .replace(/\{[^{}]*? => ([^{}]*?)\}/g, '$1')
       .replace(/^.* => /, '')
-      .replace(/\/+/g, '/');
+      .replace(/\/+/g, '/')
+      .replace(/^\/+/, '');
     totalInsertions += added;
     totalDeletions += deleted;
     statsByFile.set(normalizedPath, { added, deleted });
@@ -488,6 +488,7 @@ function main() {
       existingTag: existingHeadTags[0],
     };
     if (options.jsonMeta) {
+      fs.mkdirSync(path.dirname(options.jsonMeta), { recursive: true });
       fs.writeFileSync(options.jsonMeta, JSON.stringify(meta, null, 2), 'utf8');
     }
     if (process.env.GITHUB_OUTPUT) {

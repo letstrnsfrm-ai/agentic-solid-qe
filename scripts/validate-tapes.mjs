@@ -579,10 +579,15 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         typeof state.expectedValueRef === 'string'
           ? state.expectedValueRef.match(/^capturedVariable:([a-zA-Z][a-zA-Z0-9_]*)$/)
           : null;
+      const stepCapturedVars = new Set(
+        (Array.isArray(tape.semanticSteps) ? tape.semanticSteps : [])
+          .map((s) => s?.capturesVariable)
+          .filter((v) => typeof v === 'string' && v.length > 0)
+      );
       const isCapturedVarRef =
         Boolean(capVarMatch) &&
         !hasForbiddenIdentifierSegment(state.expectedValueRef) &&
-        (declaredVars.size === 0 || declaredVars.has(capVarMatch[1]));
+        (declaredVars.has(capVarMatch[1]) || stepCapturedVars.has(capVarMatch[1]));
       const isSafeUrlPathRef =
         state.assertionType === 'toHaveURL' &&
         typeof state.expectedValueRef === 'string' &&

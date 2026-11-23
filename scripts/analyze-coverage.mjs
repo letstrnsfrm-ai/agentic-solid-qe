@@ -106,6 +106,9 @@ const tapeFiles = walkFiles(path.join(ROOT, '.exploratory/tapes'), '.json');
 const tapes = tapeFiles.map((f) => {
   try {
     const data = JSON.parse(fs.readFileSync(f, 'utf8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      throw new Error('Invalid tape JSON');
+    }
     const scenarioId = data.scenarioId || path.basename(f, '.json');
     const scenarioIdRe = new RegExp(`(?<![a-z0-9-])${String(scenarioId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9-])`);
     const matchingSpec =
@@ -123,18 +126,22 @@ const tapes = tapeFiles.map((f) => {
         }
       }
     }
+    const tapeMissingSessions = [];
     for (const sessRel of requiredSessions) {
       if (!fs.existsSync(path.join(ROOT, sessRel))) {
         missingAuthSessionSet.add(sessRel);
+        tapeMissingSessions.push(sessRel);
       }
     }
 
+    const tapeUnimplementedClients = [];
     if (Array.isArray(data.networkContracts)) {
       for (const nc of data.networkContracts) {
         const candidate = nc.clientCandidate || null;
         const isClientImplemented = candidate ? exportedApiClientClasses.has(candidate) : false;
         if (candidate && !isClientImplemented) {
           unimplementedApiClientSet.add(candidate);
+          tapeUnimplementedClients.push(candidate);
         }
         discoveredApiContracts.push({
           scenarioId,
@@ -210,6 +217,8 @@ const tapes = tapeFiles.map((f) => {
       resumesFrom: data.resumesFrom || null,
       title: data.title,
       compiledToSpec: matchingSpec ? matchingSpec.file : null,
+      missingAuthSessions: tapeMissingSessions,
+      unimplementedApiClients: tapeUnimplementedClients,
     };
   } catch {
     return {
@@ -217,6 +226,8 @@ const tapes = tapeFiles.map((f) => {
       scenarioId: path.basename(f),
       charter: 'invalid-json',
       compiledToSpec: null,
+      missingAuthSessions: [],
+      unimplementedApiClients: [],
     };
   }
 });
@@ -230,13 +241,20 @@ const missingAuthSessions = [...missingAuthSessionSet];
 // 3. Domain Shards (Global + Squad-Scoped) & Coverage Mapping
 const shards = domainGraph.shards.map((shard) => {
   const shardKey = shard.id.toLowerCase();
+  const shardRoutes = Array.isArray(shard.routes)
+    ? shard.routes.map((r) => String(r).toLowerCase()).filter(Boolean)
+    : [];
+  const shardCaps = Array.isArray(shard.publishedCapabilities)
+    ? shard.publishedCapabilities.map((c) => String(c).toLowerCase()).filter((c) => c.length > 3)
+    : [];
   const isCoveredBySpec = specsWithContent.some((s) => {
     const specName = path.basename(s.file, '.spec.ts').toLowerCase();
-    const parts = shardKey.split('-').filter((p) => p.length > 2);
+    const rawLower = s.rawContent.toLowerCase();
     return (
       specName.includes(shardKey) ||
-      parts.some((p) => specName.includes(p)) ||
-      s.rawContent.toLowerCase().includes(shardKey)
+      rawLower.includes(shardKey) ||
+      shardRoutes.some((r) => r !== '/' && rawLower.includes(r)) ||
+      shardCaps.some((cap) => rawLower.includes(cap))
     );
   });
   return {
@@ -308,6 +326,13 @@ const scopedSpecs = specsWithContent
   .filter((s) => !filterSquad || matchSquad(s.file))
   .map(({ rawContent, ...rest }) => rest);
 
+const scopedMissingAuthSessions = filterSquad
+  ? [...new Set(scopedTapes.flatMap((t) => t.missingAuthSessions || []))]
+  : missingAuthSessions;
+const scopedUnimplementedApiClients = filterSquad
+  ? [...new Set(scopedTapes.flatMap((t) => t.unimplementedApiClients || []))]
+  : unimplementedApiClients;
+
 // 6. Compute Recommended Next Action & 5-Stage Incremental Coverage Maturity (squad-scoped when --squad is set)
 let recommendedNextAction;
 let nextSingleScenarioToAutomate = null;
@@ -323,7 +348,7 @@ const hasEnterprisePatterns =
   apiClients.length > 0 ||
   scopedTapes.some((t) => ['api-contract', 'cross-portal-handoff'].includes(t.charter));
 
-if (missingAuthSessions.length > 0 || (scopedShards.length === 0 && scopedSpecs.length === 0)) {
+if (scopedMissingAuthSessions.length > 0 || (scopedShards.length === 0 && scopedSpecs.length === 0)) {
   coverageMaturityStage = {
     stage: 0,
     name: 'Stage 0: Foundation, Auth & Legacy Onboarding',
@@ -344,7 +369,7 @@ if (missingAuthSessions.length > 0 || (scopedShards.length === 0 && scopedSpecs.
     nextMilestone:
       'Layer multi-persona-auth, boundary-analysis, state-interruption, and accessibility-audit scenarios reusing existing SOLID Components and Data Builders.',
   };
-} else if (!hasEnterprisePatterns || unimplementedApiClients.length > 0) {
+} else if (!hasEnterprisePatterns || scopedUnimplementedApiClients.length > 0) {
   coverageMaturityStage = {
     stage: 3,
     name: 'Stage 3: Complex Wizards, Backend API Seeding & Cross-Portal Handoffs',
@@ -360,8 +385,8 @@ if (missingAuthSessions.length > 0 || (scopedShards.length === 0 && scopedSpecs.
   };
 }
 
-if (missingAuthSessions.length > 0) {
-  recommendedNextAction = `Invoke /00-env-bootstrap to capture missing persona session(s) required by Session Tapes: ${missingAuthSessions.join(', ')}`;
+if (scopedMissingAuthSessions.length > 0) {
+  recommendedNextAction = `Invoke /00-env-bootstrap to capture missing persona session(s) required by Session Tapes: ${scopedMissingAuthSessions.join(', ')}`;
 } else if (scopedUncompiled.length > 0) {
   nextSingleScenarioToAutomate = scopedUncompiled[0];
   recommendedNextAction = `Invoke '/02-solid-architect ${nextSingleScenarioToAutomate}' (or run 'npx cortex compile ${nextSingleScenarioToAutomate} --apply') to compile and verify 1 Session Tape at a time (${scopedUncompiled.length} uncompiled: ${scopedUncompiled.join(', ')})`;
@@ -453,7 +478,7 @@ const report = isCompact
         baseUrl,
         needsTargetUrlConfig,
         savedAuthSessionsCount: savedAuthSessions.length,
-        missingAuthSessions,
+        missingAuthSessions: scopedMissingAuthSessions,
       },
       counts: {
         domainShards: scopedShards.length,
@@ -489,7 +514,7 @@ const report = isCompact
         baseUrl,
         needsTargetUrlConfig,
         savedAuthSessions,
-        missingAuthSessions,
+        missingAuthSessions: scopedMissingAuthSessions,
       },
       federatedBrain: {
         domainGraphPath: '.agents/domain/domain-graph.json',
@@ -503,7 +528,7 @@ const report = isCompact
       uncompiledTapes: scopedUncompiled,
       handoffRecommendations: scopedHandoffRecommendations,
       discoveredApiContracts,
-      unimplementedApiClients,
+      unimplementedApiClients: scopedUnimplementedApiClients,
       nextSingleScenarioToAutomate,
       openDefects,
       automatedSpecs: scopedSpecs,

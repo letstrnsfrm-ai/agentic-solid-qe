@@ -355,17 +355,26 @@ export function parsePlaywrightJsonSpecStatus(rawStdout, requestedSpecs = []) {
     for (const spec of suite.specs || []) {
       const rawFile = String(spec.file || suiteFile || '').replace(/\\/g, '/');
       const matchedReq =
-        requestedSpecs.find(
-          (req) => req === rawFile || req === `tests/${rawFile}` || req.endsWith(`/${rawFile}`)
-        ) || rawFile;
+        requestedSpecs.find((req) => req === rawFile || req === `tests/${rawFile}`) ||
+        requestedSpecs.find((req) => req.endsWith(`/${rawFile}`)) ||
+        rawFile;
       if (!matchedReq) continue;
-      const failed = (spec.tests || []).some((t) =>
-        (t.results || []).some((r) => r.status === 'failed' || r.status === 'timedOut' || r.status === 'interrupted')
-      );
+      let hasFailed = false;
+      let hasPassed = false;
+      for (const t of spec.tests || []) {
+        const results = Array.isArray(t.results) ? t.results : [];
+        const finalResult = results.length > 0 ? results[results.length - 1] : null;
+        const finalStatus = finalResult?.status || t.status || '';
+        if (finalStatus === 'failed' || finalStatus === 'timedOut' || finalStatus === 'interrupted' || finalStatus === 'unexpected') {
+          hasFailed = true;
+        } else if (finalStatus === 'passed' || finalStatus === 'expected' || finalStatus === 'flaky') {
+          hasPassed = true;
+        }
+      }
       const prev = statusMap.get(matchedReq);
-      if (failed) {
+      if (hasFailed) {
         statusMap.set(matchedReq, 'failed');
-      } else if (prev !== 'failed') {
+      } else if (hasPassed && prev !== 'failed') {
         statusMap.set(matchedReq, 'passed');
       }
     }

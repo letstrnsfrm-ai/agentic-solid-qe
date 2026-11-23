@@ -582,7 +582,7 @@ for (const file of specFiles) {
     );
   }
 
-  if (/\bimport\s+(?!type\b)[\s\S]*?\bfrom\s+['"]@playwright\/test['"]/.test(codeWithoutComments)) {
+  if (/\bimport\s+(?!type\b)[^;]*?\bfrom\s+['"]@playwright\/test['"]/.test(codeWithoutComments)) {
     violations.push(
       `[OCP/ISP Fixture Rule] ${specRel} imports directly from '@playwright/test'. Import { test, expect } from '@fixtures/app.fixture' (or a mergeTests domain fixture) instead.`
     );
@@ -829,7 +829,7 @@ for (const targetFile of allCodeAndArtifactFiles) {
   }
 
   for (const pattern of SECRET_PATTERNS) {
-    if (pattern.regex.test(inspectText)) {
+    if (pattern.regex.test(rawText)) {
       violations.push(
         `[Secret Hygiene Gate] ${relTarget} contains a ${pattern.name}. Inject sensitive values via environment variables in src/data/*.builder.ts.`
       );

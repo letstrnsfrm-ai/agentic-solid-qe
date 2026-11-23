@@ -106,7 +106,7 @@ function readTapes() {
         if (!groupByTitle.has(title)) {
           const g = {
             title,
-            pageRoute: s.pageRoute || '/',
+            pageRoute: s.pageRoute || '',
             actions: [],
             components: new Set(),
             apis: [],
@@ -125,13 +125,18 @@ function readTapes() {
           waitForNetwork: s.waitForNetwork || null,
         });
         if (s.componentCandidate) g.components.add(s.componentCandidate);
-        if (s.waitForNetwork) {
-          const matched = contracts.filter(
-            (c) =>
-              c.urlPattern === s.waitForNetwork ||
-              c.urlPattern.includes(s.waitForNetwork.replace(/\*/g, '')) ||
-              s.waitForNetwork.includes(c.urlPattern.replace(/\*/g, ''))
-          );
+        if (typeof s.waitForNetwork === 'string' && s.waitForNetwork.trim()) {
+          const waitStr = s.waitForNetwork.trim();
+          const waitNeedle = waitStr.replace(/\*/g, '');
+          const matched = contracts.filter((c) => {
+            if (!c.urlPattern) return false;
+            if (c.urlPattern === waitStr) return true;
+            const patNeedle = c.urlPattern.replace(/\*/g, '');
+            return (
+              (waitNeedle.length > 0 && c.urlPattern.includes(waitNeedle)) ||
+              (patNeedle.length > 0 && waitStr.includes(patNeedle))
+            );
+          });
           for (const m of matched) {
             if (!g.apis.some((a) => a.method === m.method && a.urlPattern === m.urlPattern)) {
               g.apis.push(m);
@@ -145,7 +150,7 @@ function readTapes() {
         if (!groupByTitle.has(title)) {
           const g = {
             title,
-            pageRoute: '/',
+            pageRoute: '',
             actions: [],
             components: new Set(),
             apis: [],
@@ -203,7 +208,9 @@ function readSpecs() {
 }
 
 function readDefects() {
-  const defectFiles = walkFiles(path.join(ROOT, 'defects'), '.md');
+  const defectFiles = walkFiles(path.join(ROOT, 'defects'), '.md').filter(
+    (f) => path.basename(f).toLowerCase() !== 'readme.md'
+  );
   return defectFiles.map((filePath) => {
     const content = fs.readFileSync(filePath, 'utf8');
     const title = content.match(/^#\s+(.+)$/m)?.[1]?.trim() || path.basename(filePath, '.md');
@@ -224,12 +231,12 @@ function readSrcInventory() {
     const classMatch = content.match(/export\s+class\s+([A-Za-z0-9_]+)/);
     const name = classMatch ? classMatch[1] : path.basename(f, '.ts');
     const item = { name, file: r };
-    if (r.includes('/pages/')) layers.pages.push(item);
-    else if (r.includes('/steps/')) layers.steps.push(item);
-    else if (r.includes('/components/')) layers.components.push(item);
-    else if (r.includes('/api/') && r.endsWith('.client.ts')) layers.apiClients.push(item);
-    else if (r.includes('/seeders/') && r.endsWith('.seeder.ts')) layers.seeders.push(item);
-    else if (r.includes('/data/') && r.endsWith('.builder.ts')) layers.builders.push(item);
+    if (r.endsWith('.step.ts') || r.includes('/steps/')) layers.steps.push(item);
+    else if (r.endsWith('.page.ts') || r.includes('/pages/')) layers.pages.push(item);
+    else if (r.endsWith('.component.ts') || r.includes('/components/')) layers.components.push(item);
+    else if (r.endsWith('.client.ts')) layers.apiClients.push(item);
+    else if (r.endsWith('.seeder.ts')) layers.seeders.push(item);
+    else if (r.endsWith('.builder.ts')) layers.builders.push(item);
   }
   return layers;
 }
@@ -253,7 +260,7 @@ export function collectSystemKnowledge() {
       const routeMatched =
         shRoutes.length > 0 &&
         tapeRoutes.some((tr) =>
-          shRoutes.some((sr) => (sr === '/' ? tr === '/' : tr.includes(sr) || sr.includes(tr)))
+          shRoutes.some((sr) => (sr === '/' || tr === '/' ? sr === tr : tr.includes(sr) || sr.includes(tr)))
         );
       return (
         routeMatched ||

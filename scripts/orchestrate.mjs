@@ -838,9 +838,10 @@ export async function discoverAndSeedLiveShards(
     }
     if (memText && !memText.includes(shardRel)) {
       const tableHeader = '| :--- | :--- | :--- | :--- | :--- |';
-      const row = `| **${item.title}** | \`@org/qe-core\` | \`${item.routePath}\` | \`${shardRel}\` | Auto-discovered feature shard |`;
+      const safeTitle = String(item.title || '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').trim();
+      const row = `| **${safeTitle}** | \`@org/qe-core\` | \`${item.routePath}\` | \`${shardRel}\` | Auto-discovered feature shard |`;
       if (memText.includes(tableHeader)) {
-        memText = memText.replace(tableHeader, `${tableHeader}\n${row}`);
+        memText = memText.replace(tableHeader, () => `${tableHeader}\n${row}`);
       }
     }
   }
@@ -1534,7 +1535,10 @@ export async function runAutonomousStep(
 
     let vRes;
     if (isSharedTarget && !skipTests) {
-      vRes = { ok: applied.status === 'healed', rolledBack: applied.status === 'rolled-back' };
+      vRes = {
+        ok: applied.status === 'healed',
+        rolledBack: applied.status === 'rolled-back-regression' || applied.status === 'rolled-back',
+      };
     } else if (applied.status !== 'healed') {
       vRes = { ok: false, reason: applied.status };
     } else {
@@ -1883,9 +1887,14 @@ export async function runAutonomousLoop(
 }
 
 // CLI Entrypoint
-const isMain =
-  Boolean(process.argv[1]) &&
-  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
+  } catch {
+    return path.resolve(process.argv[1]) === path.resolve(__filename);
+  }
+})();
 if (isMain) {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
@@ -2048,13 +2057,20 @@ Usage:
     const subCmd = rest[0] || 'status';
     const subArgs = rest.slice(1);
     if (subCmd === 'start') {
-      const shardIdx = subArgs.indexOf('--shard');
+      const hasFlag = (name) => subArgs.some((a) => a === name || a.startsWith(`${name}=`));
       let targetShard = null;
-      if (shardIdx !== -1 && subArgs[shardIdx + 1]) {
-        targetShard = subArgs[shardIdx + 1];
-        subArgs.splice(shardIdx, 2);
+      const shardEqIdx = subArgs.findIndex((a) => a.startsWith('--shard='));
+      if (shardEqIdx !== -1) {
+        targetShard = subArgs[shardEqIdx].slice('--shard='.length) || null;
+        subArgs.splice(shardEqIdx, 1);
+      } else {
+        const shardIdx = subArgs.indexOf('--shard');
+        if (shardIdx !== -1 && subArgs[shardIdx + 1]) {
+          targetShard = subArgs[shardIdx + 1];
+          subArgs.splice(shardIdx, 2);
+        }
       }
-      const hasUrl = subArgs.includes('--url') || subArgs.includes('--from-spec') || subArgs.includes('--checkpoint') || subArgs.includes('--from-seed');
+      const hasUrl = hasFlag('--url') || hasFlag('--from-spec') || hasFlag('--checkpoint') || hasFlag('--from-seed');
       if (!hasUrl || targetShard) {
         const bp = buildOrchestrationBlueprint(rootDir);
         const baseUrl = String(bp.targetApp.baseUrl || 'http://localhost:3000').replace(/\/$/, '');
@@ -2069,7 +2085,7 @@ Usage:
         if (!hasUrl) {
           subArgs.push('--url', `${baseUrl}${shardRoute.startsWith('/') ? shardRoute : `/${shardRoute}`}`);
         }
-        if (!subArgs.includes('--scenario')) {
+        if (!hasFlag('--scenario')) {
           subArgs.push('--scenario', `${shardSlug}-p0`);
         }
         const ctxRes = spawnSync(process.execPath, [path.join(__dirname, 'context-pack.mjs'), '--route', shardRoute], {
@@ -2125,9 +2141,17 @@ Usage:
     const healCliArgs = mode === 'apply' ? ['--apply', ...extraHealArgs] : ['--dry-run', ...extraHealArgs];
     const res = spawnSync(process.execPath, [path.join(__dirname, 'heal-drift.mjs'), ...healCliArgs], {
       cwd: rootDir,
-      stdio: 'inherit',
+      stdio: mode === 'apply' ? ['inherit', 'pipe', 'inherit'] : 'inherit',
+      encoding: mode === 'apply' ? 'utf8' : undefined,
     });
-    if (res.status === 0 && mode === 'apply') {
+    if (mode === 'apply' && res.stdout) {
+      process.stdout.write(res.stdout);
+    }
+    const didHeal =
+      mode === 'apply' &&
+      res.status === 0 &&
+      /"status"\s*:\s*"healed"|^HEAL\s+\|\s+healed\b|Cortex Drift-Healer \(healed\)/m.test(res.stdout || '');
+    if (didHeal) {
       clearResolvedFailureArtifacts(rootDir);
       const updatedBp = buildOrchestrationBlueprint(rootDir);
       console.log('\n' + formatCompactBlueprint(updatedBp));

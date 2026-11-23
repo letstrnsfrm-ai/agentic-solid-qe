@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const ANSI_ESCAPE_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const ANSI_ESCAPE_RE = /\x1B(?:\][^\x07\x1B]*(?:\x07|\x1B\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
 
 export const TOKEN_BUDGETS = Object.freeze({
   agentsMd: 600,
@@ -149,18 +149,35 @@ export function capLines(text = '', { maxLines = 25, hint = 'pass --verbose for 
 export function capToTokens(text = '', maxTokens = 400, hint = 'narrow scope or pass --full') {
   const clean = stripAnsi(text).replace(/\r\n/g, '\n');
   if (estimateTokens(clean) <= maxTokens) return clean;
+  const trimSingleText = (str, suffix) => {
+    const suffixTok = estimateTokens(suffix);
+    const allowed = Math.max(0, maxTokens - suffixTok);
+    if (allowed === 0) return suffix.slice(0, Math.max(8, maxTokens * 4));
+    let lo = 0;
+    let hi = str.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (estimateTokens(`${str.slice(0, mid)}${suffix}`) <= maxTokens) lo = mid;
+      else hi = mid - 1;
+    }
+    return `${str.slice(0, lo)}${suffix}`;
+  };
   const lines = clean.split('\n');
-  const budget = Math.max(8, Math.min(maxTokens, maxTokens - Math.min(16, Math.floor(maxTokens * 0.25))));
   if (lines.length === 1) {
-    const maxChars = Math.max(16, budget * 4);
-    return `${lines[0].slice(0, maxChars)}... (trimmed to <=${maxTokens} tok; ${hint})`;
+    return trimSingleText(lines[0], `... (trimmed to <=${maxTokens} tok; ${hint})`);
   }
   const kept = [];
-  for (const line of lines) {
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx];
+    const remaining = lines.length - idx;
+    const suffix = `... (+${remaining} lines trimmed to <=${maxTokens} tok budget; ${hint})`;
     const candidate = kept.length > 0 ? `${kept.join('\n')}\n${line}` : line;
-    if (estimateTokens(candidate) > budget && kept.length > 0) {
-      const omitted = lines.length - kept.length;
-      kept.push(`... (+${omitted} lines trimmed to <=${maxTokens} tok budget; ${hint})`);
+    if (estimateTokens(`${candidate}\n${suffix}`) > maxTokens) {
+      if (kept.length === 0) {
+        const firstSuffix = `... (+${lines.length - 1} lines trimmed to <=${maxTokens} tok budget; ${hint})`;
+        return trimSingleText(line, firstSuffix);
+      }
+      kept.push(suffix);
       break;
     }
     kept.push(line);
@@ -176,19 +193,25 @@ export function summarizePlaywrightRun(stdout = '', stderr = '', { maxFailures =
   const cleanErr = stripAnsi(stderr);
   const combined = `${cleanOut}\n${cleanErr}`;
 
-  const passedMatch = combined.match(/(\d+)\s+passed\b/);
-  const failedMatch = combined.match(/(\d+)\s+failed\b/);
-  const skippedMatch = combined.match(/(\d+)\s+skipped\b/);
-  const passed = passedMatch ? Number(passedMatch[1]) : 0;
-  const failed = failedMatch ? Number(failedMatch[1]) : 0;
-  const skipped = skippedMatch ? Number(skippedMatch[1]) : 0;
+  const lastCount = (label) => {
+    const lineAnchored = [...combined.matchAll(new RegExp(`^\\s*(\\d+)\\s+${label}\\b`, 'gm'))];
+    if (lineAnchored.length > 0) return Number(lineAnchored[lineAnchored.length - 1][1]);
+    const anyMatches = [...combined.matchAll(new RegExp(`(\\d+)\\s+${label}\\b`, 'g'))];
+    return anyMatches.length > 0 ? Number(anyMatches[anyMatches.length - 1][1]) : 0;
+  };
+  const passed = lastCount('passed');
+  const failed = lastCount('failed');
+  const skipped = lastCount('skipped');
+
+  const lines = combined.split('\n');
+  const hasNumberedFailures = lines.some((l) => /^\d+\)\s+\[/.test(l.trim()));
+  const headerRe = hasNumberedFailures ? /^\d+\)\s+\[/ : /^✖\s+/;
 
   const failureBlocks = [];
-  const lines = combined.split('\n');
   for (let i = 0; i < lines.length && failureBlocks.length < maxFailures; i++) {
     const line = lines[i].trim();
     // Match Playwright failure header like "1) [chromium] › tests/foo.spec.ts:12:5 › Title"
-    if (/^\d+\)\s+\[/.test(line) || /^✖\s+/.test(line)) {
+    if (headerRe.test(line)) {
       const excerpt = [line];
       for (let j = i + 1; j < Math.min(lines.length, i + 18) && excerpt.length <= maxErrorLines; j++) {
         const sub = lines[j].trim();

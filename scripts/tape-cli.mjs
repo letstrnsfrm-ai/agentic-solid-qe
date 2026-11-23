@@ -48,10 +48,14 @@ function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
   }
   let cur = resolvedTarget;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      throw new Error(
-        `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
-      );
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(
+          `Security Error: Refusing symlinked path for ${label}: '${path.relative(resolvedRoot, cur)}'.`
+        );
+      }
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;
@@ -235,6 +239,7 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
     ...walkFilesRecursive(dataDir, '.builder.ts'),
     ...walkFilesRecursive(domainsDir, '.builder.ts'),
   ];
+  const pendingWrites = new Map(); // targetFile -> content
   const applied = [];
 
   for (const item of setData) {
@@ -253,31 +258,30 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
     }
     const serializedVal = JSON.stringify(String(item.value ?? ''));
     const classDeclRe = new RegExp(`\\bclass\\s+${escapeRegExp(builderClass)}\\b`);
-    let targetFile = builderFiles.find((f) => classDeclRe.test(fs.readFileSync(f, 'utf8')));
+    const readCurrent = (f) => (pendingWrites.has(f) ? pendingWrites.get(f) : fs.readFileSync(f, 'utf8'));
+    let targetFile =
+      [...pendingWrites.keys()].find((f) => classDeclRe.test(pendingWrites.get(f))) ||
+      builderFiles.find((f) => classDeclRe.test(readCurrent(f)));
     if (!targetFile) {
-      const kebab = builderClass
-        .replace(/Builder$/, '')
-        .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-        .toLowerCase();
+      const kebab =
+        builderClass
+          .replace(/Builder$/, '')
+          .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+          .toLowerCase() || builderClass.toLowerCase();
       targetFile = assertNoSymlinkEscape(rootDir, path.join(dataDir, `${kebab}.builder.ts`), 'Data Builder file');
-      if (!dryRun) {
-        fs.mkdirSync(dataDir, { recursive: true });
-        fs.writeFileSync(
-          targetFile,
-          `/**\n * Typed Data Builder (DIP).\n */\nexport class ${builderClass} {\n  static ${methodName}() {\n    return {\n      ${propName}: ${serializedVal},\n    };\n  }\n}\n`,
-          'utf8'
-        );
-        builderFiles.push(targetFile);
-      }
+      const newContent = `/**\n * Typed Data Builder (DIP).\n */\nexport class ${builderClass} {\n  static ${methodName}() {\n    return {\n      ${propName}: ${serializedVal},\n    };\n  }\n}\n`;
+      pendingWrites.set(targetFile, newContent);
       applied.push({ builderClass, methodName, propName, file: path.relative(rootDir, targetFile) });
       continue;
     }
 
     assertNoSymlinkEscape(rootDir, targetFile, 'Data Builder file');
-    let content = fs.readFileSync(targetFile, 'utf8');
+    let content = readCurrent(targetFile);
     const safeMethodRe = escapeRegExp(methodName);
     const safePropRe = escapeRegExp(propName);
-    const methodRe = new RegExp(`(static\\s+${safeMethodRe}\\s*\\([^)]*\\)[^{]*\\{\\s*return\\s*\\{)([\\s\\S]*?)(\\n\\s*\\};)`);
+    const methodRe = new RegExp(
+      `(static\\s+${safeMethodRe}\\s*\\([^)]*\\)(?:\\s*:\\s*(?:\\{[^}]*\\}|[^{]+))?\\s*\\{\\s*return\\s*\\{)([\\s\\S]*?)(\\s*\\};?)`
+    );
     const mm = content.match(methodRe);
     if (mm) {
       const propRe = new RegExp(
@@ -293,14 +297,44 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
           (_, m1, m2, m3) => `${m1}${m2}${sep}\n      ${propName}: ${serializedVal},${m3}`
         );
       }
+    } else if (new RegExp(`\\bstatic\\s+${safeMethodRe}\\s*\\(`).test(content)) {
+      throw new Error(
+        `Cannot safely patch non-literal return body in '${builderClass}.${methodName}()' (${path.relative(rootDir, targetFile)}).`
+      );
     } else {
       const newMethod = `\n  static ${methodName}() {\n    return {\n      ${propName}: ${serializedVal},\n    };\n  }\n`;
-      content = content.replace(/\}\s*$/, () => `${newMethod}}\n`);
+      const clsMatch = content.match(new RegExp(`\\bclass\\s+${escapeRegExp(builderClass)}\\b[^{]*\\{`));
+      if (clsMatch) {
+        let depth = 0;
+        let closeIdx = -1;
+        for (let i = clsMatch.index + clsMatch[0].length - 1; i < content.length; i++) {
+          if (content[i] === '{') depth++;
+          else if (content[i] === '}') {
+            depth--;
+            if (depth === 0) {
+              closeIdx = i;
+              break;
+            }
+          }
+        }
+        if (closeIdx >= 0) {
+          content = `${content.slice(0, closeIdx)}${newMethod}${content.slice(closeIdx)}`;
+        } else {
+          content = content.replace(/\}\s*$/, () => `${newMethod}}\n`);
+        }
+      } else {
+        content = content.replace(/\}\s*$/, () => `${newMethod}}\n`);
+      }
     }
-    if (!dryRun) {
-      fs.writeFileSync(targetFile, content, 'utf8');
-    }
+    pendingWrites.set(targetFile, content);
     applied.push({ builderClass, methodName, propName, file: path.relative(rootDir, targetFile) });
+  }
+
+  if (!dryRun && pendingWrites.size > 0) {
+    fs.mkdirSync(dataDir, { recursive: true });
+    for (const [file, text] of pendingWrites.entries()) {
+      fs.writeFileSync(file, text, 'utf8');
+    }
   }
   return applied;
 }
@@ -393,6 +427,10 @@ export function patchTape(
     });
   }
 
+  // Validate both tape and all --set-data overrides before writing anything to disk
+  if (setData && setData.length > 0) {
+    applyBuilderDataOverrides(rootDir, setData, { dryRun: true });
+  }
   const res = writeValidatedTape(rootDir, safeId, updated, { dryRun });
   const dataUpdates = applyBuilderDataOverrides(rootDir, setData, { dryRun });
   return { ...res, tape: updated, dataUpdates };
@@ -404,9 +442,14 @@ function parseKeyVal(raw) {
   return { field: raw.slice(0, eq).trim(), value: raw.slice(eq + 1) };
 }
 
-const isMain =
-  Boolean(process.argv[1]) &&
-  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
+  } catch {
+    return path.resolve(process.argv[1]) === path.resolve(__filename);
+  }
+})();
 
 if (isMain) {
   const args = process.argv.slice(2);
@@ -422,11 +465,22 @@ if (isMain) {
     process.exit(0);
   }
 
-  const jsonOnly = args.includes('--json');
-  const dryRun = args.includes('--dry-run');
+  let jsonOnly = false;
+  let dryRun = false;
+  const requireVal = (arr, idx, flag) => {
+    const val = arr[idx];
+    if (val === undefined || val.startsWith('--')) {
+      throw new Error(`Missing value for flag '${flag}'.`);
+    }
+    return val;
+  };
 
   try {
     if (sub === 'list') {
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === '--json') jsonOnly = true;
+        else throw new Error(`Unknown flag '${args[i]}' for 'list'.`);
+      }
       const items = listTapes(process.cwd());
       if (jsonOnly) {
         console.log(JSON.stringify(items));
@@ -440,26 +494,38 @@ if (isMain) {
         }
       }
     } else if (sub === 'show') {
-      const id = args[1];
+      const pos = [];
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === '--json') jsonOnly = true;
+        else if (args[i].startsWith('--')) throw new Error(`Unknown flag '${args[i]}' for 'show'.`);
+        else pos.push(args[i]);
+      }
+      const id = pos[0];
       if (!id) throw new Error('Usage: npx cortex tape show <scenarioId>');
       const { data } = readTape(process.cwd(), id);
       console.log(jsonOnly ? JSON.stringify(data) : summarizeTapeCompact(data));
     } else if (sub === 'clone') {
-      const [, srcId, newId] = args;
+      const pos = [];
+      const cloneOpts = {};
+      for (let i = 1; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--json') jsonOnly = true;
+        else if (a === '--dry-run') dryRun = true;
+        else if (a === '--title') cloneOpts.title = requireVal(args, ++i, a);
+        else if (a === '--charter') cloneOpts.charter = requireVal(args, ++i, a);
+        else if (a === '--tags') {
+          cloneOpts.tags = requireVal(args, ++i, a)
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        } else if (a === '--persona-role') cloneOpts.personaRole = requireVal(args, ++i, a);
+        else if (a === '--persona-builder') cloneOpts.personaBuilder = requireVal(args, ++i, a);
+        else if (a.startsWith('--')) throw new Error(`Unknown flag '${a}' for 'clone'.`);
+        else pos.push(a);
+      }
+      const [srcId, newId] = pos;
       if (!srcId || !newId) throw new Error('Usage: npx cortex tape clone <srcId> <newId> [options]');
-      const getVal = (flag) => {
-        const i = args.indexOf(flag);
-        return i >= 0 && args[i + 1] ? args[i + 1] : undefined;
-      };
-      const tagsRaw = getVal('--tags');
-      const res = cloneTape(process.cwd(), srcId, newId, {
-        title: getVal('--title'),
-        charter: getVal('--charter'),
-        tags: tagsRaw ? tagsRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-        personaRole: getVal('--persona-role'),
-        personaBuilder: getVal('--persona-builder'),
-        dryRun,
-      });
+      const res = cloneTape(process.cwd(), srcId, newId, { ...cloneOpts, dryRun });
       if (jsonOnly) {
         console.log(JSON.stringify({ action: dryRun ? 'dry-run' : 'cloned', file: res.relFile, tape: res.tape }));
       } else {
@@ -468,9 +534,8 @@ if (isMain) {
         );
       }
     } else if (sub === 'patch') {
-      const id = args[1];
-      if (!id) throw new Error('Usage: npx cortex tape patch <scenarioId> [options]');
-        const opts = {
+      const pos = [];
+      const opts = {
         addTags: [],
         removeTags: [],
         setSteps: [],
@@ -479,29 +544,31 @@ if (isMain) {
         addExpects: [],
         removeExpects: [],
         setData: [],
-        dryRun,
+        dryRun: false,
       };
-      for (let i = 2; i < args.length; i++) {
+      for (let i = 1; i < args.length; i++) {
         const a = args[i];
-        if (a === '--set-title' && args[i + 1]) opts.setTitle = args[++i];
-        else if (a === '--set-charter' && args[i + 1]) opts.setCharter = args[++i];
-        else if (a === '--add-tag' && args[i + 1]) opts.addTags.push(args[++i]);
-        else if (a === '--remove-tag' && args[i + 1]) opts.removeTags.push(args[++i]);
-        else if (a === '--remove-step' && args[i + 1]) opts.removeSteps.push(Number(args[++i]));
-        else if (a === '--set-data' && args[i + 1]) {
-          const kv = parseKeyVal(args[++i]);
+        if (a === '--json') jsonOnly = true;
+        else if (a === '--dry-run') dryRun = true;
+        else if (a === '--set-title') opts.setTitle = requireVal(args, ++i, a);
+        else if (a === '--set-charter') opts.setCharter = requireVal(args, ++i, a);
+        else if (a === '--add-tag') opts.addTags.push(requireVal(args, ++i, a));
+        else if (a === '--remove-tag') opts.removeTags.push(requireVal(args, ++i, a));
+        else if (a === '--remove-step') opts.removeSteps.push(Number(requireVal(args, ++i, a)));
+        else if (a === '--set-data') {
+          const kv = parseKeyVal(requireVal(args, ++i, a));
           opts.setData.push({ ref: kv.field, value: kv.value });
-        } else if (a === '--set-step' && args[i + 1] && args[i + 2]) {
-          const stepIndex = Number(args[++i]);
-          const kv = parseKeyVal(args[++i]);
+        } else if (a === '--set-step') {
+          const stepIndex = Number(requireVal(args, ++i, a));
+          const kv = parseKeyVal(requireVal(args, ++i, a));
           opts.setSteps.push({ stepIndex, ...kv });
-        } else if (a === '--remove-expect' && args[i + 1]) opts.removeExpects.push(Number(args[++i]));
-        else if (a === '--set-expect' && args[i + 1] && args[i + 2]) {
-          const index = Number(args[++i]);
-          const kv = parseKeyVal(args[++i]);
+        } else if (a === '--remove-expect') opts.removeExpects.push(Number(requireVal(args, ++i, a)));
+        else if (a === '--set-expect') {
+          const index = Number(requireVal(args, ++i, a));
+          const kv = parseKeyVal(requireVal(args, ++i, a));
           opts.setExpects.push({ index, ...kv });
-        } else if (a === '--add-expect' && args[i + 1]) {
-          const parts = args[++i].split('|').map((s) => s.trim());
+        } else if (a === '--add-expect') {
+          const parts = requireVal(args, ++i, a).split('|').map((s) => s.trim());
           if (parts.length >= 4) {
             opts.addExpects.push({
               targetComponent: parts[0],
@@ -521,8 +588,15 @@ if (isMain) {
               expectedValueRef: expectedValueRef || undefined,
             });
           }
+        } else if (a.startsWith('--')) {
+          throw new Error(`Unknown flag '${a}' for 'patch'.`);
+        } else {
+          pos.push(a);
         }
       }
+      const id = pos[0];
+      if (!id) throw new Error('Usage: npx cortex tape patch <scenarioId> [options]');
+      opts.dryRun = dryRun;
       const res = patchTape(process.cwd(), id, opts);
       if (jsonOnly) {
         console.log(JSON.stringify({ action: dryRun ? 'dry-run' : 'patched', file: res.relFile, tape: res.tape }));
