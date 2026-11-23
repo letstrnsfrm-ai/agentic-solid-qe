@@ -4423,7 +4423,7 @@ test('39. Unified agentic-solid-qe Single Entry Point: gatePayload/GATE_OPTIONS,
     assert.equal(finalized.semanticSteps[1].dataBuilderRef, undefined);
     assert.equal(
       finalized.expectedStates[0].expectedValueRef,
-      'FormAuthenticationP0DataBuilder.standard().expectedMessagesText'
+      'FormAuthenticationP0DataBuilder.standard().expectedMessagesRegionText'
     );
     const valErrors = validateTapeObject(finalized, 'form-authentication-p0.json');
     assert.deepEqual(valErrors, [], `Expected finalized explore tape to pass schema validation: ${valErrors.join('; ')}`);
@@ -5125,6 +5125,147 @@ test('framework-hardening-batch-1: parseSnapshotRefs attrs/nth, select->selectOp
     assert.equal(patchRes.status, 0, patchRes.stderr);
     const parsedPatch = JSON.parse(patchRes.stdout);
     assert.equal(parsedPatch.action, 'patched');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('framework-hardening-batch-2: cross-origin goto, inline assert role suffix, --set-data numeric/multi-flag, export-auth-state sync/help, upgrade allowlist, autonomous resume/quarantine, coverage --help/clip', async () => {
+  const { appendRecordedAssertion, createDraftTape } = await import('./explore-session.mjs');
+  const { compileSessionTape } = await import('./compile-tape.mjs');
+  const { applyBuilderDataOverrides } = await import('./tape-cli.mjs');
+  const { collectPendingPatches } = await import('./upgrade-framework.mjs');
+  const {
+    startAutonomousSession,
+    resumeAutonomousSession,
+    quarantineAutonomousItem,
+    isItemQuarantined,
+    loadAutonomousSession,
+  } = await import('./lib/autonomous-mode.mjs');
+  const { seedShardsFromTapes } = await import('./build-domain-graph.mjs');
+  const { formatCompactCoverage } = await import('./analyze-coverage.mjs');
+
+  // Defect #3: inline assertion appends PascalCase role suffix to match compiled component locator
+  const draft = createDraftTape({ scenarioId: 'inline-assert-check', baseUrl: 'https://demo.playwright.dev/todomvc' });
+  const refMap = new Map([['@e8', { role: 'textbox', name: 'What needs to be done?' }]]);
+  const assertion = appendRecordedAssertion(draft, {
+    refOrSelector: '@e8',
+    assertionType: 'toBeVisible',
+    expectedValue: 'true',
+    refMap,
+    pageRoute: '/todomvc',
+  });
+  assert.equal(assertion.targetProperty, 'whatNeedsToBeDoneTextbox');
+
+  // Defect #17: formatCompactCoverage clips cleanly on word boundary with ellipsis
+  const compactCov = formatCompactCoverage({
+    coverageMaturityStage: { stage: 3, name: 'Stage 3' },
+    targetApp: { baseUrl: 'https://example.com' },
+    counts: { domainShards: 1, uncoveredShards: 0, recordedTapes: 1, uncompiledTapes: 0, automatedSpecs: 1, components: 1, openDefects: 0 },
+    recommendedNextAction: 'word '.repeat(50),
+  });
+  assert.match(compactCov, /NEXT\s+\| .+\.\.\.$/m);
+
+  // Defect #8 & #20: export-auth-state.mjs --help and analyze-coverage.mjs --help exit 0 cleanly
+  const authHelp = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts/export-auth-state.mjs'), '--help'], { encoding: 'utf8' });
+  assert.equal(authHelp.status, 0);
+  assert.match(authHelp.stdout, /Usage:/);
+
+  const covHelp = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts/analyze-coverage.mjs'), '--help'], { encoding: 'utf8' });
+  assert.equal(covHelp.status, 0);
+  assert.match(covHelp.stdout, /Usage:/);
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-batch2-'));
+  try {
+    fs.mkdirSync(path.join(tmpRoot, '.agents/domain'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, '.exploratory/tapes'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'src/data'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/domain-memory.md'),
+      '# Domain Memory\n- **App Name:** Primary\n- **Base URL:** `https://primary.example.com`\n',
+      'utf8'
+    );
+
+    // Defect #2: cross-origin tape goto preserves tape.baseUrl origin
+    const crossOriginTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'cross-origin-demo',
+      title: 'Cross Origin Demo',
+      charter: 'happy-path-baseline',
+      baseUrl: 'https://secondary.example.org',
+      recordedAt: new Date().toISOString(),
+      tags: ['@p0'],
+      persona: { role: 'primary', dataBuilderRef: 'CrossOriginDemoDataBuilder.standard()' },
+      preconditions: ['Ready'],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'Open secondary portal',
+          businessStep: 'Open secondary portal',
+          pageRoute: '/todomvc',
+          componentCandidate: 'TodomvcSectionComponent',
+          action: 'goto',
+          locatorContract: { strategy: 'url', value: '/todomvc' },
+        },
+      ],
+      networkContracts: [],
+      expectedStates: [
+        {
+          description: 'Visible',
+          businessStep: 'Open secondary portal',
+          targetComponent: 'TodomvcSectionComponent',
+          targetProperty: 'root',
+          assertionType: 'toBeVisible',
+          expectedValueRef: 'true',
+        },
+      ],
+    };
+    fs.writeFileSync(path.join(tmpRoot, '.exploratory/tapes/cross-origin-demo.json'), JSON.stringify(crossOriginTape, null, 2));
+    const comp = compileSessionTape({ tapeInput: 'cross-origin-demo', apply: true, rootDir: tmpRoot, skipMap: true });
+    const specOp = comp.operations.find((o) => o.file && o.file.endsWith('.spec.ts'));
+    const specSrc = fs.readFileSync(path.join(tmpRoot, specOp.file), 'utf8');
+    assert.match(specSrc, /open\("https:\/\/secondary\.example\.org\/todomvc"\)/);
+
+    // Defects #9 & #10: --set-data updates numeric/boolean props in place & preserves multiple flags on a new builder
+    fs.writeFileSync(
+      path.join(tmpRoot, 'src/data/order.builder.ts'),
+      `export class OrderBuilder {\n  static standard() {\n    return {\n      quantity: 5,\n      active: true,\n    };\n  }\n}\n`,
+      'utf8'
+    );
+    applyBuilderDataOverrides(tmpRoot, [
+      { ref: 'OrderBuilder.standard().quantity', value: '10' },
+      { ref: 'BrandNewBuilder.standard().first', value: 'A' },
+      { ref: 'BrandNewBuilder.standard().second', value: 'B' },
+    ]);
+    const orderSrc = fs.readFileSync(path.join(tmpRoot, 'src/data/order.builder.ts'), 'utf8');
+    assert.equal((orderSrc.match(/\bquantity\s*:/g) || []).length, 1);
+    assert.match(orderSrc, /quantity:\s*"10"/);
+    const newBuilderSrc = fs.readFileSync(path.join(tmpRoot, 'src/data/brand-new.builder.ts'), 'utf8');
+    assert.match(newBuilderSrc, /first:\s*"A"/);
+    assert.match(newBuilderSrc, /second:\s*"B"/);
+
+    // Defect #15: upgrade-framework allows core engine script patches (e.g. scripts/orchestrate.mjs)
+    fs.mkdirSync(path.join(tmpRoot, '.agents/upgrade-patches/scripts'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, '.agents/upgrade-patches/scripts/orchestrate.mjs'), '// patched\n');
+    const pending = collectPendingPatches(tmpRoot);
+    assert.ok(pending.some((p) => p.targetRel === 'scripts/orchestrate.mjs'));
+
+    // Defects #13 & #14: autonomous resume auto-extends exhausted maxCycles/maxRuntime & quarantine uses boundary matching
+    const t0 = 1_700_000_000_000;
+    startAutonomousSession(tmpRoot, { goal: 'Test', interval: '30m', maxRuntime: '30m', maxCycles: 2, nowMs: t0 });
+    const s = loadAutonomousSession(tmpRoot);
+    s.cycleCount = 2;
+    quarantineAutonomousItem(tmpRoot, s, { key: 'shard:login', reason: '500', nowMs: t0 + 1000 });
+    assert.equal(isItemQuarantined(s, 'login'), true);
+    assert.equal(isItemQuarantined(s, 'login-p0'), true);
+    assert.equal(isItemQuarantined(s, 'orangehrm-login-verified'), false);
+    const resumed = resumeAutonomousSession(tmpRoot, { nowMs: t0 + 40 * 60 * 1000 });
+    assert.ok(resumed.schedule.maxRuntimeMs > 30 * 60 * 1000);
+    assert.ok(resumed.schedule.maxCycles > 2);
+
+    // Defect #12: seedShardsFromTapes throws Error (instead of process.exit) on invalid scenarioId
+    fs.writeFileSync(path.join(tmpRoot, '.exploratory/tapes/bad.json'), JSON.stringify({ scenarioId: '../evil' }));
+    assert.throws(() => seedShardsFromTapes({ rootDir: tmpRoot }), /Security Error: Invalid scenarioId/);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }

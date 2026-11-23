@@ -221,10 +221,9 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
     }
     const rawScenarioId = String(tape.scenarioId || path.basename(entry.name, '.json'));
     if (!/^[a-z0-9-]+$/.test(rawScenarioId) || rawScenarioId.includes('..')) {
-      console.error(
-        `❌ Security Error: Invalid scenarioId '${rawScenarioId}' in '${entry.name}'. Must match ^[a-z0-9-]+$ with no path traversal.`
+      throw new Error(
+        `Security Error: Invalid scenarioId '${rawScenarioId}' in '${entry.name}'. Must match ^[a-z0-9-]+$ with no path traversal.`
       );
-      process.exit(1);
     }
     const scenarioId = rawScenarioId;
 
