@@ -6243,3 +6243,30 @@ test('7. Negative-auth tapes compile invalid password sentinel, not valid TEST_P
     __envExpr: "requireEnv('TEST_PASSWORD')",
   });
 });
+
+test('audit-solid: Data Builders referenced only by tests/*.setup.ts are not flagged unused (#30)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-audit-setup-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://example.com', '--name', 'SetupRef']);
+    assert.equal(initRes.status, 0, initRes.stderr);
+    fs.mkdirSync(path.join(tmpDir, 'src/data'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/data/user.builder.ts'),
+      `export class UserBuilder {\n  static standardUser() {\n    return { username: 'standard_user' };\n  }\n}\n`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'tests/auth.setup.ts'),
+      `import { UserBuilder } from '@data/user.builder';\nexport const u = UserBuilder.standardUser();\n`
+    );
+    // Dead-code scan only runs when specs exist
+    fs.writeFileSync(path.join(tmpDir, 'tests/dummy.spec.ts'), `import { test } from '@playwright/test';\ntest('x', async () => { await test.step('Business flow', async () => {}); });\n`);
+    const res = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.ok(!/Unused Module Warning\] src\/data\/user\.builder\.ts/.test(res.stdout + res.stderr), res.stdout);
+
+    fs.rmSync(path.join(tmpDir, 'tests/auth.setup.ts'));
+    const res2 = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.ok(/Unused Module Warning\] src\/data\/user\.builder\.ts/.test(res2.stdout + res2.stderr), 'still warns when truly unused');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

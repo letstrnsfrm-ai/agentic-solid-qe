@@ -654,8 +654,13 @@ for (const file of specFiles) {
 
 // 5b. Dead Code Hygiene: warn on unused Components or Data Builders
 if (!filterSquad && (specFiles.length > 0 || pageFiles.length > 0)) {
+  // Playwright setup/teardown files (e.g. tests/auth.setup.ts) legitimately consume Data Builders
+  const lifecycleFiles = [
+    ...walkFiles(path.join(ROOT, 'tests'), '.setup.ts'),
+    ...walkFiles(path.join(ROOT, 'tests'), '.teardown.ts'),
+  ];
   const fileContentsStripped = new Map(
-    [...allSrcTsFiles, ...specFiles].map((f) => [f, stripComments(fs.readFileSync(f, 'utf8'))])
+    [...allSrcTsFiles, ...specFiles, ...lifecycleFiles].map((f) => [f, stripComments(fs.readFileSync(f, 'utf8'))])
   );
   for (const candidateFile of [...componentFiles, ...allBuilderFiles]) {
     const code = fileContentsStripped.get(candidateFile) || stripComments(fs.readFileSync(candidateFile, 'utf8'));
