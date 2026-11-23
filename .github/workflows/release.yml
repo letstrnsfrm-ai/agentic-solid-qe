@@ -15,6 +15,7 @@ concurrency:
 jobs:
   publish-release:
     name: Validate & Publish Release Notes
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -48,7 +49,29 @@ jobs:
         run: |
           node scripts/generate-release-notes.mjs \
             --output .release-notes.md \
-            --json-meta .release-meta.json
+            --json-meta .release-meta.json \
+            --sync-manifests
+
+      - name: Commit & Push Synced Release Manifests
+        id: sync
+        if: steps.notes.outputs.should_release == 'true'
+        env:
+          NEXT_TAG: ${{ steps.notes.outputs.next_tag }}
+        run: |
+          if [[ ! "$NEXT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Security Error: Unsafe NEXT_TAG format: $NEXT_TAG"
+            exit 1
+          fi
+          TARGET_SHA="${{ github.sha }}"
+          if ! git diff --quiet -- package.json package-lock.json CHANGELOG.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package.json package-lock.json CHANGELOG.json
+            git commit -m "chore(release): sync manifests for ${NEXT_TAG} [skip ci]"
+            git push origin HEAD:main
+            TARGET_SHA="$(git rev-parse HEAD)"
+          fi
+          echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release & Tag
         if: steps.notes.outputs.should_release == 'true'
@@ -56,13 +79,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEXT_TAG: ${{ steps.notes.outputs.next_tag }}
           RELEASE_TITLE: ${{ steps.notes.outputs.release_title }}
+          TARGET_SHA: ${{ steps.sync.outputs.target_sha }}
         run: |
           if [[ ! "$NEXT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "❌ Security Error: Unsafe NEXT_TAG format: $NEXT_TAG"
             exit 1
           fi
           gh release create \
-            --target "${{ github.sha }}" \
+            --target "${TARGET_SHA:-${{ github.sha }}}" \
             --title "$RELEASE_TITLE" \
             --notes-file .release-notes.md \
             --latest \

@@ -6270,3 +6270,37 @@ test('audit-solid: Data Builders referenced only by tests/*.setup.ts are not fla
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('generate-release-notes: syncReleaseManifests aligns package.json, package-lock.json & CHANGELOG.json', async () => {
+  const { syncReleaseManifests } = await import('./generate-release-notes.mjs');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-rel-sync-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'demo', version: '0.48.11' }, null, 2));
+    fs.writeFileSync(
+      path.join(tmpDir, 'package-lock.json'),
+      JSON.stringify({ name: 'demo', version: '0.48.11', packages: { '': { version: '0.48.11' } } }, null, 2)
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'CHANGELOG.json'),
+      JSON.stringify({ schemaVersion: '1.0.0', latestVersion: '0.48.11', releases: [{ version: '0.48.11', date: '2026-11-22', highlights: ['prev'], nextActions: [] }] }, null, 2)
+    );
+    const res = syncReleaseManifests(tmpDir, { version: 'v0.48.12', date: '2026-11-23', highlights: ['fix: sample'] });
+    assert.equal(res.version, '0.48.12');
+    assert.deepEqual(res.updatedFiles, ['package.json', 'package-lock.json', 'CHANGELOG.json']);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(tmpDir, 'package.json'), 'utf8')).version, '0.48.12');
+    const lock = JSON.parse(fs.readFileSync(path.join(tmpDir, 'package-lock.json'), 'utf8'));
+    assert.equal(lock.version, '0.48.12');
+    assert.equal(lock.packages[''].version, '0.48.12');
+    const cl = JSON.parse(fs.readFileSync(path.join(tmpDir, 'CHANGELOG.json'), 'utf8'));
+    assert.equal(cl.latestVersion, '0.48.12');
+    assert.equal(cl.releases[0].version, '0.48.12');
+    assert.deepEqual(cl.releases[0].highlights, ['fix: sample']);
+
+    // Idempotent on second call
+    const res2 = syncReleaseManifests(tmpDir, { version: '0.48.12', date: '2026-11-23', highlights: ['fix: sample'] });
+    assert.deepEqual(res2.updatedFiles, []);
+    assert.throws(() => syncReleaseManifests(tmpDir, { version: 'not-semver' }), /Invalid release version/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
