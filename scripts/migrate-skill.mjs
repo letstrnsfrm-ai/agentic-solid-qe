@@ -65,6 +65,7 @@ const CORE_SKILL_IDS = new Set([
   '03-drift-healer',
   '04-ci-pipeline',
   '05-skill-migrator',
+  'agent-browser',
 ]);
 
 const CORE_ENGINE_SCRIPTS = new Set([
