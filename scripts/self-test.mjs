@@ -6304,3 +6304,26 @@ test('generate-release-notes: syncReleaseManifests aligns package.json, package-
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('generate-release-notes: checkReleaseManifestSync catches drifted manifests (#46)', async () => {
+  const { checkReleaseManifestSync, syncReleaseManifests } = await import('./generate-release-notes.mjs');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-rel-gate-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'demo', version: '0.48.11' }, null, 2));
+    fs.writeFileSync(
+      path.join(tmpDir, 'CHANGELOG.json'),
+      JSON.stringify({ schemaVersion: '1.0.0', latestVersion: '0.48.11', releases: [{ version: '0.48.11', date: '2026-11-22', highlights: ['prev'], nextActions: [] }] }, null, 2)
+    );
+    const drifted = checkReleaseManifestSync(tmpDir, 'v0.48.12');
+    assert.equal(drifted.ok, false);
+    assert.ok(drifted.reasons.some((r) => r.includes('package.json')));
+    assert.ok(drifted.reasons.some((r) => r.includes('CHANGELOG.json')));
+
+    syncReleaseManifests(tmpDir, { version: '0.48.12', date: '2026-11-23', highlights: ['aligned'] });
+    const aligned = checkReleaseManifestSync(tmpDir, 'v0.48.12');
+    assert.equal(aligned.ok, true);
+    assert.deepEqual(aligned.reasons, []);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

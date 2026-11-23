@@ -1,7 +1,20 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.12",
+  "latestVersion": "0.48.13",
   "releases": [
+    {
+      "version": "0.48.13",
+      "date": "2026-11-23",
+      "highlights": [
+        "fix(release): enforce --require-manifest-sync gate in release.yml so published tags always match package.json & CHANGELOG.json (#46)",
+        "fix(compile-tape): negative-auth tapes emit invalid password sentinel instead of valid TEST_PASSWORD (#35)",
+        "fix(autonomous-mode): --autonomous resume honors --target-specs override (#31)",
+        "fix(audit-solid): count tests/*.setup.ts and *.teardown.ts as builder/component references (#30)"
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.13."
+      ]
+    },
     {
       "version": "0.48.12",
       "date": "2026-11-23",

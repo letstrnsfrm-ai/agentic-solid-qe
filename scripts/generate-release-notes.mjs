@@ -518,11 +518,48 @@ export function syncReleaseManifests(rootDir, { version, date = null, highlights
   return { version: cleanVersion, updatedFiles };
 }
 
+export function checkReleaseManifestSync(rootDir, targetTag) {
+  const cleanVersion = String(targetTag || '').trim().replace(/^v/, '');
+  const reasons = [];
+  if (!/^\d+\.\d+\.\d+$/.test(cleanVersion)) {
+    return { ok: false, version: cleanVersion, reasons: [`Invalid target version '${targetTag}'.`] };
+  }
+
+  const pkgPath = path.join(rootDir, 'package.json');
+  let pkgVersion = null;
+  if (fs.existsSync(pkgPath)) {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    pkgVersion = String(pkg.version || '').trim();
+    if (pkgVersion !== cleanVersion) {
+      reasons.push(`package.json version (${pkgVersion || 'missing'}) !== target tag (${cleanVersion}).`);
+    }
+  } else {
+    reasons.push('package.json not found.');
+  }
+
+  const changelogPath = path.join(rootDir, 'CHANGELOG.json');
+  let changelogVersion = null;
+  if (fs.existsSync(changelogPath)) {
+    const changelog = JSON.parse(fs.readFileSync(changelogPath, 'utf8'));
+    changelogVersion = String(changelog.latestVersion || '').trim();
+    const topRelease = String(changelog?.releases?.[0]?.version || '').trim();
+    if (changelogVersion !== cleanVersion) {
+      reasons.push(`CHANGELOG.json latestVersion (${changelogVersion || 'missing'}) !== target tag (${cleanVersion}).`);
+    }
+    if (topRelease !== cleanVersion) {
+      reasons.push(`CHANGELOG.json releases[0].version (${topRelease || 'missing'}) !== target tag (${cleanVersion}).`);
+    }
+  }
+
+  return { ok: reasons.length === 0, version: cleanVersion, pkgVersion, changelogVersion, reasons };
+}
+
 function parseCliArgs(argv) {
   const envBefore = process.env.GITHUB_EVENT_BEFORE || null;
   const options = {
     dryRun: false,
     syncManifests: false,
+    requireManifestSync: false,
     output: null,
     jsonMeta: null,
     beforeSha: envBefore ? assertValidSha(envBefore, 'GITHUB_EVENT_BEFORE') : null,
@@ -533,6 +570,8 @@ function parseCliArgs(argv) {
       options.dryRun = true;
     } else if (arg === '--sync-manifests') {
       options.syncManifests = true;
+    } else if (arg === '--require-manifest-sync') {
+      options.requireManifestSync = true;
     } else if (arg === '--output' && argv[i + 1]) {
       options.output = resolveSafeRepoOutputPath(argv[i + 1], '--output');
       i += 1;
@@ -573,6 +612,32 @@ function main() {
 
   const latestTag = getLatestVersionTag();
   const latestTagSemver = latestTag ? parseSemver(latestTag) : null;
+
+  if (options.requireManifestSync && !options.dryRun) {
+    if (latestTagSemver && compareSemver(pkgSemver, latestTagSemver) <= 0) {
+      const meta = {
+        shouldRelease: false,
+        reason: `package.json (${pkg.version}) is not ahead of latest tag ${latestTag}. Bump package.json & CHANGELOG.json in a PR to publish a new release.`,
+        existingTag: latestTag,
+      };
+      if (options.jsonMeta) {
+        fs.mkdirSync(path.dirname(options.jsonMeta), { recursive: true });
+        fs.writeFileSync(options.jsonMeta, JSON.stringify(meta, null, 2), 'utf8');
+      }
+      if (process.env.GITHUB_OUTPUT) {
+        fs.appendFileSync(process.env.GITHUB_OUTPUT, `should_release=false\n`, 'utf8');
+      }
+      console.log(`⏭️  Skipping release: ${meta.reason}`);
+      return;
+    }
+    const targetTag = formatSemver(pkgSemver);
+    const syncCheck = checkReleaseManifestSync(ROOT, targetTag);
+    if (!syncCheck.ok) {
+      throw new Error(
+        `Release Version Sync Gate Failed for ${targetTag}:\n  - ${syncCheck.reasons.join('\n  - ')}`
+      );
+    }
+  }
 
   // Use the higher of package.json version or latest git tag as baseline
   const baseSemver =
