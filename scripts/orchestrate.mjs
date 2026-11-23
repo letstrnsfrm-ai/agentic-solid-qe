@@ -1908,7 +1908,7 @@ if (isMain) {
 Usage:
   npx cortex orchestrate [--squad <squad>] [--json] [--compact] [--run]
   npx cortex orchestrate --loop [--max-steps 10] [--workers 4] [--fast-only] [--skip-tests] [--verify-waves] [--compact] [--json]
-  npx cortex orchestrate --autonomous <start|step|loop|resume|status|stop|quarantine> [--goal "<objective>"] [--focus full|baseline|regression|migrate|heal] [--interval 30m|1h|2h] [--routes <csv>] [--max-runtime <dur>] [--max-cycles <n>] [--json]
+  npx cortex orchestrate --autonomous <start|step|loop|resume|status|stop|quarantine> [--goal "<objective>"] [--focus full|baseline|regression|migrate|heal] [--interval 30m|1h|2h] [--routes <csv>] [--max-runtime <dur>] [--max-cycles <n>] [--target-specs <n>] [--json]
   npx cortex orchestrate --bootstrap [--url <url>] [--name "<App Name>"] [--reset] [--discover-shards] [--max-shards 6] [--filter <pattern>]
   npx cortex orchestrate --explore <start|act|batch|finish|status|actor|capture|checkpoint> [--shard <id>] [explore-args...]
   npx cortex orchestrate --tape <list|show|clone|patch> [tape-args...]
@@ -1974,6 +1974,7 @@ Usage:
           routes: getFlag('--routes'),
           maxRuntime: getFlag('--max-runtime'),
           maxCycles: getFlag('--max-cycles'),
+          targetSpecs: getFlag('--target-specs'),
         });
         if (jsonOut) {
           console.log(JSON.stringify(updated, null, 2));

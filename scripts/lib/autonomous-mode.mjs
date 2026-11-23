@@ -254,7 +254,7 @@ export function startAutonomousSession(
  */
 export function resumeAutonomousSession(
   rootDir = process.cwd(),
-  { goal = null, focus = null, interval = null, routes = null, maxRuntime = null, maxCycles = null, nowMs = Date.now() } = {}
+  { goal = null, focus = null, interval = null, routes = null, maxRuntime = null, maxCycles = null, targetSpecs = null, nowMs = Date.now() } = {}
 ) {
   const session = loadAutonomousSession(rootDir);
   if (!session) {
@@ -263,6 +263,13 @@ export function resumeAutonomousSession(
   if (goal) session.objectives.goal = String(goal).trim();
   if (focus) session.objectives.focus = normalizeFocus(focus);
   if (routes !== null && routes !== undefined) session.objectives.routes = normalizeRoutes(routes);
+  if (targetSpecs !== null && targetSpecs !== undefined && String(targetSpecs).trim() !== '') {
+    const parsedTarget = Number(targetSpecs);
+    if (!Number.isFinite(parsedTarget) || parsedTarget < 1) {
+      throw new Error(`Invalid --target-specs value '${targetSpecs}'. Expected a positive integer.`);
+    }
+    session.objectives.targetSpecs = Math.floor(parsedTarget);
+  }
   if (interval) {
     const ms = parseDurationMs(interval);
     session.schedule.intervalMs = ms;
