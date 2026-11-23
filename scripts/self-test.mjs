@@ -5492,6 +5492,199 @@ test('framework-hardening-batch-3: compact multi-attr refs, ErrorBannerContract,
   }
 });
 
+test('framework-hardening-batch-4: SSRF IPv6/trailing-dot, seedShardsFromTapes $&/null/boundary, context-pack inspectSpec confinement, validate-tapes expectedStates/locatorContract, compile-tape upload/waitFor/capturedVars/unused-imports, dotnet partial/Gherkin/When* consolidation, and extractBraceBlock comments', async () => {
+  const { isForbiddenIpAddress, assertSafeTargetHttpUrl } = await import('./report-cloud.mjs');
+  const { seedShardsFromTapes } = await import('./build-domain-graph.mjs');
+  const { buildContextPack } = await import('./context-pack.mjs');
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const { buildInheritanceMap, parseSpecFlowSuite, rationalizeLegacySuite } = await import('./dotnet-enterprise-analyzer.mjs');
+  const { discoverLegacyTests } = await import('./legacy-test-migrator.mjs');
+
+  // 1. SSRF: trailing dot, IPv6 multicast ff02::1, IPv4-compatible ::169.254.169.254, non-canonical 0:0::1/::0
+  assert.throws(() => assertSafeTargetHttpUrl('http://metadata.google.internal./computeMetadata/v1/'), /Security Error/);
+  assert.equal(isForbiddenIpAddress('ff02::1'), true);
+  assert.equal(isForbiddenIpAddress('::a9fe:a9fe'), true);
+  assert.equal(isForbiddenIpAddress('0:0::1'), true);
+  assert.equal(isForbiddenIpAddress('::0'), true);
+  assert.equal(isForbiddenIpAddress('0:0::1', { allowLoopback: true }), false);
+
+  // 2. validate-tapes: rejects undeclared capturedVariable, bad actor, bad maxDiffPixelRatio, bad parentScope.strategy
+  const invalidTape = {
+    schemaVersion: '1.0.0',
+    scenarioId: 'val-edge-p0',
+    title: 'Validation Edge',
+    charter: 'happy-path-baseline',
+    baseUrl: 'https://example.com',
+    recordedAt: new Date().toISOString(),
+    tags: ['@p0'],
+    persona: { role: 'user', dataBuilderRef: 'ValEdgeDataBuilder.standard()' },
+    actors: [{ actorId: 'buyer', role: 'buyer', portalBaseUrl: 'https://example.com', dataBuilderRef: 'ValEdgeDataBuilder.buyer()' }],
+    capturedVariables: [{ name: 'orderId', source: 'url' }],
+    preconditions: [],
+    networkContracts: [],
+    semanticSteps: [
+      {
+        stepIndex: 1,
+        intent: 'click',
+        businessStep: 'Do step',
+        pageRoute: '/home',
+        componentCandidate: 'HomeComponent',
+        action: 'click',
+        locatorContract: {
+          strategy: 'getByRole',
+          role: 'button',
+          value: 'Go',
+          parentScope: { strategy: 'invalidStrat', value: '' },
+        },
+      },
+    ],
+    expectedStates: [
+      {
+        description: 'bad',
+        assertionType: 'toHaveText',
+        actor: 'ghostActor',
+        targetComponent: 'HomeComponent',
+        targetProperty: 'root',
+        expectedValueRef: 'capturedVariable:undeclaredVar',
+        maxDiffPixelRatio: 2.5,
+      },
+    ],
+  };
+  const vErrs = validateTapeObject(invalidTape, 'val-edge-p0.json');
+  assert.ok(vErrs.some((e) => /parentScope\.strategy/.test(e)));
+  assert.ok(vErrs.some((e) => /expectedStates\.actor/.test(e)));
+  assert.ok(vErrs.some((e) => /maxDiffPixelRatio/.test(e)));
+  assert.ok(vErrs.some((e) => /expectedValueRef/.test(e)));
+
+  // 3. rationalizeLegacySuite: does not collapse When* BDD methods or distinct classes
+  const rat = rationalizeLegacySuite([
+    { id: 'cs-a-when-login', className: 'AuthTests', testMethod: 'WhenUserLogsIn', squad: 'auth', kind: 'ui', pageObjectRefs: [] },
+    { id: 'cs-a-when-logout', className: 'AuthTests', testMethod: 'WhenUserLogsOut', squad: 'auth', kind: 'ui', pageObjectRefs: [] },
+    { id: 'cs-b-verify', className: 'LoginTests', testMethod: 'VerifyValidation', squad: 'core', kind: 'ui', pageObjectRefs: [] },
+    { id: 'cs-c-verify', className: 'CheckoutTests', testMethod: 'VerifyValidation', squad: 'core', kind: 'ui', pageObjectRefs: [] },
+  ]);
+  assert.equal(rat.consolidationGroups.length, 0);
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-batch4-'));
+  try {
+    fs.mkdirSync(path.join(tmpRoot, '.agents/domain/shards'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, '.exploratory/tapes'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'legacy/Tests'), { recursive: true });
+
+    // 4. seedShardsFromTapes: tolerates null JSON tape and avoids $& corruption in domain-memory.md
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/domain-memory.md'),
+      '# Domain Memory\n| Feature | Owner | Routes | Shard | Summary |\n| :--- | :--- | :--- | :--- | :--- |\n'
+    );
+    fs.writeFileSync(path.join(tmpRoot, '.exploratory/tapes/null-tape.json'), 'null');
+    fs.writeFileSync(
+      path.join(tmpRoot, '.exploratory/tapes/dollar-title.json'),
+      JSON.stringify({
+        scenarioId: 'dollar-title',
+        title: 'Price $& Discount\nLine 2',
+        semanticSteps: [{ pageRoute: '/pricing', componentCandidate: 'PricingComponent' }],
+      })
+    );
+    seedShardsFromTapes({ rootDir: tmpRoot });
+    const memOut = fs.readFileSync(path.join(tmpRoot, '.agents/domain/domain-memory.md'), 'utf8');
+    assert.match(memOut, /\*\*Price \$& Discount Line 2\*\*/);
+
+    // 5. context-pack inspectSpec blocks path traversal outside rootDir
+    const packEscape = buildContextPack(tmpRoot, { spec: '../../../etc/hosts' });
+    assert.equal(packEscape.spec ?? null, null);
+
+    // 6. compile-tape: standalone capturedVariables declared, upload/waitFor compiled, unused requestBuilderRef omitted
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/domain-graph.json'),
+      JSON.stringify({ targetApp: { baseUrl: 'https://example.com' }, shards: [] })
+    );
+    const uploadTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'upload-flow-p0',
+      title: 'Upload Flow',
+      charter: 'happy-path-baseline',
+      baseUrl: 'https://example.com/upload',
+      recordedAt: new Date().toISOString(),
+      tags: ['@p0'],
+      persona: { role: 'user', dataBuilderRef: 'UploadFlowDataBuilder.standard()' },
+      capturedVariables: [{ name: 'receiptId', source: 'urlParam' }],
+      preconditions: [],
+      networkContracts: [{ method: 'POST', urlPattern: '/api/upload', expectedStatus: 200, requestBuilderRef: 'UnusedReqBuilder.payload()' }],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'wait for uploader',
+          businessStep: 'Wait for upload form',
+          pageRoute: '/upload',
+          componentCandidate: 'UploadSectionComponent',
+          action: 'waitFor',
+          locatorContract: { strategy: 'getByRole', role: 'region', value: 'Uploader' },
+        },
+        {
+          stepIndex: 2,
+          intent: 'upload file',
+          businessStep: 'Attach document',
+          pageRoute: '/upload',
+          componentCandidate: 'UploadSectionComponent',
+          action: 'upload',
+          inputDataRef: 'UploadFlowDataBuilder.standard().filePath',
+          locatorContract: { strategy: 'getByLabel', value: 'Document' },
+        },
+      ],
+      expectedStates: [
+        {
+          description: 'Verify receipt',
+          assertionType: 'toContainText',
+          targetComponent: 'UploadSectionComponent',
+          targetProperty: 'root',
+          expectedValueRef: 'capturedVariable:receiptId',
+        },
+      ],
+    };
+    fs.writeFileSync(path.join(tmpRoot, '.exploratory/tapes/upload-flow-p0.json'), JSON.stringify(uploadTape, null, 2));
+    const compRes = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, 'scripts/compile-tape.mjs'), 'upload-flow-p0', '--apply'],
+      { cwd: tmpRoot, encoding: 'utf8' }
+    );
+    assert.equal(compRes.status, 0, compRes.stderr || compRes.stdout);
+    const genSpec = fs.readFileSync(path.join(tmpRoot, 'tests/upload-flow-p0.spec.ts'), 'utf8');
+    assert.match(genSpec, /let receiptId = '';/);
+    assert.match(genSpec, /\.waitFor\(\);/);
+    assert.match(genSpec, /\.setInputFiles\(/);
+    assert.doesNotMatch(genSpec, /UnusedReqBuilder/);
+
+    // 7. dotnet: partial class merge, generic where constraint, Gherkin Examples tag isolation, extractBraceBlock comment apostrophe
+    fs.writeFileSync(
+      path.join(tmpRoot, 'legacy/Tests/CheckoutTests.Part1.cs'),
+      'public partial class CheckoutTests<T> : IClassFixture<Foo, Bar>, BaseTest where T : class {\n  [Test]\n  public void FirstTest() {\n    // verify user\'s cart\n    var p = @"C:\\temp\\";\n    Assert.IsTrue(true);\n  }\n  [Test]\n  public void SecondTest() {\n    Assert.IsTrue(true);\n  }\n}\n'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'legacy/Tests/CheckoutTests.Part2.cs'),
+      'public partial class CheckoutTests {\n  private CartPage _cart;\n}\n'
+    );
+    fs.writeFileSync(
+      path.join(tmpRoot, 'legacy/Tests/Cart.feature'),
+      'Feature: Cart\n  Scenario Outline: Add item\n    Given I am on home\n    When I add "<item>"\n    @ignore\n    Examples:\n      | item |\n      | book |\n  Scenario: Active checkout\n    Given I am on cart\n    Then total is visible\n'
+    );
+    const inhMap = buildInheritanceMap(
+      [path.join(tmpRoot, 'legacy/Tests/CheckoutTests.Part1.cs'), path.join(tmpRoot, 'legacy/Tests/CheckoutTests.Part2.cs')],
+      path.join(tmpRoot, 'legacy')
+    );
+    assert.equal(inhMap.get('CheckoutTests')?.baseClass, 'BaseTest');
+    assert.ok(inhMap.get('CheckoutTests')?.pageObjectFields.includes('CartPage'));
+    const sf = parseSpecFlowSuite(path.join(tmpRoot, 'legacy'));
+    const activeSc = sf.scenarios.find((s) => s.name === 'Active checkout');
+    assert.equal(activeSc?.isSkipped, false);
+    const disc = discoverLegacyTests(path.join(tmpRoot, 'legacy'));
+    const firstCs = disc.tests.find((t) => t.testMethod === 'FirstTest');
+    assert.ok(firstCs && firstCs.lineCount <= 8, `Expected FirstTest not to swallow SecondTest (lineCount=${firstCs?.lineCount})`);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+
 
 
 

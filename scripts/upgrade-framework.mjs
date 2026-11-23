@@ -353,9 +353,10 @@ function runApplyPatches(targetRoot, { dryRun = false, force = false } = {}) {
     if (force) {
       if (!dryRun) {
         if (fs.existsSync(p.targetPath)) {
+          const safeBackupRel = p.targetRel.replace(/[\\/]+/g, '__');
           const backupPath = assertSafePatchDestination(
             targetRoot,
-            path.join(targetRoot, '.agents/legacy-backups', `${path.basename(p.targetRel)}.pre-patch`),
+            path.join(targetRoot, '.agents/legacy-backups', `${safeBackupRel}.pre-patch`),
             'backup file'
           );
           fs.mkdirSync(path.dirname(backupPath), { recursive: true, mode: 0o700 });
@@ -512,7 +513,14 @@ Options:
 }
 
 const isDirectExecution =
-  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  Boolean(process.argv[1]) &&
+  (() => {
+    try {
+      return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+    } catch {
+      return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+    }
+  })();
 if (isDirectExecution) {
   main().catch((err) => {
     console.error(`❌ Upgrade failed: ${err?.message || err}`);

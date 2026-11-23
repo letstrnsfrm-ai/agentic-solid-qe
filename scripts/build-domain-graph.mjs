@@ -219,6 +219,7 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
     } catch {
       continue;
     }
+    if (!tape || typeof tape !== 'object' || Array.isArray(tape)) continue;
     const rawScenarioId = String(tape.scenarioId || path.basename(entry.name, '.json'));
     if (!/^[a-z0-9-]+$/.test(rawScenarioId) || rawScenarioId.includes('..')) {
       throw new Error(
@@ -226,13 +227,16 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
       );
     }
     const scenarioId = rawScenarioId;
+    const steps = Array.isArray(tape.semanticSteps) ? tape.semanticSteps : [];
 
     // Match a Tier 1 Squad Hub if scenarioId or routes start with a known squad prefix
     const matchedHub = existingGraph.domainHubs.find(
       (h) =>
         scenarioId.startsWith(`${h.squad}-`) ||
-        (tape.semanticSteps ?? []).some(
-          (s) => typeof s.pageRoute === 'string' && s.pageRoute.startsWith(`/${h.squad}`)
+        steps.some(
+          (s) =>
+            typeof s?.pageRoute === 'string' &&
+            (s.pageRoute === `/${h.squad}` || s.pageRoute.startsWith(`/${h.squad}/`))
         )
     );
 
@@ -246,7 +250,8 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
 
     const routes = new Set();
     const components = new Set();
-    for (const step of tape.semanticSteps ?? []) {
+    for (const step of steps) {
+      if (!step || typeof step !== 'object') continue;
       if (step.componentCandidate) components.add(step.componentCandidate);
       for (const candidate of [
         step.pageRoute,
@@ -311,7 +316,7 @@ ${actorLines}${networkLines}`;
 
     // Auto-index the newly seeded shard in Tier 1 Squad Hub or Tier 0 domain-memory.md
     const routeSummary = routeList.map((r) => `\`${r}\``).join(', ');
-    const summaryText = (tape.title || scenarioId).replace(/\|/g, '-');
+    const summaryText = String(tape.title || scenarioId).replace(/[\r\n]+/g, ' ').replace(/\|/g, '-').trim();
     if (matchedHub) {
       const hubIndexFile = path.join(rootDir, matchedHub.hubPath);
       if (fs.existsSync(hubIndexFile)) {
@@ -327,7 +332,7 @@ ${actorLines}${networkLines}`;
         const row = `| **${summaryText}** | \`${ownerSquad}\` | ${routeSummary} | \`${shardRel}\` | Auto-seeded from \`${entry.name}\` |\n`;
         const tableMarker = '| :--- | :--- | :--- | :--- | :--- |';
         if (memContent.includes(tableMarker)) {
-          const updatedMem = memContent.replace(tableMarker, `${tableMarker}\n${row.trimEnd()}`);
+          const updatedMem = memContent.replace(tableMarker, () => `${tableMarker}\n${row.trimEnd()}`);
           fs.writeFileSync(domainMemoryPath, updatedMem, 'utf8');
         } else {
           fs.appendFileSync(domainMemoryPath, (memContent.endsWith('\n') ? '' : '\n') + row, 'utf8');

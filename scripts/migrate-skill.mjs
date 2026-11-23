@@ -413,10 +413,11 @@ function runWorkspaceDiscovery() {
     : 0;
 
   const existingManifest = loadMigrationManifest(ROOT);
+  const manifestLegacyRoot = existingManifest?.legacySourceRoot || existingManifest?.scanRoot;
   const rawLegacyRoot = legacyRootArg
     ? path.resolve(ROOT, legacyRootArg)
-    : existingManifest?.legacySourceRoot
-      ? path.resolve(ROOT, existingManifest.legacySourceRoot)
+    : manifestLegacyRoot
+      ? path.resolve(ROOT, manifestLegacyRoot)
       : ['e2e-playwright', 'qe-playwright'].includes(path.basename(scanRoot))
         ? path.dirname(scanRoot)
         : scanRoot;
@@ -483,10 +484,11 @@ if (discoverMode) {
 
 if (legacyTargetArg) {
   const existingManifest = loadMigrationManifest(ROOT);
+  const manifestLegacyRoot = existingManifest?.legacySourceRoot || existingManifest?.scanRoot;
   const rawLegacyRoot = legacyRootArg
     ? path.resolve(ROOT, legacyRootArg)
-    : existingManifest?.legacySourceRoot
-      ? path.resolve(ROOT, existingManifest.legacySourceRoot)
+    : manifestLegacyRoot
+      ? path.resolve(ROOT, manifestLegacyRoot)
       : ['e2e-playwright', 'qe-playwright'].includes(path.basename(ROOT))
         ? path.dirname(ROOT)
         : ROOT;
@@ -656,15 +658,26 @@ if (squadArg) {
   squadArg = assertSafeSlug(squadArg.toLowerCase(), '--squad');
 }
 
+const primaryBaseLower = primaryDocPath ? path.basename(primaryDocPath).toLowerCase() : '';
+const idSourceName = stat.isDirectory()
+  ? path.basename(resolvedSource)
+  : primaryBaseLower === 'skill.md' || primaryBaseLower === 'readme.md'
+    ? path.basename(path.dirname(primaryDocPath))
+    : path.basename(primaryDocPath || resolvedSource, path.extname(primaryDocPath || resolvedSource));
 const derivedSkillId =
   skillNameArg ||
-  path
-    .basename(primaryDocPath || resolvedSource, path.extname(primaryDocPath || resolvedSource))
+  idSourceName
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, '-')
     .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '') ||
   'custom-migrated-skill';
 const defaultSkillId = assertSafeSlug(derivedSkillId, 'skill ID');
+if (CORE_SKILL_IDS.has(defaultSkillId)) {
+  console.error(
+    `❌ Security Error: Refusing to overwrite core framework skill '${defaultSkillId}'. Pass a custom --name <skill-id>.`
+  );
+  process.exit(1);
+}
 
 // 2. Discover scripts referenced in the markdown + co-located scripts
 const scriptRegex =
@@ -727,7 +740,7 @@ const BASIC_AUTH_URL_REGEX =
 const KNOWN_TOKEN_LITERAL_REGEX =
   /(['"`])((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[0-9A-Za-z-]{10,}|npm_[A-Za-z0-9]{36}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}[^'"`]*|ChangeMe123!)\1/g;
 const BARE_TOKEN_REGEX =
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35}\b|\bxox[baprs]-[0-9A-Za-z-]{10,}\b|\bnpm_[A-Za-z0-9]{36}\b|\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b|\b(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b|\bChangeMe123!\b/g;
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35}\b|\bxox[baprs]-[0-9A-Za-z-]{10,}\b|\bnpm_[A-Za-z0-9]{36}\b|\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b|\b(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])|\bChangeMe123!(?![A-Za-z0-9_])/g;
 const PRIVATE_KEY_BLOCK_REGEX =
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
 const BIDI_CONTROL_REGEX = /[\u202A-\u202E\u2066-\u2069]/g;
@@ -763,10 +776,12 @@ for (const [absPath, originalRef] of resolvedScripts.entries()) {
     ) ||
     DB_CONN_URI_REGEX.test(content) ||
     BASIC_AUTH_URL_REGEX.test(content) ||
+    KNOWN_TOKEN_LITERAL_REGEX.test(content) ||
     BARE_TOKEN_REGEX.test(content) ||
     PRIVATE_KEY_BLOCK_REGEX.test(content);
   DB_CONN_URI_REGEX.lastIndex = 0;
   BASIC_AUTH_URL_REGEX.lastIndex = 0;
+  KNOWN_TOKEN_LITERAL_REGEX.lastIndex = 0;
   BARE_TOKEN_REGEX.lastIndex = 0;
   PRIVATE_KEY_BLOCK_REGEX.lastIndex = 0;
 

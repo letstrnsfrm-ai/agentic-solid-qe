@@ -54,10 +54,12 @@ export default defineConfig({
     {
       name: 'firefox',
       use: { ...devices['Desktop Firefox'] },
+      ...(hasAuthSetup ? { dependencies: ['setup'] } : {}),
     },
     {
       name: 'webkit',
       use: { ...devices['Desktop Safari'] },
+      ...(hasAuthSetup ? { dependencies: ['setup'] } : {}),
     },
   ],
 });

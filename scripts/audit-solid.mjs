@@ -582,7 +582,7 @@ for (const file of specFiles) {
     );
   }
 
-  if (/from\s+['"]@playwright\/test['"]/.test(codeWithoutComments)) {
+  if (/\bimport\s+(?!type\b)[\s\S]*?\bfrom\s+['"]@playwright\/test['"]/.test(codeWithoutComments)) {
     violations.push(
       `[OCP/ISP Fixture Rule] ${specRel} imports directly from '@playwright/test'. Import { test, expect } from '@fixtures/app.fixture' (or a mergeTests domain fixture) instead.`
     );
@@ -736,7 +736,9 @@ const UNSAFE_TS_CODE_PATTERNS = [
   },
 ];
 
+const pwConfigFile = path.join(ROOT, 'playwright.config.ts');
 const allCodeAndArtifactFiles = [
+  ...(fs.existsSync(pwConfigFile) ? [pwConfigFile] : []),
   ...walkFiles(path.join(ROOT, 'src'), '.ts'),
   ...walkFiles(path.join(ROOT, 'tests'), '.ts'),
   ...walkFiles(path.join(ROOT, '.agents/skills')),
@@ -787,7 +789,7 @@ for (const targetFile of allCodeAndArtifactFiles) {
   }
 
   const inspectText = targetFile.endsWith('.ts') ? stripComments(rawText) : rawText;
-  if (relTarget.startsWith('src/') || relTarget.startsWith('tests/')) {
+  if (relTarget.startsWith('src/') || relTarget.startsWith('tests/') || relTarget === 'playwright.config.ts') {
     for (const unsafeRule of UNSAFE_TS_CODE_PATTERNS) {
       if (unsafeRule.regex.test(inspectText)) {
         violations.push(

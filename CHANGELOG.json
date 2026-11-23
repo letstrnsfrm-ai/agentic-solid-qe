@@ -1,7 +1,17 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.8",
+  "latestVersion": "0.48.9",
   "releases": [
+    {
+      "version": "0.48.9",
+      "date": "2026-11-22",
+      "highlights": [
+        "Framework Hardening Batch #4 (40 Defects Fixed across `src/`, `playwright.config.ts`, `tsconfig.json`, and 15 core engine scripts): Fixed Base64-padded cookie drop in `AuthTokenBridge`, hex IPv4-mapped IPv6 / trailing-dot / `127.0.0.2` / `ff00::/8` / IPv4-compatible IPv6 SSRF bypasses across `auth-token.bridge.ts`, `explore-handshake.ts`, and `report-cloud.mjs`, dangling symlink guards in `src/shared/` and `compile-tape.mjs`, one-shot sentinel in `restoreCheckpoint()`, calendar rollover in `RelativeDateHelper.monthsAgo()`/`yearsAgo()`, `firefox`/`webkit` `dependencies: ['setup']` in `playwright.config.ts`, `seedShardsFromTapes()` null JSON/`$&`/newline/segment-boundary bugs, `orchestrate.mjs` `parsedBase` ReferenceError / `finalVerify.failedStage?.stage` & static-gate pause / Priority 6 `04-ci-pipeline` in `--loop`, `sync-skills.mjs` `--squad` Section 3 table insertion, `upgrade-framework.mjs` non-colliding `.pre-patch` backups & symlink-safe `isDirectExecution`, `audit-solid.mjs` `import type` allowance & `playwright.config.ts` security scan, `verify-fast.mjs` stderr+stdout error capture, `context-pack.mjs` `inspectSpec` path confinement & Windows `/shards/` matching, `explore-session.mjs` `--checkpoint` cookie restore & reload + scoped builder hydration, `compile-tape.mjs` standalone `capturedVariables` / unused builder import filtering (`TS6133`) / non-Seeder `seedClientRef` & bare class refs / `@steps`/`@seeders`/`@api` aliases / `upload` & `waitFor` actions, `heal-drift.mjs` `*.step.ts` scanning / `frameLocator` preservation / tape scoping preservation / `try/catch` rollback, `validate-tapes.mjs` null-tape CLI guard & `expectedStates`/`locatorContract` validation, and DotNet/Migration/Wave Factory fixes (v1/v2 manifest bridge, comment/verbatim-string `extractBraceBlock`, SpecFlow translation, `When*` consolidation guard, re-scan ledger status recomputation, `migrate-skill.mjs` `nextAction`, `ChangeMe123!` secret detection, directory skill ID + `CORE_SKILL_IDS` protection, `partial class` & generic `where` inheritance, and Gherkin `Examples:`/`Background:` isolation)."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.9 Framework Hardening Batch #4."
+      ]
+    },
     {
       "version": "0.48.8",
       "date": "2026-11-22",

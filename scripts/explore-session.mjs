@@ -1030,11 +1030,40 @@ async function cmdStart(args) {
     variables = ck.variables || {};
     checkpointPath = `.exploratory/checkpoints/${safeCk}.json`;
     const openTarget = ckUrl || currentUrl;
+    const ckOrigin = ckUrl ? new URL(ckUrl).origin : null;
+    if (Array.isArray(ck.cookies) && ck.cookies.length > 0) {
+      const tmpStateFile = path.join(os.tmpdir(), `asqe-ck-${process.pid}-${Date.now()}.json`);
+      try {
+        const origins = ckOrigin
+          ? [
+              {
+                origin: ckOrigin,
+                localStorage: Object.entries(ck.localStorage || {}).map(([name, value]) => ({
+                  name,
+                  value: String(value ?? ''),
+                })),
+              },
+            ]
+          : [];
+        fs.writeFileSync(tmpStateFile, JSON.stringify({ cookies: ck.cookies, origins }), { mode: 0o600 });
+        runAgentBrowser(session, ['state', 'load', tmpStateFile], { allowFail: true });
+      } finally {
+        try {
+          if (fs.existsSync(tmpStateFile)) fs.unlinkSync(tmpStateFile);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
     const openArgs = headed ? ['--headed', 'open', openTarget] : ['open', openTarget];
     runAgentBrowser(session, openArgs);
     // Hydrate localStorage & sessionStorage ONLY when the browser origin strictly matches the checkpoint's origin
-    const ckOrigin = ckUrl ? new URL(ckUrl).origin : null;
-    if (ckOrigin && new URL(openTarget).origin === ckOrigin) {
+    let hydratedStorage = false;
+    if (
+      ckOrigin &&
+      new URL(openTarget).origin === ckOrigin &&
+      (Object.keys(ck.localStorage || {}).length > 0 || Object.keys(ck.sessionStorage || {}).length > 0)
+    ) {
       const hydrateJs = `(() => {
         if (window.location.origin !== ${JSON.stringify(ckOrigin)}) return location.href;
         const l = ${JSON.stringify(ck.localStorage || {})};
@@ -1044,8 +1073,9 @@ async function cmdStart(args) {
         return location.href;
       })()`;
       runAgentBrowser(session, ['eval', hydrateJs], { allowFail: true });
+      hydratedStorage = true;
     }
-    if (currentUrl !== openTarget) {
+    if (currentUrl !== openTarget || hydratedStorage) {
       runAgentBrowser(session, ['open', currentUrl], { allowFail: true });
     }
     resumesFrom = {
@@ -1641,14 +1671,19 @@ async function cmdFinish(args) {
 
     // Hydrate synthesized Data Builder sample placeholders with non-sensitive values observed during live exploration
     const recordedVals = state?.recordedBuilderValues || {};
-    const builderOps = (report.operations || []).filter((op) => op.layer === 'data-builder' && op.file);
+    const builderOps = (report.operations || []).filter(
+      (op) => op.layer === 'data-builder' && op.file && op.action !== 'reuse-existing'
+    );
     for (const bOp of builderOps) {
       const absBuilder = assertNoSymlinkEscape(ROOT, path.join(ROOT, bOp.file), 'Data Builder');
       if (!fs.existsSync(absBuilder)) continue;
       let bSrc = fs.readFileSync(absBuilder, 'utf8');
       let changed = false;
       for (const [refKey, rawSampleVal] of Object.entries(recordedVals)) {
-        const propName = String(refKey).split('.').pop();
+        const refParts = String(refKey).split('.');
+        const refClass = refParts[0];
+        const propName = refParts[refParts.length - 1];
+        if (bOp.className && refClass && refClass !== bOp.className) continue;
         if (!propName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(propName)) continue;
         if (SENSITIVE_FIELD_RE.test(propName) || SENSITIVE_VALUE_RE.test(String(rawSampleVal || '').trim())) continue;
         const propRe = new RegExp(`(\\b${propName}\\s*:\\s*)(?:'[^']*'|\"[^\"]*\")(,?)`);

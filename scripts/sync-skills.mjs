@@ -1426,9 +1426,15 @@ if (squadName) {
     const mem = fs.readFileSync(targetDomainMemory, 'utf8');
     const relHub = `.agents/domain/domains/${cleanSquad}/index.md`;
     if (!mem.includes(relHub)) {
-      const row = `| **${cleanSquad} Domain** | \`@org/${cleanSquad}-squad\` | \`/${cleanSquad}\` | \`${relHub}\` | Tier 1 Squad Sub-Hub |\n`;
+      const row = `| **${cleanSquad} Domain** | \`@org/${cleanSquad}-squad\` | \`/${cleanSquad}\` | \`${relHub}\` | Tier 1 Squad Sub-Hub |`;
       if (!dryRun) {
-        fs.appendFileSync(targetDomainMemory, row, 'utf8');
+        const tableMarker = '| :--- | :--- | :--- | :--- | :--- |';
+        if (mem.includes(tableMarker)) {
+          const updated = mem.replace(tableMarker, () => `${tableMarker}\n${row}`);
+          fs.writeFileSync(targetDomainMemory, updated, 'utf8');
+        } else {
+          fs.appendFileSync(targetDomainMemory, (mem.endsWith('\n') ? '' : '\n') + row + '\n', 'utf8');
+        }
       }
       console.log(
         `${dryRun ? '🔍 [DRY-RUN] Would register' : '🧭 Registered'} Tier 1 Squad Sub-Hub in .agents/domain/domain-memory.md: ${relHub}`
