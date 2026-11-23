@@ -143,6 +143,11 @@ export function findFreePort(host = '127.0.0.1') {
 export function parseSnapshotRefs(snapshotText = '') {
   const refMap = new Map();
   const roleNamelessCounts = new Map();
+  const roleNamedEntries = new Map();
+  const extractHint = (line) => {
+    const hm = line.match(/\bhint=["']([^"']+)["']/i);
+    return hm ? hm[1].trim() : undefined;
+  };
   for (const rawLine of String(snapshotText).split('\n')) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -151,12 +156,19 @@ export function parseSnapshotRefs(snapshotText = '') {
     if (m) {
       const role = m[1].toLowerCase();
       const name = m[2] || '';
+      const hint = extractHint(line);
       let nth;
       if (!name) {
         nth = roleNamelessCounts.get(role) || 0;
         roleNamelessCounts.set(role, nth + 1);
       }
-      refMap.set(`@${m[3]}`, { role, name, ...(nth !== undefined ? { nth } : {}), rawLine: line });
+      const refKey = `@${m[3]}`;
+      refMap.set(refKey, { role, name, ...(nth !== undefined ? { nth } : {}), ...(hint ? { hint } : {}), rawLine: line });
+      if (name) {
+        const k = `${role}::${name.toLowerCase()}`;
+        if (!roleNamedEntries.has(k)) roleNamedEntries.set(k, []);
+        roleNamedEntries.get(k).push(refKey);
+      }
       continue;
     }
     // Format 2: `@e5 [button] "Sign In"` or `@e5 button "Sign In"`
@@ -164,12 +176,30 @@ export function parseSnapshotRefs(snapshotText = '') {
     if (m) {
       const role = m[2].toLowerCase();
       const name = m[3] || '';
+      const hint = extractHint(line);
       let nth;
       if (!name) {
         nth = roleNamelessCounts.get(role) || 0;
         roleNamelessCounts.set(role, nth + 1);
       }
-      refMap.set(`@${m[1]}`, { role, name, ...(nth !== undefined ? { nth } : {}), rawLine: line });
+      const refKey = `@${m[1]}`;
+      refMap.set(refKey, { role, name, ...(nth !== undefined ? { nth } : {}), ...(hint ? { hint } : {}), rawLine: line });
+      if (name) {
+        const k = `${role}::${name.toLowerCase()}`;
+        if (!roleNamedEntries.has(k)) roleNamedEntries.set(k, []);
+        roleNamedEntries.get(k).push(refKey);
+      }
+    }
+  }
+  for (const refs of roleNamedEntries.values()) {
+    if (refs.length > 1) {
+      refs.forEach((refKey, idx) => {
+        const entry = refMap.get(refKey);
+        if (entry) {
+          entry.duplicate = true;
+          if (entry.nth === undefined) entry.nth = idx;
+        }
+      });
     }
   }
   return refMap;
@@ -201,11 +231,20 @@ export function resolveSemanticLocator(refOrSelector, refMap) {
   if (typeof refOrSelector === 'string' && refOrSelector.startsWith('@e')) {
     const meta = refMap?.get(refOrSelector);
     if (meta) {
+      if (meta.hint && /^testid:/i.test(meta.hint)) {
+        return { strategy: 'getByTestId', value: meta.hint.replace(/^testid:/i, '').trim() };
+      }
       if (meta.role && meta.name) {
-        return { strategy: 'getByRole', role: meta.role, value: meta.name };
+        return {
+          strategy: 'getByRole',
+          role: meta.role,
+          value: meta.name,
+          ...(meta.hint ? { hint: meta.hint } : {}),
+          ...(meta.duplicate && Number.isInteger(meta.nth) ? { nth: meta.nth } : {}),
+        };
       }
       if (meta.name) {
-        return { strategy: 'getByLabel', value: meta.name };
+        return { strategy: 'getByLabel', value: meta.name, ...(meta.hint ? { hint: meta.hint } : {}) };
       }
       if (meta.role) {
         return {
@@ -213,6 +252,7 @@ export function resolveSemanticLocator(refOrSelector, refMap) {
           role: meta.role,
           value: '',
           ...(Number.isInteger(meta.nth) ? { nth: meta.nth } : {}),
+          ...(meta.hint ? { hint: meta.hint } : {}),
         };
       }
     }
@@ -225,10 +265,20 @@ export function resolveSemanticLocator(refOrSelector, refMap) {
   return { strategy: 'getByText', value: sel || 'unknown' };
 }
 
+const NON_SECRET_NUMERIC_FIELD_RE =
+  /\b(age|year|value|mileage|excess|count|quantity|qty|amount|price|days|months|seats|doors|engine|cc)\b/i;
+const STRICT_SECRET_NAME_RE =
+  /(pass(word|code)?|secret|token|api[-_]?key|ssn|social|cvv|cvc|\bpin\b|_pin|pin_|\botp\b|_otp|otp_)/i;
+
 export function isSensitiveInput(fieldMeta = {}, value = '') {
-  const fieldName = `${fieldMeta.name || ''} ${fieldMeta.role || ''} ${fieldMeta.rawLine || ''}`;
-  if (SENSITIVE_FIELD_RE.test(fieldName)) return true;
   if (typeof value === 'string' && SENSITIVE_VALUE_RE.test(value.trim())) return true;
+  const role = String(fieldMeta.role || '').toLowerCase();
+  const name = String(fieldMeta.name || '');
+  if ((role === 'spinbutton' || NON_SECRET_NUMERIC_FIELD_RE.test(name)) && !STRICT_SECRET_NAME_RE.test(name)) {
+    return false;
+  }
+  const fieldName = `${name} ${role} ${fieldMeta.rawLine || ''}`;
+  if (SENSITIVE_FIELD_RE.test(fieldName)) return true;
   return false;
 }
 
@@ -350,9 +400,35 @@ export function createDraftTape({
   };
 }
 
+function deriveComponentCandidateFromScopeOrRoute(scope, pageRoute, domainGraph) {
+  const GENERIC_SCOPES = new Set(['main', 'body', 'document', 'root', 'page', 'app']);
+  const cleanScope = String(scope || '').trim();
+  if (cleanScope && !GENERIC_SCOPES.has(cleanScope.toLowerCase())) {
+    const pascal = cleanScope
+      .split(/[^a-zA-Z0-9]+/)
+      .filter((p) => /^[a-zA-Z]/.test(p))
+      .map((p) => p[0].toUpperCase() + p.slice(1))
+      .join('');
+    if (pascal) return pascal.endsWith('Component') ? pascal : `${pascal}Component`;
+  }
+  const existingComp = resolveComponentFromDomainGraph(pageRoute || '/', domainGraph);
+  if (existingComp) return existingComp;
+  const cleanedRoute = String(pageRoute || 'main')
+    .replace(/[?#].*$/, '')
+    .replace(/\.(?:html?|aspx?|jsp|php)$/i, '')
+    .replace(/^\/+|\/+$/g, '');
+  const lastSegment = cleanedRoute.split('/').filter(Boolean).slice(-1)[0] || 'main';
+  const routePascal = lastSegment
+    .split(/[^a-zA-Z0-9]+/)
+    .filter((p) => /^[a-zA-Z]/.test(p))
+    .map((p) => p[0].toUpperCase() + p.slice(1))
+    .join('');
+  return `${routePascal || 'Main'}SectionComponent`;
+}
+
 export function appendRecordedAction(
   draftTape,
-  { action, refOrSelector, value, refMap, pageRoute, businessStep, actor, domainGraph }
+  { action, refOrSelector, value, refMap, pageRoute, businessStep, actor, domainGraph, scope = '' }
 ) {
   const allowedActions = new Set(['goto', 'fill', 'click', 'selectOption', 'check', 'uncheck', 'press', 'hover']);
   const normalizedAction =
@@ -378,20 +454,12 @@ export function appendRecordedAction(
     .replace(/\b(?:click|fill|press|hover|locator|selector|xpath|css|dom|getbyrole|getbylabel|getbytestid|getbyplaceholder|getbytext|input\s+field|button|checkbox|dropdown)\b/gi, 'feature')
     .replace(/\/+/g, '/');
   const stepLabel = businessStep || `Complete ${sanitizedRouteLabel} workflow interaction`;
-  const existingComp = resolveComponentFromDomainGraph(pageRoute || '/', domainGraph);
-  const routeAlphaSeg = String(pageRoute || 'main')
-    .replace(/^\/+|\/+$/g, '')
-    .split(/[^a-zA-Z0-9]+/)
-    .filter((p) => /^[a-zA-Z]/.test(p))
-    .slice(-1)
-    .map((p) => p[0].toUpperCase() + p.slice(1))
-    .join('');
   const stepObj = {
     stepIndex,
     intent: `${normalizedAction} ${locatorContract.value || locatorContract.role || pageRoute || 'control'}`,
     businessStep: stepLabel,
     pageRoute: pageRoute || '/',
-    componentCandidate: existingComp || `${routeAlphaSeg || 'Main'}SectionComponent`,
+    componentCandidate: deriveComponentCandidateFromScopeOrRoute(scope, pageRoute, domainGraph),
     action: normalizedAction,
     ...(normalizedAction === 'press' ? { key: String(value || 'Enter').trim() || 'Enter' } : {}),
     locatorContract,
@@ -661,7 +729,7 @@ export function resolveComponentFromDomainGraph(pageRoute = '/', domainGraph = n
 
 export function appendRecordedAssertion(
   draftTape,
-  { refOrSelector, assertionType = 'toBeVisible', expectedValue = 'true', refMap, pageRoute, businessStep, actor, domainGraph }
+  { refOrSelector, assertionType = 'toBeVisible', expectedValue = 'true', refMap, pageRoute, businessStep, actor, domainGraph, scope = '' }
 ) {
   const allowedAssertions = new Set([
     'toBeVisible',
@@ -677,9 +745,10 @@ export function appendRecordedAssertion(
   const safeAssertion = allowedAssertions.has(assertionType) ? assertionType : 'toBeVisible';
   const loc = resolveSemanticLocator(refOrSelector, refMap);
   const compName =
+    (scope ? deriveComponentCandidateFromScopeOrRoute(scope, pageRoute, domainGraph) : null) ||
     resolveComponentFromDomainGraph(pageRoute, domainGraph) ||
     draftTape.semanticSteps[draftTape.semanticSteps.length - 1]?.componentCandidate ||
-    'MainSectionComponent';
+    deriveComponentCandidateFromScopeOrRoute('', pageRoute, domainGraph);
   const isEphemeralRef = /^@?e\d+$/i.test(String(loc.value || ''));
   const baseProp = isEphemeralRef
     ? 'root'
@@ -733,6 +802,8 @@ export function appendRecordedAssertion(
     targetProperty,
     assertionType: safeAssertion,
     expectedValueRef,
+    afterStepIndex: draftTape.semanticSteps.length,
+    ...(!isEphemeralRef ? { locatorContract: loc } : {}),
     ...(actor ? { actor } : {}),
   };
   draftTape.expectedStates.push(expectedObj);
@@ -1294,9 +1365,20 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
   }
   const domainGraph = readJsonOrNull(path.join(ROOT, '.agents', 'domain', 'domain-graph.json'));
   const session = state.activeSession || state.session;
-  const refMap = parseSnapshotRefs(state.lastSnapshot || '');
+  let refMap = parseSnapshotRefs(state.lastSnapshot || '');
   const recorded = [];
   const recordedAssertions = [];
+  let hadStateTransition = false;
+
+  const ensureRefHydrated = (targetRef) => {
+    if (typeof targetRef === 'string' && /^@e\d+$/i.test(targetRef) && !refMap.has(targetRef)) {
+      const freshSnap = runAgentBrowser(session, ['snapshot', '-i'], { allowFail: true });
+      if (freshSnap) {
+        state.lastSnapshot = freshSnap;
+        refMap = parseSnapshotRefs(freshSnap);
+      }
+    }
+  };
 
   if (!state.recordedBuilderValues || typeof state.recordedBuilderValues !== 'object') {
     state.recordedBuilderValues = {};
@@ -1311,6 +1393,7 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
     }
 
     if (rawAction === 'assert') {
+      ensureRefHydrated(target);
       const assertionType = rawVal || 'toBeVisible';
       const expectedValue = extraVal !== undefined ? interpolateVariables(String(extraVal), state.variables) : 'true';
       const expectedObj = appendRecordedAssertion(draftTape, {
@@ -1322,6 +1405,7 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
         businessStep: stepTitle,
         actor: state.actor,
         domainGraph,
+        scope,
       });
       if (
         expectedObj.expectedValueRef &&
@@ -1344,11 +1428,15 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
       tuple,
       state.variables
     );
+    ensureRefHydrated(interpolatedTarget);
 
     const cliArgs = [action];
     if (interpolatedTarget !== undefined) cliArgs.push(interpolatedTarget);
     if (interpolatedVal !== undefined) cliArgs.push(interpolatedVal);
     runAgentBrowser(session, cliArgs);
+    if (action === 'click' || action === 'press' || action === 'goto') {
+      hadStateTransition = true;
+    }
 
     const rec = appendRecordedAction(draftTape, {
       action,
@@ -1359,6 +1447,7 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
       businessStep: stepTitle,
       actor: state.actor,
       domainGraph,
+      scope,
     });
     if (rec) {
       recorded.push(rec);
@@ -1366,6 +1455,10 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
         state.recordedBuilderValues[rec.stepObj.inputDataRef] = String(interpolatedVal);
       }
     }
+  }
+
+  if (hadStateTransition) {
+    await runAgentBrowserAsync(session, ['wait', '--load', 'networkidle'], { allowFail: true, timeoutMs: 3000 });
   }
 
   // Parallel post-action telemetry via agent-browser daemon (avoids redundant Playwright connectOverCDP reconnects)
@@ -1673,7 +1766,7 @@ async function cmdFinish(args) {
   } else if (emitSeeder) {
     seederTip = 'SEEDER skipped: no mutating POST/PUT/PATCH API contracts were captured during this session.';
   } else if (mutatingContracts.length > 0) {
-    seederTip = `Detected ${mutatingContracts.length} mutating API call(s) (${mutatingContracts[0].method} ${mutatingContracts[0].urlPattern}); re-run with --emit-seeder to promote Point A to a <300ms StateSeederContract.`;
+    seederTip = `Detected ${mutatingContracts.length} mutating API call(s) (${mutatingContracts[0].method} ${mutatingContracts[0].urlPattern}); run \`npx cortex compile ${scenarioId} --emit-seeder --apply\` to promote Point A to a <300ms StateSeederContract.`;
   }
 
   let compiledSpecRel = `tests/${scenarioId}.spec.ts`;
@@ -1786,6 +1879,33 @@ async function main() {
   if (cmd === 'actor') return cmdActor(args.slice(1));
   if (cmd === 'capture') return cmdCapture(args.slice(1));
   if (cmd === 'checkpoint') return cmdCheckpoint(args.slice(1));
+  if (cmd === 'refresh') {
+    const state = readJsonOrNull(LIVE_STATE_FILE);
+    if (!state) throw new Error('No active explore session. Run `cortex explore start ...` first.');
+    const session = state.activeSession || state.session;
+    const scope = getFlagValue(args, '--scope', '');
+    const json = args.includes('--json');
+    const [nextSnap, rawNextUrl] = await Promise.all([
+      runAgentBrowserAsync(session, ['snapshot', '-i'], { allowFail: true }),
+      runAgentBrowserAsync(session, ['eval', 'location.href'], { allowFail: true }),
+    ]);
+    const nextUrl = (rawNextUrl || state.url).replace(/^"|"$/g, '');
+    const rawDelta = computeSnapshotDelta(state.lastSnapshot || '', nextSnap);
+    const pruned = pruneSnapshotLines(rawDelta.deltaLines, { scope });
+    state.lastSnapshot = nextSnap;
+    state.url = nextUrl;
+    writePrivateJson(LIVE_STATE_FILE, state);
+    emitOutput(
+      {
+        status: 'refreshed',
+        url: nextUrl,
+        actor: state.actor,
+        snapshotDelta: { ...rawDelta, deltaLines: pruned.lines, prunedCount: pruned.prunedCount },
+      },
+      { json }
+    );
+    return;
+  }
   if (cmd === 'finish') return cmdFinish(args.slice(1));
   if (cmd === 'status') {
     const state = readJsonOrNull(LIVE_STATE_FILE);

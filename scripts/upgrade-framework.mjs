@@ -9,6 +9,7 @@
  *   npx cortex upgrade [--check] [--to <tag>] [--dry-run] [--force] [--squad <name>]
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -395,6 +396,88 @@ function runApplyPatches(targetRoot, { dryRun = false, force = false } = {}) {
   return remaining > 0 ? 0 : 0;
 }
 
+export function isEallowgitError(output = '') {
+  return /\bEALLOWGIT\b|Fetching packages of type ["']?git["']? have been disabled/i.test(String(output || ''));
+}
+
+export function buildReleaseTarballUrl(repoSlug, targetTag) {
+  if (!SAFE_REPO_SLUG_RE.test(repoSlug) || repoSlug.includes('..')) {
+    throw new Error(`Security Error: Invalid repo slug '${repoSlug}'.`);
+  }
+  if (!SEMVER_TAG_RE.test(targetTag)) {
+    throw new Error(`Security Error: Invalid release tag '${targetTag}'.`);
+  }
+  const tag = targetTag.startsWith('v') ? targetTag : `v${targetTag}`;
+  return `https://codeload.github.com/${repoSlug}/tar.gz/refs/tags/${tag}`;
+}
+
+export async function runTarballOrCloneSync({
+  repoSlug,
+  targetTag,
+  targetRoot,
+  dryRun = false,
+  force = false,
+  squadName = '',
+} = {}) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-upgrade-'));
+  try {
+    let extractedDir = null;
+    const tarballUrl = buildReleaseTarballUrl(repoSlug, targetTag);
+    const tarballPath = path.join(tmpDir, 'release.tar.gz');
+    try {
+      const headers = { 'User-Agent': 'agentic-solid-qe-upgrader' };
+      const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch(tarballUrl, { headers, signal: AbortSignal.timeout(30000) });
+      if (res.ok) {
+        const buf = Buffer.from(await res.arrayBuffer());
+        fs.writeFileSync(tarballPath, buf);
+        const extractDir = path.join(tmpDir, 'extracted');
+        fs.mkdirSync(extractDir, { recursive: true });
+        const tarRes = spawnSync('tar', ['-xzf', tarballPath, '-C', extractDir], {
+          stdio: 'pipe',
+          encoding: 'utf8',
+        });
+        if (tarRes.status === 0) {
+          const topEntries = fs.readdirSync(extractDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+          if (topEntries.length > 0) {
+            extractedDir = path.join(extractDir, topEntries[0].name);
+          }
+        }
+      }
+    } catch {
+      /* fall through to shallow git clone */
+    }
+
+    if (!extractedDir) {
+      const cloneDir = path.join(tmpDir, 'repo');
+      const cloneRes = spawnSync(
+        'git',
+        ['clone', '--branch', targetTag, '--depth', '1', `https://github.com/${repoSlug}.git`, cloneDir],
+        { stdio: 'inherit', shell: false }
+      );
+      if (cloneRes.status !== 0) {
+        return cloneRes.status ?? 1;
+      }
+      extractedDir = cloneDir;
+    }
+
+    const syncScript = path.join(extractedDir, 'scripts', 'sync-skills.mjs');
+    if (!fs.existsSync(syncScript)) {
+      console.error(`❌ Downloaded release ${targetTag} is missing scripts/sync-skills.mjs.`);
+      return 1;
+    }
+    const nodeSyncArgs = [syncScript, 'sync', targetRoot];
+    if (dryRun) nodeSyncArgs.push('--dry-run');
+    if (force) nodeSyncArgs.push('--force');
+    if (squadName) nodeSyncArgs.push('--squad', squadName);
+    const syncRes = spawnSync(process.execPath, nodeSyncArgs, { stdio: 'inherit', shell: false });
+    return syncRes.status ?? 1;
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
@@ -516,13 +599,31 @@ Options:
   );
   const res = fs.existsSync(npxCliCandidate)
     ? spawnSync(process.execPath, [npxCliCandidate, ...syncFlags], {
-        stdio: 'inherit',
+        stdio: 'pipe',
+        encoding: 'utf8',
         shell: false,
       })
     : spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', syncFlags, {
-        stdio: 'inherit',
+        stdio: 'pipe',
+        encoding: 'utf8',
         shell: process.platform === 'win32',
       });
+  if (res.stdout) process.stdout.write(res.stdout);
+  if (res.status !== 0 && isEallowgitError(`${res.stderr || ''}\n${res.stdout || ''}`)) {
+    console.warn(
+      `\n⚠️  npm blocked git-type fetches (EALLOWGIT). Falling back to HTTPS release tarball / shallow git clone for ${targetTag}...\n`
+    );
+    const fallbackStatus = await runTarballOrCloneSync({
+      repoSlug,
+      targetTag,
+      targetRoot,
+      dryRun,
+      force,
+      squadName,
+    });
+    process.exit(fallbackStatus);
+  }
+  if (res.stderr) process.stderr.write(res.stderr);
   if (res.error) {
     console.error(`❌ Failed to invoke npx: ${res.error.message}`);
     process.exit(1);

@@ -216,7 +216,11 @@ function parseBuilderRef(refStr) {
 /**
  * Builds a Playwright locator expression string from a Session Tape locatorContract.
  */
-function buildLocatorExpression(locatorContract, rootExpr = 'this.root') {
+function escapeRegexLiteral(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+}
+
+export function buildLocatorExpression(locatorContract, rootExpr = 'this.root') {
   if (!locatorContract) return `${rootExpr}`;
   const effectiveRoot = locatorContract.iframeSelector
     ? `page.frameLocator(${JSON.stringify(String(locatorContract.iframeSelector))})`
@@ -224,25 +228,68 @@ function buildLocatorExpression(locatorContract, rootExpr = 'this.root') {
       ? 'page'
       : rootExpr;
   const strat = locatorContract.strategy;
-  const val = JSON.stringify(String(locatorContract.value ?? ''));
+  const rawVal = String(locatorContract.value ?? '');
+  const val = JSON.stringify(rawVal);
   const exact = locatorContract.nameExact !== false;
-
   const nthSuffix = Number.isInteger(locatorContract.nth) ? `.nth(${locatorContract.nth})` : '';
+
+  // #27: Disambiguate duplicate named elements using captured id or data-testid hint
+  const hint = typeof locatorContract.hint === 'string' ? locatorContract.hint.trim() : '';
+  if (hint) {
+    const testIdHint = hint.match(/^testid:([A-Za-z0-9_.:-]+)$/i);
+    if (testIdHint) {
+      return `${effectiveRoot}.getByTestId(${JSON.stringify(testIdHint[1])})`;
+    }
+    const idHint = hint.match(/^id:([A-Za-z_][A-Za-z0-9_:-]*)$/i);
+    const isDuplicateNamed = Boolean(rawVal.trim()) && (Number.isInteger(locatorContract.nth) || locatorContract.duplicate === true);
+    if (idHint && isDuplicateNamed) {
+      return `${effectiveRoot}.locator(${JSON.stringify(`#${idHint[1]}`)})`;
+    }
+  }
+
+  // #32: Dynamic numeric badge counts like "🔖 Saved Quotes ( 4 )" -> regex without exact:true
+  const badgeMatch = rawVal.match(/^(.*?)\(\s*\d+\s*\)\s*$/);
+  // #39: All-caps labels (likely CSS text-transform: uppercase) -> case-insensitive anchored regex
+  const isAllCaps =
+    exact &&
+    rawVal.length >= 2 &&
+    /[A-Z]{2}/.test(rawVal) &&
+    rawVal === rawVal.toUpperCase() &&
+    !/[a-z]/.test(rawVal);
+
+  const buildNameOption = () => {
+    if (badgeMatch) {
+      const prefix = badgeMatch[1].replace(/^[^\w]+/, '').trim();
+      if (prefix) {
+        return `{ name: /${escapeRegexLiteral(prefix)}\\s*\\(\\s*\\d+\\s*\\)/i }`;
+      }
+    }
+    if (isAllCaps) {
+      return `{ name: /^${escapeRegexLiteral(rawVal.trim())}$/i }`;
+    }
+    return `{ name: ${val}, exact: ${exact} }`;
+  };
 
   if (strat === 'getByRole') {
     const role = JSON.stringify(String(locatorContract.role || 'button'));
-    if (!String(locatorContract.value ?? '').trim()) {
+    if (!rawVal.trim()) {
       return `${effectiveRoot}.getByRole(${role})${nthSuffix}`;
     }
-    return `${effectiveRoot}.getByRole(${role}, { name: ${val}, exact: ${exact} })${nthSuffix}`;
+    return `${effectiveRoot}.getByRole(${role}, ${buildNameOption()})${nthSuffix}`;
   }
   if (strat === 'getByLabel') {
+    if (isAllCaps) {
+      return `${effectiveRoot}.getByLabel(/^${escapeRegexLiteral(rawVal.trim())}$/i)${nthSuffix}`;
+    }
     return `${effectiveRoot}.getByLabel(${val}, { exact: ${exact} })${nthSuffix}`;
   }
   if (strat === 'getByPlaceholder') {
     return `${effectiveRoot}.getByPlaceholder(${val}, { exact: ${exact} })${nthSuffix}`;
   }
   if (strat === 'getByText') {
+    if (isAllCaps) {
+      return `${effectiveRoot}.getByText(/^${escapeRegexLiteral(rawVal.trim())}$/i)${nthSuffix}`;
+    }
     return `${effectiveRoot}.getByText(${val}, { exact: ${exact} })${nthSuffix}`;
   }
   if (strat === 'getByTestId') {
@@ -462,6 +509,7 @@ export function compileSessionTape({
   squadOverride = '',
   apply = false,
   forceSpec = false,
+  emitSeeder = false,
   rootDir = process.cwd(),
   domainGraph: providedDomainGraph = null,
   deferGraphRefresh = false,
@@ -848,15 +896,21 @@ export class ${clientClass} implements ApiClientContract {
   }
 
   // Also inspect expectedStates to ensure any referenced targetProperty exists on the target component
-  const expectedPropsBySubProp = new Map(); // subPropName (e.g. 'queue', 'summary', or 'LoginSectionComponent') -> Set(targetProperty)
+  const expectedPropsBySubProp = new Map(); // subPropName -> Map(targetProperty -> locatorContract|null)
   for (const state of tape.expectedStates || []) {
     const parts = String(state.targetComponent || '').split('.');
     const subProp = parts.length >= 2 ? parts[1] : parts[0];
     if (subProp) {
       if (!expectedPropsBySubProp.has(subProp)) {
-        expectedPropsBySubProp.set(subProp, new Set());
+        expectedPropsBySubProp.set(subProp, new Map());
       }
-      expectedPropsBySubProp.get(subProp).add(state.targetProperty);
+      const propMap = expectedPropsBySubProp.get(subProp);
+      if (!propMap.has(state.targetProperty) || (!propMap.get(state.targetProperty) && state.locatorContract)) {
+        propMap.set(state.targetProperty, state.locatorContract || null);
+      }
+      if (subProp.endsWith('Component') && !componentStepsMap.has(subProp)) {
+        componentStepsMap.set(subProp, []);
+      }
     }
   }
 
@@ -889,17 +943,20 @@ export class ${clientClass} implements ApiClientContract {
       stepLocatorProps.set(propName, expr);
     }
 
-    // Add any expectedState targetProperty that maps to this component's propNameOnPage or className
-    for (const [subProp, propSet] of expectedPropsBySubProp.entries()) {
+    // Add any expectedState targetProperty that maps to this component's propNameOnPage or className (#32)
+    for (const [subProp, propMap] of expectedPropsBySubProp.entries()) {
       if (
         subProp === compClass ||
         subProp.toLowerCase() === propNameOnPage.toLowerCase() ||
         propNameOnPage.toLowerCase().endsWith(subProp.toLowerCase())
       ) {
-        for (const reqProp of propSet) {
+        for (const [reqProp, locContract] of propMap.entries()) {
           const safeReqProp = assertSafeJsIdentifier(reqProp, 'expectedState targetProperty');
           if (safeReqProp !== 'root' && !stepLocatorProps.has(safeReqProp)) {
-            stepLocatorProps.set(safeReqProp, `this.root`);
+            stepLocatorProps.set(
+              safeReqProp,
+              locContract ? buildLocatorExpression(locContract, 'this.root') : `this.root`
+            );
           }
         }
       }
@@ -1667,16 +1724,37 @@ export { expect };
         const lastGroup = businessGroups[businessGroups.length - 1];
         if (lastGroup && lastGroup.title === stepTitle) {
           lastGroup.statements.push(stmt);
+          lastGroup.stepIndices.push(step.stepIndex);
           for (const k of groupMatchKeys) lastGroup.matchKeys.add(k);
         } else {
           businessGroups.push({
             title: stepTitle,
             matchKeys: groupMatchKeys,
             statements: [stmt],
+            stepIndices: [step.stepIndex],
           });
         }
       }
     }
+
+    const insertStatementInGroup = (group, stmtCode, afterStepIndex) => {
+      if (!Array.isArray(group.stepIndices)) {
+        group.stepIndices = group.statements.map((_, idx) => idx + 1);
+      }
+      if (typeof afterStepIndex === 'number' && Number.isFinite(afterStepIndex)) {
+        let insertAt = 0;
+        for (let i = 0; i < group.stepIndices.length; i++) {
+          if (group.stepIndices[i] <= afterStepIndex) {
+            insertAt = i + 1;
+          }
+        }
+        group.statements.splice(insertAt, 0, stmtCode);
+        group.stepIndices.splice(insertAt, 0, afterStepIndex);
+      } else {
+        group.statements.push(stmtCode);
+        group.stepIndices.push(Infinity);
+      }
+    };
 
     for (const state of tape.expectedStates || []) {
       if (!isSafeMemberRef(state.targetComponent) || !isSafeMemberRef(state.targetProperty)) {
@@ -1774,12 +1852,13 @@ export { expect };
         );
         const existingGroup = [...businessGroups].reverse().find((g) => g.title === targetTitle);
         if (existingGroup) {
-          existingGroup.statements.push(assertStmt);
+          insertStatementInGroup(existingGroup, assertStmt, state.afterStepIndex);
         } else {
           businessGroups.push({
             title: targetTitle,
             matchKeys: new Set(),
             statements: [assertStmt],
+            stepIndices: [typeof state.afterStepIndex === 'number' ? state.afterStepIndex : Infinity],
           });
         }
       } else {
@@ -1791,16 +1870,35 @@ export { expect };
               g.matchKeys.has(state.targetComponent.split('.')[0])
           );
         if (matchingGroup) {
-          matchingGroup.statements.push(assertStmt);
+          insertStatementInGroup(matchingGroup, assertStmt, state.afterStepIndex);
         } else if (businessGroups.length > 0) {
-          businessGroups[businessGroups.length - 1].statements.push(assertStmt);
+          insertStatementInGroup(businessGroups[businessGroups.length - 1], assertStmt, state.afterStepIndex);
         } else {
           businessGroups.push({
             title: 'Verify expected business outcomes',
             matchKeys: new Set(),
             statements: [assertStmt],
+            stepIndices: [typeof state.afterStepIndex === 'number' ? state.afterStepIndex : Infinity],
           });
         }
+      }
+    }
+
+    // #27: Auto-emit initial page.open() at start of Step 1 when the tape has no leading goto action
+    const hasExplicitGoto = (tape.semanticSteps || []).some(
+      (s) => s.action === 'goto' || s.locatorContract?.strategy === 'url'
+    );
+    const hasUiSteps = (tape.semanticSteps || []).some((s) => s.action !== 'apiCall');
+    if (
+      !hasExplicitGoto &&
+      !tape.resumesFrom &&
+      primaryPageFixture &&
+      hasUiSteps &&
+      businessGroups.length > 0
+    ) {
+      const openStmt = `await ${primaryPageFixture}.open();`;
+      if (!businessGroups[0].statements.includes(openStmt)) {
+        businessGroups[0].statements.unshift(openStmt);
       }
     }
 
@@ -1936,11 +2034,15 @@ ${flowCallBlock}
       .map(([cls, alias]) => `import { ${cls} } from '${alias}';`)
       .join('\n');
 
+    const authStorageState = tape.persona?.storageStatePath || tape.storageStatePath || null;
+    const storageStatePreamble = authStorageState
+      ? `  test.use({ storageState: ${JSON.stringify(authStorageState)} });\n\n`
+      : '';
     const nodeImportsBlock = extraNodeImports.length > 0 ? extraNodeImports.join('\n') + '\n' : '';
     const specCode = `${nodeImportsBlock}import { test, expect } from '${fixtureAlias}';
 ${activeBuilderImportLines ? activeBuilderImportLines + '\n' : ''}
 test.describe(${JSON.stringify(`${tape.title} [${tagsSuffix}] (Compiled from Session Tape: ${scenarioId})`)}, () => {
-  test(${JSON.stringify(`${tape.title} ${tagsSuffix}`)}, async ({ ${finalFixtures.join(', ')} }) => {
+${storageStatePreamble}  test(${JSON.stringify(`${tape.title} ${tagsSuffix}`)}, async ({ ${finalFixtures.join(', ')} }) => {
 ${specBody}
   });
 });
@@ -1952,6 +2054,52 @@ ${specBody}
       addedMembers: [scenarioId],
       codeContent: specCode,
     });
+  }
+
+  // 7b. Optional --emit-seeder: promote mutating networkContracts into a <300ms StateSeederContract (#34)
+  if (emitSeeder) {
+    const mutatingContracts = (tape.networkContracts || []).filter((nc) =>
+      ['POST', 'PUT', 'PATCH'].includes(String(nc?.method || '').toUpperCase())
+    );
+    if (mutatingContracts.length > 0) {
+      const primary = mutatingContracts[0];
+      const httpMethod = String(primary.method || 'POST').toLowerCase();
+      const seederStem = toPascalCase(scenarioId);
+      const seederClass = seederStem.endsWith('Seeder') ? seederStem : `${seederStem}Seeder`;
+      const seederRel = `${baseSrcDir}/seeders/${toKebabCase(scenarioId)}-seeder.ts`;
+      const endpointPath = String(primary.urlPattern || '/api/v1/seed');
+      const seederCode = `import type { APIRequestContext } from '@playwright/test';
+import type { StateSeederContract } from '@contracts/state-seeder.contract';
+
+export class ${seederClass} implements StateSeederContract<Record<string, unknown>, Record<string, unknown>> {
+  constructor(
+    private readonly request: APIRequestContext,
+    private readonly baseUrl: string = process.env.API_BASE_URL || process.env.BASE_URL || ''
+  ) {}
+
+  async seed(payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const url = ${JSON.stringify(endpointPath)}.startsWith('http')
+      ? ${JSON.stringify(endpointPath)}
+      : \`\${this.baseUrl.replace(/\\/$/, '')}${endpointPath}\`;
+    const res = await this.request.${httpMethod}(url, { data: payload });
+    if (!res.ok()) {
+      throw new Error(\`${seederClass} failed (\${res.status()}): \${await res.text()}\`);
+    }
+    return (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  }
+}
+`;
+      plannedOperations.push({
+        layer: 'seeder',
+        action: fs.existsSync(path.join(ROOT, seederRel)) ? 'overwrite' : 'create',
+        className: seederClass,
+        file: seederRel,
+        addedMembers: ['seed'],
+        codeContent: seederCode,
+      });
+    } else {
+      warnings.push('--emit-seeder requested, but tape has no mutating POST/PUT/PATCH networkContracts.');
+    }
   }
 
   // 8. Apply File Operations & Synchronize Domain Shard Published Capabilities
@@ -2112,6 +2260,7 @@ Usage:
   let squadOverride = '';
   let apply = false;
   let forceSpec = false;
+  let emitSeeder = false;
   let skipMap = false;
   let jsonOut = false;
 
@@ -2121,6 +2270,8 @@ Usage:
       apply = true;
     } else if (a === '--force-spec') {
       forceSpec = true;
+    } else if (a === '--emit-seeder') {
+      emitSeeder = true;
     } else if (a === '--skip-map') {
       skipMap = true;
     } else if (a === '--json') {
@@ -2142,6 +2293,7 @@ Usage:
       squadOverride,
       apply,
       forceSpec,
+      emitSeeder,
       skipMap,
     });
     const compact = !jsonOut && isCompactMode(args, { autoNonTty: false });

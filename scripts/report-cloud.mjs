@@ -284,29 +284,33 @@ function detectCommitSha() {
 }
 
 function readCliVersion() {
+  let manifestVersion = null;
   const manifestPath = path.join(ROOT, '.agents/framework-manifest.json');
   if (fs.existsSync(manifestPath)) {
     try {
       const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      if (m.version) return String(m.version);
+      if (m.version && String(m.version) !== '0.1.0') manifestVersion = String(m.version);
     } catch {
       /* ignore */
     }
   }
+  let changelogVersion = null;
   const changelogPath = path.join(ROOT, 'CHANGELOG.json');
   if (fs.existsSync(changelogPath)) {
     try {
       const c = JSON.parse(fs.readFileSync(changelogPath, 'utf8'));
-      if (c.latestVersion) return String(c.latestVersion);
+      if (c.latestVersion) changelogVersion = String(c.latestVersion);
     } catch {
       /* ignore */
     }
   }
+  if (manifestVersion) return manifestVersion;
+  if (changelogVersion) return changelogVersion;
   for (const pkgCandidate of [path.resolve(__dirname, '..', 'package.json'), path.join(ROOT, 'package.json')]) {
     if (!fs.existsSync(pkgCandidate)) continue;
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgCandidate, 'utf8'));
-      if (pkg.version) return String(pkg.version);
+      if (pkg.name === 'agentic-solid-qe' && pkg.version) return String(pkg.version);
     } catch {
       /* ignore */
     }

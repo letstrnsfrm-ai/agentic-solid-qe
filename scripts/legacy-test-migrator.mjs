@@ -714,20 +714,26 @@ function extractParameterizationDatasets(content, testMethod, language) {
   return { params, datasets };
 }
 
-function classifyTestKind(body, fullFileContent) {
-  const hasSelenium =
-    /\b(?:WebDriver|IWebDriver|By\.|findElement|FindElement|@FindBy|\[FindsBy\]|sendKeys|SendKeys|Navigate\(\)|driver\.get)\b/.test(
-      body
-    ) || /\b(?:Page|PageObject)\b/.test(body);
+export function classifyTestKind(body, fullFileContent = '') {
+  const combined = `${fullFileContent}\n${body}`;
+  const hasUi =
+    /\b(?:WebDriver|IWebDriver|IPage|IBrowser|Microsoft\.Playwright|OpenQA\.Selenium|org\.openqa\.selenium|Cypress|By\.|findElement|FindElement|@FindBy|\[FindsBy\]|sendKeys|SendKeys|Navigate\(\)|driver\.get|PageObject|SpecFlow|Reqnroll)\b/.test(
+      combined
+    ) || /\b_?[a-zA-Z][a-zA-Z0-9]*Page\b/.test(body);
   const hasApi =
-    /\b(?:given\s*\(|RestAssured|HttpClient|HttpRequest|HttpResponseMessage|RestClient|RestRequest|OkHttpClient|\.when\s*\(\s*\)\.(?:get|post|put|delete|patch)|GetAsync|PostAsync|PutAsync|DeleteAsync|ExecuteAsync)\b/.test(
+    /\b(?:given\s*\(|RestAssured|RestSharp|HttpClient|HttpRequest|HttpResponseMessage|WebApplicationFactory|RestClient|RestRequest|OkHttpClient|\.when\s*\(\s*\)\.(?:get|post|put|delete|patch)|GetAsync|PostAsync|PutAsync|DeleteAsync|ExecuteAsync)\b/.test(
       body
     ) ||
-    (/\b(?:RestAssured|RestSharp|HttpClient)\b/.test(fullFileContent) &&
+    (/\b(?:RestAssured|RestSharp|HttpClient|WebApplicationFactory)\b/.test(fullFileContent) &&
       /\b(?:get|post|put|delete|patch|statusCode|StatusCode)\b/i.test(body));
+  const hasUnitMocking =
+    /\b(?:using\s+Moq\b|Mock<|NSubstitute|Substitute\.For|FakeItEasy|A\.Fake|Mockito|@Mock\b|@InjectMocks\b)\b/.test(
+      combined
+    );
 
-  if (hasSelenium && hasApi) return 'hybrid';
+  if (hasUi && hasApi) return 'hybrid';
   if (hasApi) return 'api';
+  if (hasUnitMocking && !hasUi) return 'unit';
   return 'ui';
 }
 
@@ -936,6 +942,7 @@ function extractTestMethodsFromFile(filePath, scanRoot, pageObjectNames) {
     const body = extractBraceBlock(content, openBraceIdx);
     const lineCount = body.split('\n').length;
     const kind = classifyTestKind(body, content);
+    if (kind === 'unit') continue;
     const tags = extractTagsFromAnnotations(attrBlock);
     if (kind === 'api' && !tags.includes('@api-contract')) {
       tags.push('@api-contract');

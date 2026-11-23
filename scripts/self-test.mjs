@@ -6327,3 +6327,185 @@ test('generate-release-notes: checkReleaseManifestSync catches drifted manifests
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('v0.48.14 regression suite: #27, #28, #29, #32, #33, #34, #37, #39, #41, #43, #44, #45', async () => {
+  const { buildLocatorExpression, compileSessionTape } = await import('./compile-tape.mjs');
+  const {
+    parseSnapshotRefs,
+    resolveSemanticLocator,
+    isSensitiveInput,
+    appendRecordedAction,
+    appendRecordedAssertion,
+  } = await import('./explore-session.mjs');
+  const { cloneTape } = await import('./tape-cli.mjs');
+  const { classifyTestKind } = await import('./legacy-test-migrator.mjs');
+  const { isEallowgitError, buildReleaseTarballUrl } = await import('./upgrade-framework.mjs');
+  const { runFastVerify } = await import('./verify-fast.mjs');
+
+  // #27 part 3 + #32 part 2 + #39: buildLocatorExpression hints, dynamic badges, uppercase labels
+  assert.equal(
+    buildLocatorExpression({ strategy: 'getByRole', role: 'button', value: 'Sign In', nth: 1, hint: 'id:btn-auth-submit' }),
+    'this.root.locator("#btn-auth-submit")'
+  );
+  assert.equal(
+    buildLocatorExpression({ strategy: 'getByRole', role: 'button', value: '🔖 Saved Quotes ( 4 )' }),
+    'this.root.getByRole("button", { name: /Saved Quotes\\s*\\(\\s*\\d+\\s*\\)/i })'
+  );
+  assert.equal(
+    buildLocatorExpression({ strategy: 'getByRole', role: 'combobox', value: 'DURATION BAND' }),
+    'this.root.getByRole("combobox", { name: /^DURATION BAND$/i })'
+  );
+
+  // #28: numeric spinbutton fields exempt from secret redaction; duplicate refs + hints parsed
+  assert.equal(isSensitiveInput({ role: 'spinbutton', name: 'Driver Age' }, '32'), false);
+  assert.equal(isSensitiveInput({ role: 'textbox', name: 'Password' }, 'secret123'), true);
+  const refs = parseSnapshotRefs(
+    '- button "Sign In" [ref=e1]\n- button "Sign In" [ref=e2] hint="id:btn-auth-submit"'
+  );
+  assert.equal(resolveSemanticLocator('@e2', refs).hint, 'id:btn-auth-submit');
+  assert.equal(resolveSemanticLocator('@e2', refs).nth, 1);
+
+  // #37: --scope honored and .html stripped from route-derived componentCandidate
+  const draft = { scenarioId: 'sub-portal-p1', semanticSteps: [], expectedStates: [] };
+  const scopedAct = appendRecordedAction(draft, {
+    action: 'click',
+    refOrSelector: '@e1',
+    refMap: refs,
+    pageRoute: '/sub-portal.html',
+    scope: 'sub-portal',
+  });
+  assert.equal(scopedAct.stepObj.componentCandidate, 'SubPortalComponent');
+  const fallbackAct = appendRecordedAction(draft, {
+    action: 'click',
+    refOrSelector: '@e1',
+    refMap: refs,
+    pageRoute: '/sub-portal.html',
+  });
+  assert.equal(fallbackAct.stepObj.componentCandidate, 'SubPortalSectionComponent');
+
+  // #43: pure C# xUnit/Moq backend unit tests classified as 'unit', not 'ui'
+  assert.equal(
+    classifyTestKind('var mock = new Mock<IRepo>(); Assert.Equal(1, svc.Run());', 'using Xunit;\nusing Moq;'),
+    'unit'
+  );
+  assert.equal(
+    classifyTestKind('driver.FindElement(By.Id("x")).Click();', 'using OpenQA.Selenium;'),
+    'ui'
+  );
+
+  // #45: EALLOWGIT detection & tarball URL builder
+  assert.equal(isEallowgitError('npm error code EALLOWGIT\nFetching packages of type "git" have been disabled'), true);
+  assert.equal(isEallowgitError('normal exit'), false);
+  assert.equal(
+    buildReleaseTarballUrl('letstrnsfrm-ai/agentic-solid-qe', 'v0.48.13'),
+    'https://codeload.github.com/letstrnsfrm-ai/agentic-solid-qe/tar.gz/refs/tags/v0.48.13'
+  );
+
+  // End-to-end temp workspace checks for #27 (open + ordering), #32 (assertion locator + storageState), #33 (clone), #34 (--emit-seeder), #41 (apiClientCount), #44 (--with-engine --fast)
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-v4814-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://example.com', '--name', 'V4814']);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    // #41: src/api/*.api.ts counted in apiClients
+    fs.mkdirSync(path.join(tmpDir, 'src/api'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'src/api/orders.api.ts'), 'export class OrdersApiClient {}\n');
+    const gapsRes = runNode(path.join(tmpDir, 'scripts/analyze-coverage.mjs'), ['--json'], tmpDir);
+    assert.equal(gapsRes.status, 0, gapsRes.stderr);
+    const gaps = JSON.parse(gapsRes.stdout);
+    assert.ok((gaps.existingArchitecture?.apiClients || []).some((f) => String(f).includes('orders.api.ts')));
+
+    // #27 + #32 + #34: compile tape with no goto, pre-click assertion, assertion-only locatorContract, storageState, and --emit-seeder
+    const tapeObj = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'auth-flow-p0',
+      title: 'Authenticated Portal Flow',
+      charter: 'happy-path-baseline',
+      tags: ['@p0', '@smoke'],
+      recordedAt: '2026-11-23T00:00:00.000Z',
+      baseUrl: 'https://example.com',
+      persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standard', storageStatePath: '.auth/standard.json' },
+      preconditions: [],
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'click Sign Out',
+          businessStep: 'Verify and sign out',
+          pageRoute: '/portal',
+          action: 'click',
+          componentCandidate: 'PortalHeaderComponent',
+          locatorContract: { strategy: 'getByRole', role: 'button', value: 'Sign Out' },
+        },
+      ],
+      networkContracts: [
+        { urlPattern: '/api/v1/orders', method: 'POST', expectedStatus: 201, clientCandidate: 'OrdersApiClient' },
+      ],
+      expectedStates: [
+        {
+          description: 'Sign Out button visible before click',
+          businessStep: 'Verify and sign out',
+          assertionType: 'toBeVisible',
+          targetComponent: 'PortalHeaderComponent',
+          targetProperty: 'buyBindNowButton',
+          expectedValueRef: 'true',
+          afterStepIndex: 0,
+          locatorContract: { strategy: 'getByRole', role: 'button', value: 'Buy & Bind Now' },
+        },
+      ],
+    };
+    fs.mkdirSync(path.join(tmpDir, '.exploratory/tapes'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.exploratory/tapes/auth-flow-p0.json'), JSON.stringify(tapeObj, null, 2));
+
+    const compReport = compileSessionTape({
+      tapeInput: 'auth-flow-p0',
+      apply: true,
+      emitSeeder: true,
+      rootDir: tmpDir,
+      skipMap: true,
+    });
+    const specOp = compReport.operations.find((o) => o.layer === 'spec');
+    const compOp = compReport.operations.find((o) => o.layer === 'component');
+    const seederOp = compReport.operations.find((o) => o.layer === 'seeder');
+    assert.ok(specOp && compOp && seederOp);
+    const specSrc = fs.readFileSync(path.join(tmpDir, specOp.file), 'utf8');
+    const compSrc = fs.readFileSync(path.join(tmpDir, compOp.file), 'utf8');
+    assert.ok(specSrc.includes('test.use({ storageState: ".auth/standard.json" })'), '#32 storageState');
+    assert.ok(specSrc.includes('.open();'), '#27 initial page.open()');
+    const assertIdx = specSrc.indexOf('buyBindNowButton');
+    const clickIdx = specSrc.indexOf('.click(');
+    assert.ok(assertIdx > 0 && clickIdx > assertIdx, '#27 pre-click assertion emitted before click');
+    assert.ok(compSrc.includes('getByRole("button", { name: "Buy & Bind Now"'), '#32 assertion-only locator');
+    assert.ok(seederOp.file.endsWith('auth-flow-p0-seeder.ts') && fs.existsSync(path.join(tmpDir, seederOp.file)), '#34 --emit-seeder');
+
+    // #33: tape clone --charter boundary-analysis updates tags & --set-data patches builder
+    const cloned = cloneTape(tmpDir, 'auth-flow-p0', 'auth-flow-p1', {
+      charter: 'boundary-analysis',
+      setData: [{ ref: 'AuthFlowDataBuilder.variant().firstName', value: 'Jordan' }],
+    });
+    assert.deepEqual(cloned.tape.tags, ['@p1', '@regression']);
+    assert.equal(cloned.dataOverridesApplied.length, 1);
+    assert.ok(fs.readFileSync(path.join(tmpDir, 'src/data/auth-flow-data.builder.ts'), 'utf8').includes('"Jordan"'));
+
+    // #44: verify-fast --with-engine --fast --skip-tests still runs scripts/self-test.mjs
+    const vfDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-vf44-'));
+    try {
+      const initVf = runNode(SYNC_SCRIPT, ['init', vfDir, '--url', 'https://example.com', '--name', 'VF44']);
+      assert.equal(initVf.status, 0, initVf.stderr);
+      const binDir = path.join(vfDir, 'node_modules', '.bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      const tscStub = path.join(binDir, process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
+      fs.writeFileSync(tscStub, process.platform === 'win32' ? '@exit /b 0\r\n' : '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      fs.writeFileSync(
+        path.join(vfDir, 'scripts/self-test.mjs'),
+        "import test from 'node:test';\ntest('stub', () => {});\n"
+      );
+      const vf = await runFastVerify({ rootDir: vfDir, fast: true, skipTests: true, withEngine: true, quiet: true });
+      assert.equal(vf.ok, true, JSON.stringify(vf.failedStage));
+      assert.equal(vf.stages.selfTest?.status, 0);
+    } finally {
+      fs.rmSync(vfDir, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

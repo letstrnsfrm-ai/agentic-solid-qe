@@ -85,8 +85,11 @@ const specsWithContent = specFiles.map((f) => {
 
 // 2. Recorded Session Tapes, API Contracts, Multi-Portal Auth Readiness & Traceability to Specs
 const apiClientFilePaths = [
-  ...walkFiles(path.join(ROOT, 'src/api'), '.client.ts'),
-  ...walkFiles(path.join(ROOT, 'src/domains'), '.client.ts'),
+  ...new Set([
+    ...walkFiles(path.join(ROOT, 'src/api'), '.ts'),
+    ...walkFiles(path.join(ROOT, 'src/domains'), '.client.ts'),
+    ...walkFiles(path.join(ROOT, 'src/domains'), '.api.ts'),
+  ]),
 ];
 const exportedApiClientClasses = new Set();
 for (const cf of apiClientFilePaths) {
@@ -436,9 +439,20 @@ let installedFrameworkVersion = null;
 const manifestFilePath = path.join(ROOT, '.agents/framework-manifest.json');
 if (fs.existsSync(manifestFilePath)) {
   try {
-    installedFrameworkVersion = JSON.parse(fs.readFileSync(manifestFilePath, 'utf8')).version || null;
+    const v = JSON.parse(fs.readFileSync(manifestFilePath, 'utf8')).version || null;
+    if (v && String(v) !== '0.1.0') installedFrameworkVersion = String(v);
   } catch {
     /* ignore malformed manifest */
+  }
+}
+if (!installedFrameworkVersion) {
+  const changelogPath = path.join(ROOT, 'CHANGELOG.json');
+  if (fs.existsSync(changelogPath)) {
+    try {
+      installedFrameworkVersion = JSON.parse(fs.readFileSync(changelogPath, 'utf8')).latestVersion || null;
+    } catch {
+      /* ignore */
+    }
   }
 }
 const upgradeStatus = {
