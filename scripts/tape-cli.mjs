@@ -164,11 +164,21 @@ export function listTapes(rootDir = process.cwd()) {
     });
 }
 
+const NON_SMOKE_CHARTERS = new Set([
+  'boundary-analysis',
+  'negative-validation',
+  'negative-auth',
+  'state-interruption',
+  'accessibility-audit',
+  'chaos-fault',
+  'security-probe',
+]);
+
 export function cloneTape(
   rootDir,
   srcId,
   newId,
-  { title, charter, tags, personaRole, personaBuilder, dryRun = false } = {}
+  { title, charter, tags, personaRole, personaBuilder, setData = [], dryRun = false } = {}
 ) {
   const src = readTape(rootDir, srcId);
   const safeNewId = assertSafeScenarioId(newId);
@@ -183,6 +193,11 @@ export function cloneTape(
   if (charter) cloned.charter = charter;
   if (tags && tags.length > 0) {
     cloned.tags = tags.map((t) => (t.startsWith('@') ? t : `@${t}`));
+  } else if (charter && NON_SMOKE_CHARTERS.has(String(charter).trim().toLowerCase())) {
+    const preservedDomainTags = (Array.isArray(cloned.tags) ? cloned.tags : []).filter(
+      (t) => !/^@(?:p0|smoke|p1|regression)$/i.test(String(t))
+    );
+    cloned.tags = ['@p1', '@regression', ...preservedDomainTags];
   }
   if (personaRole || personaBuilder) {
     cloned.persona = { ...(cloned.persona || {}) };
@@ -190,7 +205,11 @@ export function cloneTape(
     if (personaBuilder) cloned.persona.dataBuilderRef = personaBuilder;
   }
   const res = writeValidatedTape(rootDir, safeNewId, cloned, { dryRun });
-  return { ...res, tape: cloned };
+  const dataOverridesApplied =
+    Array.isArray(setData) && setData.length > 0
+      ? applyBuilderDataOverrides(rootDir, setData, { dryRun })
+      : [];
+  return { ...res, tape: cloned, dataOverridesApplied };
 }
 
 const ALLOWED_STEP_PATCH_FIELDS = new Set([
@@ -535,7 +554,7 @@ if (isMain) {
       console.log(jsonOnly ? JSON.stringify(data) : summarizeTapeCompact(data));
     } else if (sub === 'clone') {
       const pos = [];
-      const cloneOpts = {};
+      const cloneOpts = { setData: [] };
       for (let i = 1; i < args.length; i++) {
         const a = args[i];
         if (a === '--json') jsonOnly = true;
@@ -549,7 +568,14 @@ if (isMain) {
             .filter(Boolean);
         } else if (a === '--persona-role') cloneOpts.personaRole = requireVal(args, ++i, a);
         else if (a === '--persona-builder') cloneOpts.personaBuilder = requireVal(args, ++i, a);
-        else if (a.startsWith('--')) throw new Error(`Unknown flag '${a}' for 'clone'.`);
+        else if (a === '--set-data') {
+          const kv = requireVal(args, ++i, a);
+          const eqIdx = kv.indexOf('=');
+          if (eqIdx <= 0) {
+            throw new Error(`Invalid --set-data '${kv}'. Expected 'BuilderClass.method().property=value'.`);
+          }
+          cloneOpts.setData.push({ ref: kv.slice(0, eqIdx).trim(), value: kv.slice(eqIdx + 1) });
+        } else if (a.startsWith('--')) throw new Error(`Unknown flag '${a}' for 'clone'.`);
         else pos.push(a);
       }
       const [srcId, newId] = pos;

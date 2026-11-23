@@ -24,10 +24,24 @@ const __dirname = path.dirname(__filename);
 const SOURCE_ROOT = path.resolve(__dirname, '..');
 const SOURCE_VERSION = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(SOURCE_ROOT, 'package.json'), 'utf8')).version || '0.0.0';
+    const pkg = JSON.parse(fs.readFileSync(path.join(SOURCE_ROOT, 'package.json'), 'utf8'));
+    if (pkg?.name === 'agentic-solid-qe' && pkg?.version) return String(pkg.version);
   } catch {
-    return '0.0.0';
+    /* ignore */
   }
+  try {
+    const cl = JSON.parse(fs.readFileSync(path.join(SOURCE_ROOT, 'CHANGELOG.json'), 'utf8'));
+    if (cl?.latestVersion) return String(cl.latestVersion);
+  } catch {
+    /* ignore */
+  }
+  try {
+    const mf = JSON.parse(fs.readFileSync(path.join(SOURCE_ROOT, '.agents/framework-manifest.json'), 'utf8'));
+    if (mf?.version && String(mf.version) !== '0.1.0') return String(mf.version);
+  } catch {
+    /* ignore */
+  }
+  return '0.0.0';
 })();
 
 const rawArgs = process.argv.slice(2);
@@ -1540,6 +1554,15 @@ function detectCustomizableConfigDrift() {
   return detected;
 }
 
+function compareSimpleSemver(a, b) {
+  const pa = String(a || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}
+
 function printUpgradeSummary(configDrift) {
   const prevVer = previousManifest.version;
   const changelogPath = path.join(SOURCE_ROOT, 'CHANGELOG.json');
@@ -1547,11 +1570,12 @@ function printUpgradeSummary(configDrift) {
     try {
       const changelog = JSON.parse(fs.readFileSync(changelogPath, 'utf8'));
       const releases = Array.isArray(changelog.releases) ? changelog.releases : [];
+      const isNewer = !prevVer || compareSimpleSemver(SOURCE_VERSION, prevVer) > 0;
       const relevant = prevVer
-        ? releases.filter((r) => r.version !== prevVer)
+        ? releases.filter((r) => compareSimpleSemver(r.version, prevVer) > 0)
         : releases.slice(0, 1);
 
-      if (relevant.length > 0 && prevVer !== SOURCE_VERSION) {
+      if (isNewer && relevant.length > 0 && prevVer !== SOURCE_VERSION) {
         console.log(
           `\n📣 What's New (${prevVer ? `${prevVer} -> ${SOURCE_VERSION}` : `v${SOURCE_VERSION}`}):`
         );

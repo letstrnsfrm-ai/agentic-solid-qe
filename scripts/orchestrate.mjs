@@ -760,6 +760,22 @@ export async function discoverAndSeedLiveShards(
     }
   };
 
+  const addSpaCandidate = (rawId, rawLabel) => {
+    const cleanLabel = String(rawLabel || '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleanLabel || cleanLabel.length < 2 || cleanLabel.length > 60 || /^skip to/i.test(cleanLabel)) return;
+    const slug = slugifyShardId(rawId || cleanLabel);
+    if (!slug || slug === 'home' || slug === 'root') return;
+    const routePath = `/#${slug}`;
+    if (seenRoutes.has(routePath)) return;
+    seenRoutes.add(routePath);
+    discoveredLinks.push({ routePath, title: cleanLabel });
+  };
+
   try {
     let fetchUrl = targetUrl;
     for (let hop = 0; hop < 3; hop++) {
@@ -781,6 +797,21 @@ export async function discoverAndSeedLiveShards(
         const html = await res.text();
         for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
           addCandidate(m[1], m[2], fetchUrl);
+        }
+        // SPA fallback / supplement: hash routes, ARIA tabs, modal triggers, and top-level radio view toggles (#29)
+        if (discoveredLinks.length === 0) {
+          for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']#\/?([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+            addSpaCandidate(m[1], m[2]);
+          }
+          for (const m of html.matchAll(/<(?:button|a|div|li)\b[^>]*\brole\s*=\s*["']tab["'][^>]*>([\s\S]*?)<\/(?:button|a|div|li)>/gi)) {
+            addSpaCandidate('', m[1]);
+          }
+          for (const m of html.matchAll(/<button\b[^>]*\b(?:data-tab|data-modal|data-target|aria-controls)\s*=\s*["']#?([^"']+)["'][^>]*>([\s\S]*?)<\/button>/gi)) {
+            addSpaCandidate(m[1], m[2]);
+          }
+          for (const m of html.matchAll(/<label\b[^>]*>[\s\S]*?<input\b[^>]*\btype\s*=\s*["']radio["'][^>]*>([\s\S]*?)<\/label>/gi)) {
+            addSpaCandidate('', m[1]);
+          }
         }
       }
       break;

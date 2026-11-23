@@ -256,41 +256,43 @@ export async function runFastVerify({
     };
   }
 
-  // 2. Test Execution Tier (targeted + affected specs in --fast/--affected mode, full engine + smoke + affected @regression in full mode)
-  if (!skipTests) {
-    if (withEngine && !fast && fs.existsSync(path.join(rootDir, 'scripts/self-test.mjs'))) {
-      const engRes = await spawnAsync(process.execPath, ['--test', 'scripts/self-test.mjs'], {
-        cwd: rootDir,
-        inherit: !captureTests,
-      });
-      const engSummary = captureTests ? summarizeNodeTestRun(engRes.stdout, engRes.stderr) : null;
-      stages.engineTests = {
-        status: engRes.status,
-        durationMs: engRes.durationMs,
-        ...(engSummary ? { summary: engSummary.summaryLine } : {}),
-      };
-      if (engRes.status !== 0) {
-        const failureExcerpt = engSummary?.failingTests?.length
-          ? engSummary.failingTests.join('\n')
-          : capLines(engRes.stderr || engRes.stdout || '', { maxLines: 25 });
-        if (!quiet && compact) {
-          console.error(`❌ verify failed at 'engineTests' (${engSummary?.summaryLine || `exit ${engRes.status}`}):\n${failureExcerpt}`);
-        }
-        return {
-          ok: false,
-          mode: 'full',
-          failedStage: {
-            stage: 'engineTests',
-            status: engRes.status,
-            output: failureExcerpt.slice(0, 2000),
-          },
-          stages,
-          impact,
-          warnings,
-          totalMs: Math.round(performance.now() - tStart),
-        };
+  // 2. Test Execution Tier (explicit --with-engine always runs self-test.mjs; Playwright runs unless --skip-tests)
+  if (withEngine && fs.existsSync(path.join(rootDir, 'scripts/self-test.mjs'))) {
+    const engRes = await spawnAsync(process.execPath, ['--test', 'scripts/self-test.mjs'], {
+      cwd: rootDir,
+      inherit: !captureTests,
+    });
+    const engSummary = captureTests ? summarizeNodeTestRun(engRes.stdout, engRes.stderr) : null;
+    stages.selfTest = {
+      status: engRes.status,
+      durationMs: engRes.durationMs,
+      ...(engSummary ? { summary: engSummary.summaryLine } : {}),
+    };
+    stages.engineTests = stages.selfTest;
+    if (engRes.status !== 0) {
+      const failureExcerpt = engSummary?.failingTests?.length
+        ? engSummary.failingTests.join('\n')
+        : capLines(engRes.stderr || engRes.stdout || '', { maxLines: 25 });
+      if (!quiet && compact) {
+        console.error(`❌ verify failed at 'selfTest' (${engSummary?.summaryLine || `exit ${engRes.status}`}):\n${failureExcerpt}`);
       }
+      return {
+        ok: false,
+        mode: fast ? 'fast' : 'full',
+        failedStage: {
+          stage: 'selfTest',
+          status: engRes.status,
+          output: failureExcerpt.slice(0, 2000),
+        },
+        stages,
+        impact,
+        warnings,
+        totalMs: Math.round(performance.now() - tStart),
+      };
     }
+  }
+
+  if (!skipTests) {
 
     const shouldRunPlaywright = !fast || effectiveSpecs.length > 0;
     if (shouldRunPlaywright) {

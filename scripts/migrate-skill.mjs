@@ -107,11 +107,14 @@ let sliceIndexArg = 0;
 let staticOnlyFlag = false;
 let allSlicesFlag = false;
 let compileFlag = false;
+let saveManifestFlag = false;
 
 for (let i = 0; i < rawArgs.length; i++) {
   const arg = rawArgs[i];
   if (arg === '--apply') {
     applyChanges = true;
+  } else if (arg === '--save') {
+    saveManifestFlag = true;
   } else if (arg === '--discover' || arg === '--scan') {
     discoverMode = true;
   } else if (arg === '--static-only') {
@@ -430,7 +433,7 @@ function runWorkspaceDiscovery() {
   }
 
   const legacyDiscovery = discoverLegacyTests(resolvedLegacyRoot);
-  if (legacyDiscovery.tests.length > 0 && !sourceArg) {
+  if (legacyDiscovery.tests.length > 0 && !sourceArg && (applyChanges || saveManifestFlag)) {
     const relLegacyRoot = path.relative(ROOT, resolvedLegacyRoot).replace(/\\/g, '/') || '.';
     syncDiscoveryToManifest(ROOT, legacyDiscovery, relLegacyRoot);
   }

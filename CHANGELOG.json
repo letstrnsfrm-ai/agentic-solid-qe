@@ -1,7 +1,20 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.13",
+  "latestVersion": "0.48.14",
   "releases": [
+    {
+      "version": "0.48.14",
+      "date": "2026-11-23",
+      "highlights": [
+        "fix(compile-tape): auto-emit initial page.open(), preserve chronological assertion ordering, disambiguate duplicate buttons via hints, compile assertion-only locatorContract, regex dynamic badge counts & CSS uppercase labels, emit test.use(storageState), and support --emit-seeder (#27, #32, #34, #37, #39)",
+        "fix(explore-session): auto-refresh stale refMap & add explore refresh, exempt numeric spinbutton fields from redaction, honor --scope & strip .html route extensions (#28, #34, #37)",
+        "fix(bootstrap/report/gaps): track framework version independently of adopter package.json 0.1.0, add SPA tab/radio/modal shard discovery, and count src/api/*.api.ts clients (#29, #41)",
+        "fix(tape-cli/migrate/verify-fast/upgrade): tape clone --set-data & charter default tags, exclude C# xUnit/Moq unit tests & make migrate --discover read-only, honor --with-engine with --fast/--skip-tests, and add HTTPS tarball/clone fallback for npm EALLOWGIT (#33, #43, #44, #45)"
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.14."
+      ]
+    },
     {
       "version": "0.48.13",
       "date": "2026-11-23",

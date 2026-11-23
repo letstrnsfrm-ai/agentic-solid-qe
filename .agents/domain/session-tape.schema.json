@@ -324,6 +324,10 @@
                 "type": "integer",
                 "minimum": 0,
                 "description": "Optional 0-based index disambiguator for repeating nameless role elements (e.g., unnamed checkboxes or comboboxes)."
+              },
+              "hint": {
+                "type": "string",
+                "description": "Optional element disambiguation hint captured during exploration (e.g., id:btn-auth-submit or testid:submit-btn)."
               }
             }
           }
@@ -425,6 +429,15 @@
             "type": "string",
             "pattern": "^[A-Za-z_][A-Za-z0-9_.()]*$",
             "description": "Readonly Locator property or query method on the Component/Page/ApiClient."
+          },
+          "locatorContract": {
+            "type": "object",
+            "description": "Optional semantic locator contract for assertion-only elements so compile-tape emits real locators instead of this.root."
+          },
+          "afterStepIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional 0-based step index after which this assertion was recorded, preserving chronological ordering within test.step()."
           },
           "expectedValueRef": {
             "type": "string",
