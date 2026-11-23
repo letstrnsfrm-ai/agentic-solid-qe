@@ -27,8 +27,32 @@ function resolveSafeInRoot(rootDir, relPath) {
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error(`Unsafe path outside workspace root: ${relPath}`);
   }
-  if (fs.existsSync(full) && fs.lstatSync(full).isSymbolicLink()) {
-    throw new Error(`Refusing to follow symlink at: ${relPath}`);
+  let cur = full;
+  while (cur !== resolvedRoot) {
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(`Refusing to follow symlink at: ${path.relative(resolvedRoot, cur)}`);
+      }
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = full;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    const realRel = path.relative(realRoot, realExisting);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new Error(`Unsafe realpath outside workspace root: ${relPath}`);
+    }
   }
   return full;
 }
@@ -246,7 +270,8 @@ export function resumeAutonomousSession(
   }
   const elapsedMs = Math.max(0, nowMs - (session.startedAtMs || nowMs));
   if (maxRuntime) {
-    session.schedule.maxRuntimeMs = parseDurationMs(maxRuntime, { allowNull: true });
+    const parsedMax = parseDurationMs(maxRuntime, { allowNull: true });
+    session.schedule.maxRuntimeMs = parsedMax ? elapsedMs + parsedMax : null;
   } else if (session.schedule.maxRuntimeMs && elapsedMs >= session.schedule.maxRuntimeMs) {
     session.schedule.maxRuntimeMs = elapsedMs + (session.schedule.intervalMs || DEFAULT_CHECKIN_INTERVAL_MS);
   }
@@ -380,9 +405,19 @@ export function isItemQuarantined(session, candidate) {
   return session.quarantined.some((q) => {
     const qKey = String(q.key || '').trim().toLowerCase();
     const bare = qKey.replace(/^[^:]+:/, '').replace(/\.md$/, '');
-    if (hay === qKey || hayBare === bare || hayBase === bare) return true;
+    const qBase = path.basename(bare);
+    if (
+      hay === qKey ||
+      hayBare === bare ||
+      hayBase === bare ||
+      (qBase && (hayBare === qBase || hayBase === qBase))
+    ) {
+      return true;
+    }
     // Also match generated scenario IDs for a quarantined shard (e.g. `login-p0`, `--shard login`)
-    const escaped = bare.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const needle = qBase || bare;
+    if (!needle) return false;
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`(?:^|--shard\\s+)${escaped}(?:-(?:p[0-2]|negative|a11y))?(?:$|\\s)`).test(hay);
   });
 }
@@ -492,16 +527,25 @@ export function rankAndSelectGateOption(blueprint, session) {
   });
 
   if (next.gatePayload?.gateId === 'stage1-scenario-selection') {
-    const currentShard = next.gatePayload.shard || '';
+    const currentShard = String(next.gatePayload.shard || '').toLowerCase();
+    const shardToString = (s) =>
+      String(typeof s === 'string' ? s : s?.shard || s?.feature || '').toLowerCase();
     const routeMatchedShard =
       routes.length > 0
         ? unquarantinedShards.find((s) => {
-            const raw = String(typeof s === 'string' ? s : s?.shard || s?.feature || '').toLowerCase();
-            return routes.some((r) => raw.includes(r.replace(/^\/+/, '').toLowerCase()));
+            const raw = shardToString(s);
+            return routes.some((r) => {
+              const clean = String(r || '').replace(/^\/+/, '').toLowerCase();
+              return Boolean(clean) && raw.includes(clean);
+            });
           })
         : null;
+    const matchedRaw = routeMatchedShard ? shardToString(routeMatchedShard) : '';
 
-    if (isItemQuarantined(session, currentShard) || (routeMatchedShard && !String(routeMatchedShard).toLowerCase().includes(currentShard))) {
+    if (
+      isItemQuarantined(session, currentShard) ||
+      (routeMatchedShard && (!currentShard || !matchedRaw.includes(currentShard)))
+    ) {
       const target = routeMatchedShard || unquarantinedShards[0];
       if (!target) {
         return { chosen: null, alternatives: [], rationale: 'All remaining uncovered shards are quarantined.', allQuarantined: true };

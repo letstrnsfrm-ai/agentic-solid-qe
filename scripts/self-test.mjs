@@ -5223,8 +5223,11 @@ test('framework-hardening-batch-2: cross-origin goto, inline assert role suffix,
     fs.writeFileSync(path.join(tmpRoot, '.exploratory/tapes/cross-origin-demo.json'), JSON.stringify(crossOriginTape, null, 2));
     const comp = compileSessionTape({ tapeInput: 'cross-origin-demo', apply: true, rootDir: tmpRoot, skipMap: true });
     const specOp = comp.operations.find((o) => o.file && o.file.endsWith('.spec.ts'));
+    const pageOp = comp.operations.find((o) => o.file && o.file.endsWith('.page.ts'));
     const specSrc = fs.readFileSync(path.join(tmpRoot, specOp.file), 'utf8');
-    assert.match(specSrc, /open\("https:\/\/secondary\.example\.org\/todomvc"\)/);
+    const pageSrc = fs.readFileSync(path.join(tmpRoot, pageOp.file), 'utf8');
+    assert.match(specSrc, /open\(\)/);
+    assert.match(pageSrc, /"https:\/\/secondary\.example\.org\/todomvc"/);
 
     // Defects #9 & #10: --set-data updates numeric/boolean props in place & preserves multiple flags on a new builder
     fs.writeFileSync(
@@ -5683,6 +5686,321 @@ test('framework-hardening-batch-4: SSRF IPv6/trailing-dot, seedShardsFromTapes $
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test('framework-hardening-batch-5: SemVer prerelease, OSC/capToTokens/summarizePlaywrightRun, export-auth-state, autonomous-mode, tape-cli atomicity/symlinks, context-pack squad/symlinks, impact-graph generics/fixtures, heal-drift regex/toBeVisible, compile-tape jsonPath/cross-origin/jargon/seeder, validate-tapes capturedVar, SpecFlow stacked attrs & wave status', async () => {
+  const { compareSemver, normalizeVersion } = await import('./upgrade-framework.mjs');
+  const { stripAnsi, capToTokens, estimateTokens, summarizePlaywrightRun } = await import('./lib/cli-output.mjs');
+  const { assertSafeSessionName, assertSafeAuthOutputPath, buildStorageState } = await import('./export-auth-state.mjs');
+  const {
+    startAutonomousSession,
+    resumeAutonomousSession,
+    checkAutonomousLimits,
+    isItemQuarantined,
+    rankAndSelectGateOption,
+  } = await import('./lib/autonomous-mode.mjs');
+  const { patchTape } = await import('./tape-cli.mjs');
+  const { buildContextPack } = await import('./context-pack.mjs');
+  const { analyzeImpact } = await import('./impact-graph.mjs');
+  const { parseSnapshotRefs } = await import('./explore-session.mjs');
+  const { classifyFailureRootCause, extractFailingLocatorFromError } = await import('./heal-drift.mjs');
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const { compileSessionTape } = await import('./compile-tape.mjs');
+  const { parseSpecFlowBindings } = await import('./dotnet-enterprise-analyzer.mjs');
+  const { parsePlaywrightJsonSpecStatus } = await import('./migration-wave-factory.mjs');
+  const { assertSafeLegacyScanRoot } = await import('./legacy-test-migrator.mjs');
+
+  // 1. SemVer 2.0.0 prerelease ordering & hyphenated prerelease tags
+  assert.equal(compareSemver('v1.0.0-beta.10', 'v1.0.0-beta.2'), 1);
+  assert.equal(normalizeVersion('v1.0.0-rc-1'), '1.0.0-rc-1');
+
+  // 2. cli-output: OSC hyperlink stripping, strict capToTokens, summarizePlaywrightRun counts & dedup
+  assert.equal(stripAnsi('\x1b]8;;https://example.com\x07Click\x1b]8;;\x07'), 'Click');
+  const cappedLongFirst = capToTokens('x'.repeat(2000) + '\nok', 50);
+  assert.ok(estimateTokens(cappedLongFirst) <= 50, `Expected <=50 tok, got ${estimateTokens(cappedLongFirst)}`);
+  const cappedShortWords = capToTokens('a '.repeat(200), 40);
+  assert.ok(estimateTokens(cappedShortWords) <= 40, `Expected <=40 tok, got ${estimateTokens(cappedShortWords)}`);
+  const pwSummary = summarizePlaywrightRun(
+    '  ✓ 1 [chromium] › a.spec.ts:1:1 › shows 99 passed items\n' +
+      '  ✖ 2 [chromium] › b.spec.ts:2:1 › login fails\n\n' +
+      '  1) [chromium] › b.spec.ts:2:1 › login fails\n' +
+      '     Error: expect(loc).toBeVisible() failed\n\n' +
+      '  1 failed\n' +
+      '  1 passed (2.0s)\n'
+  );
+  assert.equal(pwSummary.passed, 1);
+  assert.equal(pwSummary.failed, 1);
+  assert.equal(pwSummary.failureBlocks.length, 1);
+
+  // 3. export-auth-state: leading-hyphen session rejection, opaque origin, null arrays
+  assert.throws(() => assertSafeSessionName('--headed'), /Security Error/);
+  assert.deepEqual(
+    buildStorageState({ cookies: null, origin: 'null', localStorageEntries: [{ name: 'k', value: 'v' }] }),
+    { cookies: [], origins: [] }
+  );
+
+  // 4. explore-session parseSnapshotRefs with trailing bracket attributes
+  const refs = parseSnapshotRefs('- checkbox "Remember me" [ref=e5, checked=true]');
+  assert.equal(refs.get('@e5')?.role, 'checkbox');
+  assert.equal(refs.get('@e5')?.name, 'Remember me');
+
+  // 5. heal-drift: toBeVisible missing locator -> locator-drift; regex locator with quote/parens
+  const toBeVisCls = classifyFailureRootCause(
+    'Error: expect(locator).toBeVisible() failed\nLocator: getByRole(\'button\', { name: \'Submit\' })\nExpected: visible\nReceived: <element(s) not found>\nTimeout: 5000ms\nCall log:\n  - waiting for getByRole(\'button\', { name: \'Submit\' })'
+  );
+  assert.equal(toBeVisCls.category, 'locator-drift');
+  assert.equal(
+    extractFailingLocatorFromError("waiting for page.getByText(/Don't click/)"),
+    "getByText(/Don't click/)"
+  );
+
+  // 6. validate-tapes: undeclared capturedVariable:<name> rejected when capturedVariables is empty
+  const ghostErrs = validateTapeObject(
+    {
+      schemaVersion: '1.0.0',
+      scenarioId: 'ghost-var',
+      title: 'Ghost Var',
+      charter: 'happy-path-baseline',
+      tags: ['@p0'],
+      recordedAt: new Date().toISOString(),
+      baseUrl: 'https://example.com',
+      persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standard()' },
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'open home',
+          pageRoute: '/',
+          action: 'goto',
+          componentCandidate: 'HomeSection',
+          locatorContract: { strategy: 'url', value: '/' },
+        },
+      ],
+      expectedStates: [
+        {
+          description: 'check ghost var',
+          assertionType: 'toContainText',
+          targetComponent: 'HomeSection',
+          targetProperty: 'root',
+          expectedValueRef: 'capturedVariable:ghostId',
+        },
+      ],
+    },
+    'ghost-var.json'
+  );
+  assert.ok(ghostErrs.some((e) => e.includes('expectedValueRef')), `Expected error for undeclared capturedVariable, got: ${ghostErrs.join('; ')}`);
+
+  // 7. migration-wave-factory: skipped != passed, flaky retry passed == passed, exact path match
+  const statusMap = parsePlaywrightJsonSpecStatus(
+    JSON.stringify({
+      suites: [
+        {
+          file: 'auth/login.spec.ts',
+          specs: [
+            {
+              file: 'auth/login.spec.ts',
+              tests: [{ results: [{ status: 'failed' }, { status: 'passed' }] }],
+            },
+          ],
+        },
+        {
+          file: 'admin/skipped.spec.ts',
+          specs: [
+            {
+              file: 'admin/skipped.spec.ts',
+              tests: [{ results: [{ status: 'skipped' }] }],
+            },
+          ],
+        },
+      ],
+    }),
+    ['tests/auth/login.spec.ts', 'tests/admin/skipped.spec.ts']
+  );
+  assert.equal(statusMap.get('tests/auth/login.spec.ts'), 'passed');
+  assert.equal(statusMap.get('tests/admin/skipped.spec.ts'), undefined);
+
+  // 8. Filesystem-backed tests in isolated temp workspace
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-batch5-'));
+  try {
+    // 8a. export-auth-state dangling symlink rejection
+    fs.mkdirSync(path.join(tmpRoot, '.auth'), { recursive: true });
+    fs.symlinkSync(path.join(os.tmpdir(), 'asqe-nonexistent-auth.json'), path.join(tmpRoot, '.auth/evil.json'));
+    assert.throws(() => assertSafeAuthOutputPath('.auth/evil.json', tmpRoot), /symbolic link/);
+
+    // 8b. autonomous-mode: intermediate symlink block, resume maxRuntime offset, asymmetric quarantine, object-shard ranking
+    const session = startAutonomousSession(tmpRoot, { goal: 'test', interval: '30m', maxRuntime: '1h', nowMs: 0 });
+    assert.equal(isItemQuarantined({ quarantined: [{ key: '.agents/domain/checkout.md' }] }, 'checkout'), true);
+    assert.equal(
+      isItemQuarantined(
+        { quarantined: [{ key: '.agents/domain/checkout.md' }] },
+        'npx cortex orchestrate --explore start --shard checkout --scenario checkout-p0'
+      ),
+      true
+    );
+    const resumed = resumeAutonomousSession(tmpRoot, { maxRuntime: '30m', nowMs: 3_600_000 });
+    assert.equal(checkAutonomousLimits(resumed, 3_600_000).limitHit, false);
+    const ranked = rankAndSelectGateOption(
+      {
+        queuePreview: { uncoveredShards: [{ shard: 'checkout', feature: 'checkout' }] },
+        nextAction: {
+          gatePayload: {
+            gateId: 'stage1-scenario-selection',
+            shard: 'Checkout',
+            options: [{ id: 'custom-opt', label: '(Recommended) Custom', command: 'custom' }],
+          },
+        },
+      },
+      { ...session, objectives: { ...session.objectives, routes: ['/checkout', '/'] } }
+    );
+    assert.equal(ranked.chosen?.id, 'custom-opt');
+
+    // 8c. context-pack: invalid --squad traversal rejected
+    assert.throws(() => buildContextPack(tmpRoot, { squad: '../../../../tmp/outside' }), /Security Error/);
+
+    // 8d. legacy-test-migrator: intermediate symlink dir rejected
+    fs.symlinkSync('/etc', path.join(tmpRoot, 'ext-link'));
+    assert.throws(() => assertSafeLegacyScanRoot(path.join(tmpRoot, 'ext-link/hosts'), tmpRoot), /Security Error/);
+
+    // 8e. tape-cli: atomic patchTape does not mutate tape when setData fails validation
+    fs.mkdirSync(path.join(tmpRoot, '.exploratory/tapes'), { recursive: true });
+    const origTape = {
+      schemaVersion: '1.0.0',
+      scenarioId: 'atomic-test',
+      title: 'Original Title',
+      charter: 'happy-path-baseline',
+      tags: ['@p0'],
+      recordedAt: new Date().toISOString(),
+      baseUrl: 'https://example.com',
+      persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standard()' },
+      semanticSteps: [
+        {
+          stepIndex: 1,
+          intent: 'open home',
+          pageRoute: '/',
+          action: 'goto',
+          componentCandidate: 'HomeSection',
+          locatorContract: { strategy: 'url', value: '/' },
+        },
+      ],
+      expectedStates: [
+        {
+          description: 'visible',
+          assertionType: 'toBeVisible',
+          targetComponent: 'HomeSection',
+          targetProperty: 'root',
+          expectedValueRef: 'UserBuilder.standard().role',
+        },
+      ],
+    };
+    fs.writeFileSync(path.join(tmpRoot, '.exploratory/tapes/atomic-test.json'), JSON.stringify(origTape, null, 2));
+    assert.throws(
+      () =>
+        patchTape(tmpRoot, 'atomic-test', {
+          setTitle: 'Mutated Title',
+          setData: [{ ref: 'UserBuilder.standard().password', value: 'secret' }],
+        }),
+      /Security Error/
+    );
+    const afterDisk = JSON.parse(fs.readFileSync(path.join(tmpRoot, '.exploratory/tapes/atomic-test.json'), 'utf8'));
+    assert.equal(afterDisk.title, 'Original Title');
+
+    // 8f. impact-graph: nested generics, fixture-to-fixture deps, string braces, tests/ helper nodes
+    fs.mkdirSync(path.join(tmpRoot, 'src/pages'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'src/fixtures'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'tests/helpers'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, 'src/pages/login.page.ts'), 'export class LoginPage {}\n');
+    fs.writeFileSync(path.join(tmpRoot, 'src/pages/checkout.page.ts'), 'export class CheckoutPage {}\n');
+    fs.writeFileSync(
+      path.join(tmpRoot, 'src/fixtures/app.fixture.ts'),
+      "import { test as base } from '@playwright/test';\nimport { LoginPage } from '../pages/login.page';\nimport { CheckoutPage } from '../pages/checkout.page';\nexport const test = base.extend<Record<string, unknown>>({\n  loginPage: async ({ page }, use) => { const s = '[data-x=\"}\"]'; await use(new LoginPage(page)); },\n  checkoutPage: async ({ page, loginPage }, use) => { void loginPage; await use(new CheckoutPage(page)); },\n});\nexport { expect } from '@playwright/test';\n"
+    );
+    fs.writeFileSync(path.join(tmpRoot, 'tests/helpers/auth.helper.ts'), 'export const helperFlag = true;\n');
+    fs.writeFileSync(
+      path.join(tmpRoot, 'tests/checkout.spec.ts'),
+      "import { test } from '../src/fixtures/app.fixture';\nimport { helperFlag } from './helpers/auth.helper';\ntest('pays @p0', async ({ checkoutPage }) => { void checkoutPage; void helperFlag; });\n"
+    );
+    const loginImpact = analyzeImpact(tmpRoot, { files: ['src/pages/login.page.ts'] });
+    assert.ok(loginImpact.affectedSpecs.includes('tests/checkout.spec.ts'), 'Expected fixture-to-fixture impact');
+    const helperImpact = analyzeImpact(tmpRoot, { files: ['tests/helpers/auth.helper.ts'] });
+    assert.ok(helperImpact.affectedSpecs.includes('tests/checkout.spec.ts'), 'Expected tests/ helper node impact');
+
+    // 8g. dotnet-enterprise-analyzer: stacked [Given]/[When] attributes on same C# method
+    fs.mkdirSync(path.join(tmpRoot, 'legacy'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, 'legacy/AuthSteps.cs'),
+      '[Binding]\npublic class AuthSteps {\n  [Given(@"I am logged in")]\n  [When(@"the user authenticates")]\n  public void AuthenticateUser() {}\n}\n'
+    );
+    const bindings = parseSpecFlowBindings([path.join(tmpRoot, 'legacy/AuthSteps.cs')], path.join(tmpRoot, 'legacy'));
+    assert.equal(bindings.bindings.length, 2);
+
+    // 8h. compile-tape: nested jsonPath traversal, bare seedClientRef, jargon-free test.step, cross-origin open()
+    fs.mkdirSync(path.join(tmpRoot, '.agents/domain'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, '.agents/domain/domain-graph.json'),
+      JSON.stringify({ targetApp: { baseUrl: 'https://primary.example.com' }, shards: [] })
+    );
+    const compTapePath = path.join(tmpRoot, '.exploratory/tapes/batch5-compile.json');
+    fs.writeFileSync(
+      compTapePath,
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        scenarioId: 'batch5-compile',
+        title: 'Batch 5 Compile Verification',
+        charter: 'happy-path-baseline',
+        tags: ['@p0', '@smoke'],
+        recordedAt: new Date().toISOString(),
+        baseUrl: 'https://other-origin.example.com',
+        resumesFrom: { scenarioId: 'upstream', handoffStrategy: 'api-seed', seedClientRef: 'OrderSeeder' },
+        persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standard()' },
+        preconditions: [],
+        capturedVariables: [{ name: 'orderId', capturedAtStep: 2, source: 'apiResponseJson', jsonPath: 'data.order.id' }],
+        networkContracts: [{ urlPattern: '/api/orders', method: 'POST', expectedStatus: 201, clientCandidate: 'OrdersApiClient' }],
+        semanticSteps: [
+          {
+            stepIndex: 1,
+            intent: 'open dropdown',
+            businessStep: 'Complete /dropdown workflow interaction',
+            pageRoute: '/dropdown',
+            action: 'goto',
+            componentCandidate: 'DropdownSection',
+            locatorContract: { strategy: 'url', value: '/dropdown' },
+          },
+          {
+            stepIndex: 2,
+            intent: 'create order',
+            businessStep: 'Create order via API',
+            pageRoute: '/dropdown',
+            action: 'apiCall',
+            componentCandidate: 'OrdersApiClient',
+            capturesVariable: 'orderId',
+            locatorContract: { strategy: 'apiEndpoint', value: '/api/orders' },
+          },
+        ],
+        expectedStates: [
+          {
+            description: 'verify order id',
+            assertionType: 'toContainText',
+            targetComponent: 'DropdownSection',
+            targetProperty: 'root',
+            expectedValueRef: 'capturedVariable:orderId',
+          },
+        ],
+      })
+    );
+    const plan = compileSessionTape({ rootDir: tmpRoot, tapeInput: 'batch5-compile', apply: true });
+    const specOp = plan.operations.find((o) => o.layer === 'spec');
+    const pageOp = plan.operations.find((o) => o.layer === 'page');
+    const seederOp = plan.operations.find((o) => o.layer === 'seeder');
+    assert.ok(seederOp && seederOp.className === 'OrderSeeder', 'Expected bare OrderSeeder to be scaffolded');
+    const specContent = fs.readFileSync(path.join(tmpRoot, specOp.file), 'utf8');
+    const pageContent = fs.readFileSync(path.join(tmpRoot, pageOp.file), 'utf8');
+    assert.ok(specContent.includes('?.["data"]?.["order"]?.["id"]'), 'Expected nested jsonPath traversal');
+    assert.ok(!/test\.step\([^)]*dropdown/i.test(specContent), 'Expected dropdown jargon sanitized from test.step');
+    assert.ok(!/https?:\/\//.test(specContent), 'Expected no hardcoded http(s):// URL in spec');
+    assert.ok(pageContent.includes('https://other-origin.example.com/dropdown'), 'Expected cross-origin defaultRoute in Page Object open()');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 
 
 

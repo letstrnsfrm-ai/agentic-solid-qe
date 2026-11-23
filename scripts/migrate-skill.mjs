@@ -583,11 +583,48 @@ Starter Guide:
   process.exit(0);
 }
 
+function assertNoSymlinkEscape(rootDir, targetPath, label = 'path') {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedTarget = path.resolve(targetPath);
+  if (!isWithinDir(resolvedTarget, resolvedRoot)) {
+    throw new Error(`Security Error: ${label} '${targetPath}' resolves outside the repository workspace ('${resolvedRoot}').`);
+  }
+  let cur = resolvedTarget;
+  while (cur !== resolvedRoot) {
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(
+          `Security Error: Refusing symlinked ${label}: '${path.relative(resolvedRoot, cur)}'.`
+        );
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  if (fs.existsSync(resolvedRoot)) {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = resolvedTarget;
+    while (!fs.existsSync(existing) && existing !== resolvedRoot) {
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    const realExisting = fs.realpathSync(existing);
+    if (!isWithinDir(realExisting, realRoot)) {
+      throw new Error(`Security Error: Realpath of ${label} escapes workspace root.`);
+    }
+  }
+  return resolvedTarget;
+}
+
 const resolvedSource = path.resolve(ROOT, sourceArg);
-if (!isWithinDir(resolvedSource, ROOT)) {
-  console.error(
-    `❌ Security Error: Source path '${sourceArg}' resolves outside the repository workspace ('${ROOT}'). Refusing to read external files.`
-  );
+try {
+  assertNoSymlinkEscape(ROOT, resolvedSource, 'source path');
+} catch (err) {
+  console.error(`❌ ${err.message}`);
   process.exit(1);
 }
 if (!fs.existsSync(resolvedSource)) {
@@ -1015,8 +1052,8 @@ function extractLegacyStepsAndNetworkContracts(primaryRoute) {
         locatorVal = cssMatch[1].replace(/^[#.]/, '') || 'migrated-element';
       }
 
-      if (/^e\d+$/.test(locatorVal)) {
-        locatorVal = `migrated-${locatorVal}`;
+      if (/^@?e\d+$/.test(locatorVal)) {
+        locatorVal = `migrated-${locatorVal.replace(/^@/, '')}`;
       }
 
       const isSensitive = /password|secret|token|api[_-]?key/i.test(`${locatorVal} ${line}`);
@@ -1098,6 +1135,9 @@ function buildStarterSessionTape() {
   const primaryRoute =
     discoveredRoutes.find((r) => r.startsWith('/') && !r.startsWith('//')) || '/';
   const { steps, networkContracts } = extractLegacyStepsAndNetworkContracts(primaryRoute);
+  const primaryComponent =
+    steps.find((s) => s.componentCandidate && !s.componentCandidate.endsWith('Page'))?.componentCandidate ||
+    `${toPascalCase(defaultSkillId)}Step`;
   return {
     schemaVersion: '1.0.0',
     scenarioId: defaultSkillId,
@@ -1119,7 +1159,7 @@ function buildStarterSessionTape() {
       {
         description: `Verify ${primaryRoute} view renders for standard persona`,
         assertionType: 'toBeVisible',
-        targetComponent: 'migratedFlowPage',
+        targetComponent: primaryComponent,
         targetProperty: 'root',
         expectedValueRef: 'UserBuilder.standardUser().role',
       },
@@ -1325,6 +1365,9 @@ function registerSkillInAgentsAndCopilot(appliedList) {
 // 6. Apply changes if --apply is passed
 const appliedFiles = [];
 if (applyChanges) {
+  assertNoSymlinkEscape(ROOT, targetSkillDir, 'target skill directory');
+  assertNoSymlinkEscape(ROOT, targetSkillFile, 'target SKILL.md');
+  assertNoSymlinkEscape(ROOT, targetRefFile, 'target legacy-reference.md');
   fs.mkdirSync(path.join(targetSkillDir, 'references'), { recursive: true });
   fs.mkdirSync(path.join(targetSkillDir, 'scripts'), { recursive: true });
 
@@ -1343,8 +1386,8 @@ if (applyChanges) {
 
   let hasLegacyUiScript = false;
   for (const s of analyzedScripts) {
-    const absSrc = path.resolve(ROOT, s.sourcePath);
-    const absDest = path.resolve(ROOT, s.targetPath);
+    const absSrc = assertNoSymlinkEscape(ROOT, path.resolve(ROOT, s.sourcePath), 'legacy script source');
+    const absDest = assertNoSymlinkEscape(ROOT, path.resolve(ROOT, s.targetPath), 'legacy script destination');
     fs.mkdirSync(path.dirname(absDest), { recursive: true });
     let scriptBody = fs.readFileSync(absSrc, 'utf8');
     if (/\.(?:js|mjs|ts)$/.test(s.fileName) && s.hardcodedUrls.length > 0) {
@@ -1373,9 +1416,9 @@ if (applyChanges) {
   }
 
   if (hasLegacyUiScript) {
-    const tapeDir = path.join(ROOT, '.exploratory/tapes');
+    const tapeDir = assertNoSymlinkEscape(ROOT, path.join(ROOT, '.exploratory/tapes'), 'tapes directory');
     fs.mkdirSync(tapeDir, { recursive: true });
-    const tapePath = path.join(tapeDir, `${defaultSkillId}.json`);
+    const tapePath = assertNoSymlinkEscape(ROOT, path.join(tapeDir, `${defaultSkillId}.json`), 'starter tape');
     if (!fs.existsSync(tapePath)) {
       const starterTape = buildStarterSessionTape();
       fs.writeFileSync(tapePath, JSON.stringify(starterTape, null, 2) + '\n', 'utf8');
@@ -1388,7 +1431,11 @@ if (applyChanges) {
   registerSkillInAgentsAndCopilot(appliedFiles);
 
   // Generate .claude/commands/<skill-id>.md and .github/prompts/<skill-id>.prompt.md
-  const claudeCmdPath = path.join(ROOT, '.claude/commands', `${defaultSkillId}.md`);
+  const claudeCmdPath = assertNoSymlinkEscape(
+    ROOT,
+    path.join(ROOT, '.claude/commands', `${defaultSkillId}.md`),
+    'Claude command file'
+  );
   fs.mkdirSync(path.dirname(claudeCmdPath), { recursive: true });
   fs.writeFileSync(
     claudeCmdPath,
@@ -1397,7 +1444,11 @@ if (applyChanges) {
   );
   appliedFiles.push(rel(claudeCmdPath));
 
-  const ghPromptPath = path.join(ROOT, '.github/prompts', `${defaultSkillId}.prompt.md`);
+  const ghPromptPath = assertNoSymlinkEscape(
+    ROOT,
+    path.join(ROOT, '.github/prompts', `${defaultSkillId}.prompt.md`),
+    'GitHub prompt file'
+  );
   fs.mkdirSync(path.dirname(ghPromptPath), { recursive: true });
   fs.writeFileSync(
     ghPromptPath,

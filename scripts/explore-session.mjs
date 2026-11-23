@@ -9,6 +9,7 @@
  */
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -141,8 +142,8 @@ export function parseSnapshotRefs(snapshotText = '') {
   for (const rawLine of String(snapshotText).split('\n')) {
     const line = rawLine.trim();
     if (!line) continue;
-    // Format 1: `- button "Sign In" [ref=e5]` or `- checkbox [checked=false, ref=e5]` or `- combobox [expanded=false, ref=e5]`
-    let m = line.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?.*?\[[^\]]*\bref=(e\d+)\]/);
+    // Format 1: `- button "Sign In" [ref=e5]` or `- checkbox [ref=e5, checked=false]` or `- combobox [expanded=false, ref=e5]`
+    let m = line.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?.*?\[[^\]]*\bref=(e\d+)[^\]]*\]/);
     if (m) {
       const role = m[1].toLowerCase();
       const name = m[2] || '';
@@ -361,7 +362,10 @@ export function appendRecordedAction(
     redacted = res.redacted;
   }
 
-  const stepLabel = businessStep || `Complete ${pageRoute || 'current'} workflow interaction`;
+  const sanitizedRouteLabel = String(pageRoute || 'current')
+    .replace(/\b(?:click|fill|press|hover|locator|selector|xpath|css|dom|getbyrole|getbylabel|getbytestid|getbyplaceholder|getbytext|input\s+field|button|checkbox|dropdown)\b/gi, 'feature')
+    .replace(/\/+/g, '/');
+  const stepLabel = businessStep || `Complete ${sanitizedRouteLabel} workflow interaction`;
   const existingComp = resolveComponentFromDomainGraph(pageRoute || '/', domainGraph);
   const stepObj = {
     stepIndex,

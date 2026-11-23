@@ -1121,7 +1121,22 @@ ${compProps ? compProps + '\n' : ''}
   constructor(private readonly page: Page) {
 ${compInits ? compInits + '\n' : ''}  }
 
-  async open(routePath = '/'): Promise<void> {
+  async open(routePath = ${JSON.stringify(
+        (() => {
+          if (tape.baseUrl && domainGraph?.targetApp?.baseUrl) {
+            try {
+              if (new URL(tape.baseUrl).origin !== new URL(domainGraph.targetApp.baseUrl).origin) {
+                const firstGoto = (tape.semanticSteps || []).find((s) => s.action === 'goto');
+                const rawRoute = firstGoto?.locatorContract?.value || firstGoto?.pageRoute || '/';
+                return rawRoute.startsWith('http') ? rawRoute : new URL(rawRoute, tape.baseUrl).toString();
+              }
+            } catch {
+              /* fallback '/' */
+            }
+          }
+          return '/';
+        })()
+      )}): Promise<void> {
     await this.page.goto(routePath);
   }
 }
@@ -1165,8 +1180,10 @@ ${compInits ? compInits + '\n' : ''}  }
   // 5b. State Seeder Layer (StateSeederContract<TInput, THandle> + fixture auto-teardown)
   const seederImports = new Map(); // SeederClass -> { importAlias, fixtureProp }
   if (tape.resumesFrom?.seedClientRef) {
-    const parsedSeed = parseBuilderRef(tape.resumesFrom.seedClientRef);
-    const seedCls = parsedSeed?.builderClass;
+    const rawSeed = String(tape.resumesFrom.seedClientRef).trim();
+    const parsedSeed = parseBuilderRef(rawSeed);
+    const seedCls =
+      parsedSeed?.builderClass || (/^[A-Z][A-Za-z0-9_]*$/.test(rawSeed) ? rawSeed : null);
     if (seedCls && seedCls.endsWith('Seeder') && isSafeClassName(seedCls)) {
       const seederClass = seedCls;
       const stem = stripClassSuffix(seederClass, ['Seeder']) || 'State';
@@ -1308,10 +1325,13 @@ export class ${flowClass} implements FlowContract<void, Record<string, string>> 
       (entry) => !new RegExp(`\\b${entry.propName}\\s*:`).test(fixtureContent)
     );
     if (missingEntries.length > 0) {
-      const importLines = missingEntries
-        .filter((e) => !fixtureContent.includes(`from '${e.importAlias}'`))
-        .map((e) => `import { ${e.typeName} } from '${e.importAlias}';`)
-        .join('\n');
+      const importLines = [
+        ...new Set(
+          missingEntries
+            .filter((e) => !fixtureContent.includes(`from '${e.importAlias}'`))
+            .map((e) => `import { ${e.typeName} } from '${e.importAlias}';`)
+        ),
+      ].join('\n');
       if (importLines) {
         fixtureContent = `${importLines}\n${fixtureContent}`;
       }
@@ -1360,9 +1380,9 @@ export class ${flowClass} implements FlowContract<void, Record<string, string>> 
       });
     }
   } else {
-    const importLines = allFixtureEntries
-      .map((e) => `import { ${e.typeName} } from '${e.importAlias}';`)
-      .join('\n');
+    const importLines = [
+      ...new Set(allFixtureEntries.map((e) => `import { ${e.typeName} } from '${e.importAlias}';`)),
+    ].join('\n');
     const interfaceName = resolvedSquad
       ? `${toPascalCase(resolvedSquad)}Fixtures`
       : 'AppFixtures';
@@ -1490,23 +1510,33 @@ export { expect };
           const safeCapVar = assertSafeJsIdentifier(step.capturesVariable, 'capturesVariable');
           capturedVarsDeclared.add(safeCapVar);
           const cv = (tape.capturedVariables || []).find((c) => c.name === safeCapVar);
-          const lastJsonKey = cv?.jsonPath ? cv.jsonPath.replace(/^data\./, '').split('.').pop() : '';
-          if (lastJsonKey) {
-            assertSafeJsIdentifier(lastJsonKey, 'jsonPath segment');
+          const jsonSegments = cv?.jsonPath
+            ? String(cv.jsonPath)
+                .replace(/^\$\.?/, '')
+                .split('.')
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : [];
+          for (const seg of jsonSegments) {
+            assertSafeJsIdentifier(seg, 'jsonPath segment');
           }
-          const keyAccessExpr = lastJsonKey ? `?.[${JSON.stringify(lastJsonKey)}] ?? ''` : '';
-          stmt = `const ${safeCapVar}Res = await ${apiFix}.executeRequest(${endpointArg}${payloadArg});\n${safeCapVar} = String((${safeCapVar}Res.body as Record<string, unknown>)${keyAccessExpr});`;
+          const keyAccessExpr =
+            jsonSegments.length > 0
+              ? jsonSegments.map((seg) => `?.[${JSON.stringify(seg)}]`).join('') + " ?? ''"
+              : '';
+          stmt = `const ${safeCapVar}Res = await ${apiFix}.executeRequest(${endpointArg}${payloadArg});\n${safeCapVar} = String((${safeCapVar}Res.body as Record<string, any>)${keyAccessExpr});`;
         } else {
           stmt = `await ${apiFix}.executeRequest(${endpointArg}${payloadArg});`;
         }
       } else if (step.action === 'goto') {
         let targetRoute = step.locatorContract?.value || step.pageRoute || '/';
+        let isCrossOrigin = /^https?:\/\//i.test(targetRoute);
         if (targetRoute.startsWith('/') && tape.baseUrl && domainGraph?.targetApp?.baseUrl) {
           try {
             const tapeOrigin = new URL(tape.baseUrl).origin;
             const appOrigin = new URL(domainGraph.targetApp.baseUrl).origin;
             if (tapeOrigin !== appOrigin) {
-              targetRoute = new URL(targetRoute, tape.baseUrl).toString();
+              isCrossOrigin = true;
             }
           } catch {
             /* keep relative targetRoute */
@@ -1514,7 +1544,9 @@ export { expect };
         }
         if (primaryPageFixture) {
           groupMatchKeys.add(primaryPageFixture);
-          stmt = `await ${primaryPageFixture}.open(${JSON.stringify(targetRoute)});`;
+          stmt = isCrossOrigin
+            ? `await ${primaryPageFixture}.open();`
+            : `await ${primaryPageFixture}.open(${JSON.stringify(targetRoute)});`;
         }
       } else if (step.action === 'route') {
         if (!injectedFixtures.includes('page')) injectedFixtures.push('page');
@@ -1837,11 +1869,19 @@ ${flowCallBlock}
     const capturedVarsPreamble = [...capturedVarsDeclared]
       .map((v) => `    let ${v} = '';\n`)
       .join('');
+    const sanitizeStepTitle = (rawTitle) =>
+      String(rawTitle || 'Execute workflow step')
+        .replace(
+          /\b(?:click|fill|press|hover|locator|selector|xpath|css|dom|getbyrole|getbylabel|getbytestid|getbyplaceholder|getbytext|input\s+field|button|checkbox|dropdown)\b/gi,
+          'feature'
+        )
+        .replace(/\s+/g, ' ')
+        .trim() || 'Execute workflow step';
     const stepBlocks = businessGroups.map((group) => {
       const body = group.statements
         .map((s) => `      ${s.replace(/\n/g, '\n      ')}`)
         .join('\n');
-      return `    await test.step(${JSON.stringify(group.title)}, async () => {\n${body}\n    });`;
+      return `    await test.step(${JSON.stringify(sanitizeStepTitle(group.title))}, async () => {\n${body}\n    });`;
     });
 
     const specBody = `${personaPreamble}${capturedVarsPreamble}${resumesFromPreamble}${stepBlocks.join('\n\n')}`;

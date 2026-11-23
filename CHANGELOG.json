@@ -1,7 +1,17 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.9",
+  "latestVersion": "0.48.10",
   "releases": [
+    {
+      "version": "0.48.10",
+      "date": "2026-11-23",
+      "highlights": [
+        "Framework Hardening Batch #5 (40 Defects Fixed across 18 core engine scripts): Fixed `--squad` auth/API leakage & single-word shard false positives & non-object JSON tapes in `analyze-coverage.mjs`, `/` route wildcard matching / wildcard `waitForNetwork` / `defects/README.md` / `src/domains/` & `*.step.ts` inventory in `build-system-map.mjs`, `tests/` helper nodes / nested `.extend<...>` generics / fixture-to-fixture deps / string-safe brace parsing in `impact-graph.mjs`, Conventional Commits `BREAKING CHANGE:` footer / subdir-to-root rename deltas / `--json-meta` mkdir in `generate-release-notes.mjs`, UI-jargon `test.step` sanitization & cross-origin `open()` DIP compliance in `explore-session.mjs` & `compile-tape.mjs`, dangling symlink / atomic `patchTape` / `applyBuilderDataOverrides` / strict CLI flag parsing in `tape-cli.mjs`, ancestor symlink confinement / `rankAndSelectGateOption` object shards & `/` route / asymmetric quarantine basename / resume `maxRuntime` offset in `autonomous-mode.mjs`, OSC escape stripping / strict `capToTokens` / `summarizePlaywrightRun` counts & dedup in `cli-output.mjs`, leading-hyphen session flag injection / dangling symlink / `null` JSON & opaque origin in `export-auth-state.mjs`, `rolled-back-regression` check / `--heal-action apply` evidence preservation / `$&` & pipe sanitization / `--flag=value` in `orchestrate.mjs`, symlink guards / string-safe JSONC trailing commas / normalized `resolvedUrl` & `$&` replacers in `sync-skills.mjs`, multiline `import type` regex & TS-comment secret scanning in `audit-solid.mjs`, `--squad` path traversal & symlink containment in `context-pack.mjs`, SemVer 2.0.0 prerelease ordering in `upgrade-framework.mjs`, `realpathSync` ENOENT guards, missing `node:os` import & trailing bracket attrs in `explore-session.mjs`, bare `seedClientRef` / nested `jsonPath` / deduped fixture imports in `compile-tape.mjs`, `toBeVisible` locator-drift & regex locator balancing in `heal-drift.mjs`, undeclared `capturedVariable:` validation in `validate-tapes.mjs`, ancestor symlink & API fallback client alignment in `legacy-test-migrator.mjs`, stacked SpecFlow bindings in `dotnet-enterprise-analyzer.mjs`, skipped/flaky/basename status parsing in `migration-wave-factory.mjs`, and symlink confinement + component target in `migrate-skill.mjs`."
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.10 Framework Hardening Batch #5."
+      ]
+    },
     {
       "version": "0.48.9",
       "date": "2026-11-22",

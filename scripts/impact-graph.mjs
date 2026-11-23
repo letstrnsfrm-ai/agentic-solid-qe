@@ -221,8 +221,21 @@ function isFixtureFile(relPath) {
 function extractBraceBlock(code, openBraceIdx) {
   if (openBraceIdx < 0 || code[openBraceIdx] !== '{') return '';
   let depth = 0;
+  let quote = null;
   for (let i = openBraceIdx; i < code.length; i++) {
     const ch = code[i];
+    if (quote) {
+      if (ch === '\\') {
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      continue;
+    }
     if (ch === '{') depth++;
     else if (ch === '}') {
       depth--;
@@ -230,6 +243,53 @@ function extractBraceBlock(code, openBraceIdx) {
     }
   }
   return code.slice(openBraceIdx + 1);
+}
+
+/**
+ * Finds the opening `{` of `.extend<...>({` supporting arbitrarily nested generics and arrow types.
+ */
+function findExtendObjectStart(code, extendEndIdx) {
+  let i = extendEndIdx;
+  while (i < code.length && /\s/.test(code[i])) i++;
+  if (code[i] === '<') {
+    let angle = 0;
+    let quote = null;
+    while (i < code.length) {
+      const ch = code[i];
+      if (quote) {
+        if (ch === '\\') {
+          i += 2;
+          continue;
+        }
+        if (ch === quote) quote = null;
+        i++;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === '`') {
+        quote = ch;
+        i++;
+        continue;
+      }
+      if (ch === '=' && code[i + 1] === '>') {
+        i += 2;
+        continue;
+      }
+      if (ch === '<') angle++;
+      else if (ch === '>') {
+        angle--;
+        if (angle === 0) {
+          i++;
+          break;
+        }
+      }
+      i++;
+    }
+    while (i < code.length && /\s/.test(code[i])) i++;
+  }
+  if (code[i] !== '(') return -1;
+  i++;
+  while (i < code.length && /\s/.test(code[i])) i++;
+  return code[i] === '{' ? i : -1;
 }
 
 /**
@@ -251,12 +311,18 @@ function parseFixtureFile(relPath, codeNoComments, imports) {
   }
 
   const props = new Map(); // propName -> Set<targetRelFile>
+  const propFixtureDeps = new Map(); // propName -> Set<siblingFixtureName>
   const autoDeps = new Set();
   const autoPropNames = new Set();
 
   const addPropDep = (propName, targetFile) => {
     if (!props.has(propName)) props.set(propName, new Set());
     props.get(propName).add(targetFile);
+  };
+  const addPropFixtureDep = (propName, depFixtureName) => {
+    if (!depFixtureName || depFixtureName === propName) return;
+    if (!propFixtureDeps.has(propName)) propFixtureDeps.set(propName, new Set());
+    propFixtureDeps.get(propName).add(depFixtureName);
   };
 
   // 1. Parse fixture interfaces / type aliases: `interface AppFixtures { loginPage: LoginPage; }`
@@ -278,8 +344,9 @@ function parseFixtureFile(relPath, codeNoComments, imports) {
   }
 
   // 2. Parse `.extend<...>({ ... })` blocks to capture factory dependencies & `{ auto: true }`
-  for (const m of codeNoComments.matchAll(/\.extend\s*(?:<[\s\S]*?>)?\s*\(\s*\{/g)) {
-    const openIdx = m.index + m[0].length - 1;
+  for (const m of codeNoComments.matchAll(/\.extend\b/g)) {
+    const openIdx = findExtendObjectStart(codeNoComments, m.index + m[0].length);
+    if (openIdx < 0) continue;
     const body = extractBraceBlock(codeNoComments, openIdx);
 
     // Walk top-level properties inside extend({ ... })
@@ -296,12 +363,27 @@ function parseFixtureFile(relPath, codeNoComments, imports) {
       idx += propMatch[0].length;
       const valueStart = idx;
 
-      // Scan until top-level comma or end of extend object
+      // Scan until top-level comma or end of extend object (skipping string literals)
       let depthParen = 0;
       let depthBrace = 0;
       let depthBracket = 0;
+      let quote = null;
       while (idx < body.length) {
         const ch = body[idx];
+        if (quote) {
+          if (ch === '\\') {
+            idx += 2;
+            continue;
+          }
+          if (ch === quote) quote = null;
+          idx++;
+          continue;
+        }
+        if (ch === "'" || ch === '"' || ch === '`') {
+          quote = ch;
+          idx++;
+          continue;
+        }
         if (ch === '(') depthParen++;
         else if (ch === ')') depthParen = Math.max(0, depthParen - 1);
         else if (ch === '{') depthBrace++;
@@ -317,6 +399,17 @@ function parseFixtureFile(relPath, codeNoComments, imports) {
       const propBody = body.slice(valueStart, idx);
       const isAuto = /auto\s*:\s*true/.test(propBody);
       if (isAuto) autoPropNames.add(propName);
+
+      // Capture fixture-to-fixture destructured dependencies: async ({ page, loginPage }, use) => ...
+      const destructMatch = propBody.match(/\(\s*\{([^}]*)\}/);
+      if (destructMatch) {
+        for (const rawPart of destructMatch[1].split(',')) {
+          const clean = rawPart.trim().split(/[:=]/)[0].trim();
+          if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(clean) && !['page', 'context', 'browser', 'request', 'baseURL'].includes(clean)) {
+            addPropFixtureDep(propName, clean);
+          }
+        }
+      }
 
       for (const idMatch of propBody.matchAll(/\b([A-Za-z_$][A-Za-z0-9_$]*)\b/g)) {
         const target = symbolToFile.get(idMatch[1]);
@@ -345,6 +438,7 @@ function parseFixtureFile(relPath, codeNoComments, imports) {
   return {
     relPath,
     props,
+    propFixtureDeps,
     autoDeps,
     autoPropNames,
     mergedFrom,
@@ -433,12 +527,16 @@ export function buildImpactGraph(rootDir = process.cwd()) {
     if (resolvedFixtureCache.has(fixRel)) return resolvedFixtureCache.get(fixRel);
     const meta = fixtureMeta.get(fixRel);
     const props = new Map();
+    const propFixtureDeps = new Map();
     const autoDeps = new Set();
-    if (!meta || visiting.has(fixRel)) return { props, autoDeps };
+    if (!meta || visiting.has(fixRel)) return { props, propFixtureDeps, autoDeps };
     visiting.add(fixRel);
 
     for (const [k, v] of meta.props.entries()) {
       props.set(k, new Set(v));
+    }
+    for (const [k, v] of (meta.propFixtureDeps || new Map()).entries()) {
+      propFixtureDeps.set(k, new Set(v));
     }
     for (const d of meta.autoDeps) autoDeps.add(d);
 
@@ -448,10 +546,36 @@ export function buildImpactGraph(rootDir = process.cwd()) {
         if (!props.has(k)) props.set(k, new Set());
         for (const dep of v) props.get(k).add(dep);
       }
+      for (const [k, v] of (parentRes.propFixtureDeps || new Map()).entries()) {
+        if (!propFixtureDeps.has(k)) propFixtureDeps.set(k, new Set());
+        for (const dep of v) propFixtureDeps.get(k).add(dep);
+      }
       for (const d of parentRes.autoDeps) autoDeps.add(d);
     }
 
-    const res = { props, autoDeps };
+    // Transitively propagate fixture-to-fixture dependencies (e.g., checkoutPage -> loginPage)
+    for (const [propName] of propFixtureDeps.entries()) {
+      const seenProps = new Set([propName]);
+      const queue = [...(propFixtureDeps.get(propName) || [])];
+      while (queue.length > 0) {
+        const depProp = queue.shift();
+        if (seenProps.has(depProp)) continue;
+        seenProps.add(depProp);
+        const targetFiles = props.get(depProp);
+        if (targetFiles) {
+          if (!props.has(propName)) props.set(propName, new Set());
+          for (const tf of targetFiles) props.get(propName).add(tf);
+        }
+        const nested = propFixtureDeps.get(depProp);
+        if (nested) {
+          for (const np of nested) {
+            if (!seenProps.has(np)) queue.push(np);
+          }
+        }
+      }
+    }
+
+    const res = { props, propFixtureDeps, autoDeps };
     resolvedFixtureCache.set(fixRel, res);
     return res;
   };
@@ -558,10 +682,11 @@ export function buildImpactGraph(rootDir = process.cwd()) {
     }
   }
 
-  // Build node summaries for all src/ files
+  // Build node summaries for all non-spec source/helper/fixture files (src/ and tests/)
   const nodes = {};
-  for (const absFile of srcFiles) {
+  for (const absFile of allFiles) {
     const relPath = normalizeRel(resolvedRoot, absFile);
+    if (specMeta.has(relPath)) continue;
     const affectedSpecs = [...(reverseSpecMap.get(relPath) || [])].sort();
     const consumers = [...(directConsumers.get(relPath) || [])].sort();
     const squadSet = new Set();

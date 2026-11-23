@@ -173,7 +173,7 @@ if (legacyProjectCheck.detected) {
   );
 }
 
-const resolvedUrl = appUrl || process.env.BASE_URL || 'http://localhost:3000';
+let resolvedUrl = appUrl || process.env.BASE_URL || 'http://localhost:3000';
 const resolvedAppName = sanitizeAppName(appName);
 
 function assertSafeTargetDirectory(resolvedTarget, label = 'target directory') {
@@ -262,7 +262,7 @@ function assertSafeSlug(value, flagName) {
 }
 
 assertSafeTargetDirectory(TARGET_ROOT);
-assertSafeHttpUrl(resolvedUrl);
+resolvedUrl = assertSafeHttpUrl(resolvedUrl);
 if (squadName) {
   squadName = assertSafeSlug(squadName, '--squad');
 }
@@ -444,7 +444,7 @@ const SAUCEDEMO_DEMO_ARTIFACTS = [
 function removeSauceDemoArtifacts() {
   for (const relArtifact of SAUCEDEMO_DEMO_ARTIFACTS) {
     const fullPath = path.join(TARGET_ROOT, relArtifact);
-    if (!fs.existsSync(fullPath) || fs.lstatSync(fullPath).isSymbolicLink()) continue;
+    if (isUnsafeDest(fullPath) || !fs.existsSync(fullPath)) continue;
     if (!dryRun) {
       fs.unlinkSync(fullPath);
     }
@@ -782,6 +782,7 @@ function mergeConsumerPackageJson() {
       devDependencies: requiredDevDeps,
       overrides: requiredOverrides,
     };
+    if (isUnsafeDest(pkgPath)) return;
     if (!dryRun) {
       fs.writeFileSync(pkgPath, JSON.stringify(newPkg, null, 2) + '\n', 'utf8');
     }
@@ -833,6 +834,7 @@ function mergeConsumerPackageJson() {
       }
     }
     if (modified) {
+      if (isUnsafeDest(pkgPath)) return;
       if (!dryRun) {
         fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
       }
@@ -852,7 +854,7 @@ function mergeConsumerPackageJson() {
  */
 function mergeConsumerNpmrc() {
   const npmrcPath = path.join(TARGET_ROOT, '.npmrc');
-  if (fs.existsSync(npmrcPath) && fs.lstatSync(npmrcPath).isSymbolicLink()) return;
+  if (isUnsafeDest(npmrcPath)) return;
   const existing = fs.existsSync(npmrcPath) ? fs.readFileSync(npmrcPath, 'utf8') : '';
   const requiredSettings = [
     { key: 'ignore-scripts', line: 'ignore-scripts=true' },
@@ -881,16 +883,49 @@ function mergeConsumerNpmrc() {
  * so real-world JSONC tsconfig.json files can be parsed and merged safely.
  */
 function stripJsonCommentsAndTrailingCommas(raw) {
-  let out = '';
+  let noComments = '';
   let inString = false;
   let quoteChar = '';
   for (let i = 0; i < raw.length; i++) {
     const ch = raw[i];
     const next = raw[i + 1];
     if (inString) {
-      out += ch;
+      noComments += ch;
       if (ch === '\\' && i + 1 < raw.length) {
-        out += raw[++i];
+        noComments += raw[++i];
+      } else if (ch === quoteChar) {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inString = true;
+      quoteChar = ch;
+      noComments += ch;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      while (i < raw.length && raw[i] !== '\n') i++;
+      if (i < raw.length) noComments += '\n';
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < raw.length && !(raw[i] === '*' && raw[i + 1] === '/')) i++;
+      i++;
+      continue;
+    }
+    noComments += ch;
+  }
+  let out = '';
+  inString = false;
+  quoteChar = '';
+  for (let i = 0; i < noComments.length; i++) {
+    const ch = noComments[i];
+    if (inString) {
+      out += ch;
+      if (ch === '\\' && i + 1 < noComments.length) {
+        out += noComments[++i];
       } else if (ch === quoteChar) {
         inString = false;
       }
@@ -902,24 +937,19 @@ function stripJsonCommentsAndTrailingCommas(raw) {
       out += ch;
       continue;
     }
-    if (ch === '/' && next === '/') {
-      while (i < raw.length && raw[i] !== '\n') i++;
-      if (i < raw.length) out += '\n';
-      continue;
-    }
-    if (ch === '/' && next === '*') {
-      i += 2;
-      while (i < raw.length && !(raw[i] === '*' && raw[i + 1] === '/')) i++;
-      i++;
-      continue;
+    if (ch === ',') {
+      let j = i + 1;
+      while (j < noComments.length && /\s/.test(noComments[j])) j++;
+      if (noComments[j] === '}' || noComments[j] === ']') continue;
     }
     out += ch;
   }
-  return out.replace(/,\s*([}\]])/g, '$1');
+  return out;
 }
 
 function mergeConsumerTsConfig() {
   const tsconfigPath = path.join(TARGET_ROOT, 'tsconfig.json');
+  if (isUnsafeDest(tsconfigPath)) return;
   const requiredPaths = {
     '@contracts/*': ['src/contracts/*'],
     '@components/*': ['src/components/*'],
@@ -975,12 +1005,13 @@ function mergeConsumerTsConfig() {
 
 function configurePlaywrightConfig() {
   const pwConfigPath = path.join(TARGET_ROOT, 'playwright.config.ts');
+  if (isUnsafeDest(pwConfigPath)) return;
   const serializedUrl = JSON.stringify(resolvedUrl);
   if (!fs.existsSync(pwConfigPath)) {
     const templateConfig = fs.readFileSync(path.join(SOURCE_ROOT, 'playwright.config.ts'), 'utf8');
     const customized = templateConfig.replace(
       /baseURL:\s*process\.env\.BASE_URL\s*\|\|\s*['"][^'"]+['"]/,
-      `baseURL: process.env.BASE_URL || ${serializedUrl}`
+      () => `baseURL: process.env.BASE_URL || ${serializedUrl}`
     );
     if (!dryRun) {
       fs.writeFileSync(pwConfigPath, customized, 'utf8');
@@ -990,7 +1021,7 @@ function configurePlaywrightConfig() {
     const existing = fs.readFileSync(pwConfigPath, 'utf8');
     const updated = existing.replace(
       /baseURL:\s*process\.env\.BASE_URL\s*\|\|\s*['"][^'"]+['"]/,
-      `baseURL: process.env.BASE_URL || ${serializedUrl}`
+      () => `baseURL: process.env.BASE_URL || ${serializedUrl}`
     );
     if (updated !== existing) {
       if (!dryRun) {
@@ -1025,6 +1056,7 @@ const REQUIRED_GITIGNORE_ENTRIES = [
  */
 function mergeConsumerGitignore() {
   const ignorePath = path.join(TARGET_ROOT, '.gitignore');
+  if (isUnsafeDest(ignorePath)) return;
   const existing = fs.existsSync(ignorePath) ? fs.readFileSync(ignorePath, 'utf8') : '';
   const present = new Set(existing.split(/\r?\n/).map((line) => line.trim()));
   const missing = REQUIRED_GITIGNORE_ENTRIES.filter((entry) => !present.has(entry));
@@ -1054,7 +1086,7 @@ function installGitPreCommitHook() {
   }
   const hooksDir = path.join(gitDir, 'hooks');
   const hookPath = path.join(hooksDir, 'pre-commit');
-  if (fs.existsSync(hookPath) && fs.lstatSync(hookPath).isSymbolicLink()) return;
+  if (isUnsafeDest(hooksDir) || isUnsafeDest(hookPath)) return;
 
   const gateSnippet = `# agentic-solid-qe pre-commit secret & SOLID hygiene gate\nif [ -f scripts/audit-solid.mjs ] && [ -f scripts/validate-tapes.mjs ]; then\n  node scripts/audit-solid.mjs && node scripts/validate-tapes.mjs || exit 1\nfi\n`;
   if (!fs.existsSync(hookPath)) {
@@ -1272,23 +1304,25 @@ if (command === 'init') {
         overwrite: false,
       });
     } else if (appUrl || appName) {
-      let existingMem = fs.readFileSync(targetDomainMemory, 'utf8');
-      if (appName) {
-        existingMem = existingMem.replace(
-          /- \*\*Application Name:\*\* .+/,
-          `- **Application Name:** ${resolvedAppName}`
-        );
+      if (!isUnsafeDest(targetDomainMemory)) {
+        let existingMem = fs.readFileSync(targetDomainMemory, 'utf8');
+        if (appName) {
+          existingMem = existingMem.replace(
+            /- \*\*Application Name:\*\* .+/,
+            () => `- **Application Name:** ${resolvedAppName}`
+          );
+        }
+        if (appUrl) {
+          existingMem = existingMem.replace(
+            /- \*\*Base URL:\*\* `.+`/,
+            () => `- **Base URL:** \`${resolvedUrl}\``
+          );
+        }
+        if (!dryRun) {
+          fs.writeFileSync(targetDomainMemory, existingMem, 'utf8');
+        }
+        console.log(`${dryRun ? '🔍 [DRY-RUN] Would update' : '🔧 Updated'} Application Name / Base URL in .agents/domain/domain-memory.md`);
       }
-      if (appUrl) {
-        existingMem = existingMem.replace(
-          /- \*\*Base URL:\*\* `.+`/,
-          `- **Base URL:** \`${resolvedUrl}\``
-        );
-      }
-      if (!dryRun) {
-        fs.writeFileSync(targetDomainMemory, existingMem, 'utf8');
-      }
-      console.log(`${dryRun ? '🔍 [DRY-RUN] Would update' : '🔧 Updated'} Application Name / Base URL in .agents/domain/domain-memory.md`);
     } else {
       console.log(`🛡️  Preserved existing: .agents/domain/domain-memory.md`);
     }
@@ -1322,19 +1356,21 @@ if (command === 'init') {
     });
   } else {
     console.log(`🛡️  Preserved existing: .agents/domain/domain-memory.md`);
-    if (!dryRun) {
+    if (!dryRun && !isUnsafeDest(targetShardsDir)) {
       fs.mkdirSync(targetShardsDir, { recursive: true });
     }
 
-    const existingMemory = fs.readFileSync(targetDomainMemory, 'utf8');
-    if (!existingMemory.includes('Feature Shard Index')) {
-      const shardMigrationBlock = `\n---\n\n## Feature Shard Index (Progressive Disclosure)\n\n| Feature / Domain Area | Routes | Shard Path | Summary |\n| :--- | :--- | :--- | :--- |\n`;
-      if (!dryRun) {
-        fs.appendFileSync(targetDomainMemory, shardMigrationBlock, 'utf8');
+    if (!isUnsafeDest(targetDomainMemory)) {
+      const existingMemory = fs.readFileSync(targetDomainMemory, 'utf8');
+      if (!existingMemory.includes('Feature Shard Index')) {
+        const shardMigrationBlock = `\n---\n\n## Feature Shard Index (Progressive Disclosure)\n\n| Feature / Domain Area | Routes | Shard Path | Summary |\n| :--- | :--- | :--- | :--- |\n`;
+        if (!dryRun) {
+          fs.appendFileSync(targetDomainMemory, shardMigrationBlock, 'utf8');
+        }
+        console.log(
+          `${dryRun ? '🔍 [DRY-RUN] Would upgrade' : '✨ Upgraded'} .agents/domain/domain-memory.md with a 'Feature Shard Index' table (existing content preserved).`
+        );
       }
-      console.log(
-        `${dryRun ? '🔍 [DRY-RUN] Would upgrade' : '✨ Upgraded'} .agents/domain/domain-memory.md with a 'Feature Shard Index' table (existing content preserved).`
-      );
     }
   }
 

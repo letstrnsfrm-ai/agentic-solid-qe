@@ -408,6 +408,8 @@ function extractSemanticCallsBalanced(text) {
     let i = m.index + m[0].length;
     let depth = 1;
     let quote = null;
+    let inRegex = false;
+    let inCharClass = false;
     while (i < text.length && depth > 0) {
       const ch = text[i];
       if (quote) {
@@ -416,8 +418,19 @@ function extractSemanticCallsBalanced(text) {
           continue;
         }
         if (ch === quote) quote = null;
+      } else if (inRegex) {
+        if (ch === '\\') {
+          i += 2;
+          continue;
+        }
+        if (ch === '[') inCharClass = true;
+        else if (ch === ']') inCharClass = false;
+        else if (ch === '/' && !inCharClass) inRegex = false;
       } else if (ch === '\'' || ch === '"' || ch === '`') {
         quote = ch;
+      } else if (ch === '/' && text[i + 1] !== '/' && text[i + 1] !== '*') {
+        inRegex = true;
+        inCharClass = false;
       } else if (ch === '(') {
         depth++;
       } else if (ch === ')') {
@@ -517,11 +530,16 @@ export function classifyFailureRootCause({
   const has5xx =
     /(?:HTTP|status|statusCode|responded with)\s*:?\s*5\d{2}\b/i.test(err) ||
     httpStatuses.some((s) => s >= 500 && s < 600);
+  const isMissingLocatorExpect =
+    (/Received:\s*(?:<element\(s\) not found>|hidden)/i.test(err) ||
+      /\bexpect\(locator\)\.(?:toBeVisible|toBeEnabled|toBeAttached|toBeChecked)\b/i.test(err)) &&
+    /waiting for /i.test(err);
   const isAssertionMismatch =
     (/\b(?:Expected|Received):/i.test(err) ||
       /-\s*Expected\s+(?:substring|string|pattern|value)/i.test(err) ||
       /\bexpect\(locator\)\.(?:toContainText|toHaveText|toHaveValue|toHaveURL)\b.*failed/i.test(err)) &&
-    !/TimeoutError.*waiting for/i.test(err);
+    !/TimeoutError.*waiting for/i.test(err) &&
+    !isMissingLocatorExpect;
 
   if (has5xx || consoleErrors.length > 0 || isAssertionMismatch) {
     return {

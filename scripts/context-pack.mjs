@@ -43,8 +43,14 @@ function readJsonSafe(filePath) {
 
 function walkFiles(dir, predicate = () => true) {
   if (!fs.existsSync(dir)) return [];
+  try {
+    if (fs.lstatSync(dir).isSymbolicLink()) return [];
+  } catch {
+    return [];
+  }
   const results = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
@@ -135,9 +141,19 @@ export function summarizeTapeCompact(tape) {
 function loadTapeById(rootDir, tapeId) {
   const safeId = String(tapeId || '').replace(/\.json$/i, '').trim();
   if (!safeId || safeId.includes('..') || /[\\/]/.test(safeId)) return null;
-  const tapesRoot = path.resolve(rootDir, '.exploratory/tapes');
+  const resolvedRoot = path.resolve(rootDir);
+  const tapesRoot = path.resolve(resolvedRoot, '.exploratory/tapes');
   const direct = path.resolve(tapesRoot, `${safeId}.json`);
   if ((direct === tapesRoot || direct.startsWith(`${tapesRoot}${path.sep}`)) && fs.existsSync(direct)) {
+    try {
+      if (fs.lstatSync(direct).isSymbolicLink()) return null;
+      const realRoot = fs.realpathSync(resolvedRoot);
+      const realDirect = fs.realpathSync(direct);
+      const rel = path.relative(realRoot, realDirect);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    } catch {
+      return null;
+    }
     return { path: direct, data: readJsonSafe(direct) };
   }
   const allTapes = walkFiles(tapesRoot, (f) => f.endsWith('.json'));
@@ -197,10 +213,18 @@ function collectShards(rootDir, { route = '', squad = '' } = {}) {
 
 function collectArchitecture(rootDir, { squad = '', keywords = [] } = {}) {
   const normSquad = String(squad || '').trim().toLowerCase();
+  if (normSquad && !/^[a-z0-9-]+$/.test(normSquad)) {
+    throw new Error(`Security Error: Invalid --squad '${squad}'. Must match /^[a-z0-9-]+$/.`);
+  }
+  const resolvedRoot = path.resolve(rootDir);
   const kwLower = keywords.map((k) => String(k || '').toLowerCase()).filter((k) => k.length >= 2);
   const srcRoot = normSquad
-    ? path.join(rootDir, 'src/domains', normSquad)
-    : path.join(rootDir, 'src');
+    ? path.resolve(resolvedRoot, 'src/domains', normSquad)
+    : path.resolve(resolvedRoot, 'src');
+  const relSrc = path.relative(resolvedRoot, srcRoot);
+  if (relSrc.startsWith('..') || path.isAbsolute(relSrc)) {
+    throw new Error(`Security Error: Squad source root escapes workspace root.`);
+  }
 
   const scanDir = (relSub) => {
     const candidates = [path.join(rootDir, 'src', relSub)];
@@ -470,9 +494,14 @@ export function formatContextPack(pack, { maxTokens = 400 } = {}) {
   return capToTokens(lines.join('\n'), maxTokens, 'narrow --route/--squad/--tape/--spec/--file or raise --max-tokens');
 }
 
-const isMain =
-  Boolean(process.argv[1]) &&
-  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
+  } catch {
+    return path.resolve(process.argv[1]) === path.resolve(__filename);
+  }
+})();
 
 if (isMain) {
   const args = process.argv.slice(2);

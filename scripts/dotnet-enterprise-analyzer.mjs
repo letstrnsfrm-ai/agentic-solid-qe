@@ -195,14 +195,18 @@ export function parseSpecFlowBindings(csFiles, scanRoot) {
     const relPath = path.relative(scanRoot, file).replace(/\\/g, '/');
 
     for (const m of content.matchAll(
-      /\[(Given|When|Then|StepDefinition)\s*\(\s*@?"([^"]+)"\s*\)\][\s\S]{0,160}?\b(?:public|private|internal)\s+(?:async\s+)?(?:Task|void)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g
+      /((?:\[(?:Given|When|Then|StepDefinition|Scope)\s*(?:\((?:@?"[^"]*"|[^)])*\))?\]\s*)+)\b(?:public|private|internal)\s+(?:async\s+)?(?:Task|void)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g
     )) {
-      bindings.push({
-        keyword: m[1],
-        pattern: m[2],
-        method: m[3],
-        file: relPath,
-      });
+      const attrBlock = m[1];
+      const methodName = m[2];
+      for (const am of attrBlock.matchAll(/\[(Given|When|Then|StepDefinition)\s*\(\s*@?"([^"]+)"\s*\)\]/g)) {
+        bindings.push({
+          keyword: am[1],
+          pattern: am[2],
+          method: methodName,
+          file: relPath,
+        });
+      }
     }
 
     for (const cm of content.matchAll(
