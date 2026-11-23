@@ -397,9 +397,16 @@ Environment:
     }
     let cur = resolvedOut;
     while (cur !== resolvedRoot) {
-      if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-        console.error(`❌ Security Error: Refusing to write through symbolic link '${path.relative(resolvedRoot, cur)}'.`);
-        process.exit(1);
+      try {
+        if (fs.lstatSync(cur).isSymbolicLink()) {
+          console.error(`❌ Security Error: Refusing to write through symbolic link '${path.relative(resolvedRoot, cur)}'.`);
+          process.exit(1);
+        }
+      } catch (err) {
+        if (err?.code !== 'ENOENT') {
+          console.error(`❌ Security Error: Unable to inspect output path '${path.relative(resolvedRoot, cur)}'.`);
+          process.exit(1);
+        }
       }
       const parent = path.dirname(cur);
       if (parent === cur) break;

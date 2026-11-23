@@ -32,6 +32,38 @@ const SOURCE_VERSION = (() => {
 
 const rawArgs = process.argv.slice(2);
 
+const subcommandDelegateMap = {
+  orchestrate: 'orchestrate.mjs',
+  status: 'orchestrate.mjs',
+  context: 'context-pack.mjs',
+  impact: 'impact-graph.mjs',
+  tape: 'tape-cli.mjs',
+  verify: 'verify-fast.mjs',
+  upgrade: 'upgrade-framework.mjs',
+  report: 'report-cloud.mjs',
+  compile: 'compile-tape.mjs',
+  explore: 'explore-session.mjs',
+  heal: 'heal-drift.mjs',
+  migrate: 'migrate-skill.mjs',
+  wave: 'migration-wave-factory.mjs',
+  graph: 'build-domain-graph.mjs',
+  map: 'build-system-map.mjs',
+  gaps: 'analyze-coverage.mjs',
+  audit: 'audit-solid.mjs',
+};
+
+if (rawArgs[0] && Object.hasOwn(subcommandDelegateMap, rawArgs[0])) {
+  const scriptFile = path.join(__dirname, subcommandDelegateMap[rawArgs[0]]);
+  const res = spawnSync(process.execPath, [scriptFile, ...rawArgs.slice(1)], {
+    stdio: 'inherit',
+  });
+  if (res.error) {
+    console.error(`❌ Failed to invoke cortex ${rawArgs[0]}: ${res.error.message}`);
+    process.exit(1);
+  }
+  process.exit(res.status ?? 1);
+}
+
 if (rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help') {
   console.log(`
 🧠 Cortex / ASQE — Agentic-SOLID-QE Unified CLI (cortex | asqe | agentic-solid-qe)
@@ -58,34 +90,6 @@ Usage:
   cortex audit                 Run SOLID, Token Budget & Domain Shard Gate
 `);
   process.exit(0);
-}
-
-const subcommandDelegateMap = {
-  orchestrate: 'orchestrate.mjs',
-  status: 'orchestrate.mjs',
-  context: 'context-pack.mjs',
-  impact: 'impact-graph.mjs',
-  tape: 'tape-cli.mjs',
-  verify: 'verify-fast.mjs',
-  upgrade: 'upgrade-framework.mjs',
-  report: 'report-cloud.mjs',
-  compile: 'compile-tape.mjs',
-  explore: 'explore-session.mjs',
-  heal: 'heal-drift.mjs',
-  migrate: 'migrate-skill.mjs',
-  wave: 'migration-wave-factory.mjs',
-  graph: 'build-domain-graph.mjs',
-  map: 'build-system-map.mjs',
-  gaps: 'analyze-coverage.mjs',
-  audit: 'audit-solid.mjs',
-};
-
-if (rawArgs[0] && Object.hasOwn(subcommandDelegateMap, rawArgs[0])) {
-  const scriptFile = path.join(__dirname, subcommandDelegateMap[rawArgs[0]]);
-  const res = spawnSync(process.execPath, [scriptFile, ...rawArgs.slice(1)], {
-    stdio: 'inherit',
-  });
-  process.exit(res.status ?? 0);
 }
 
 let command = 'sync';
@@ -278,9 +282,13 @@ function isUnsafeDest(dest) {
   }
   let cur = resolvedDest;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      console.warn(`⚠️  Skipped symlinked path (refusing to write through symlink): ${rel(cur)}`);
-      return true;
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        console.warn(`⚠️  Skipped symlinked path (refusing to write through symlink): ${rel(cur)}`);
+        return true;
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') return true;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;

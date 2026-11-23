@@ -245,15 +245,25 @@ export function collectSystemKnowledge() {
   // Compute shard coverage
   const compiledTapeIds = new Set(specs.map((s) => s.scenarioId).filter(Boolean));
   const shardCoverage = shards.map((sh) => {
-    const matchedTapes = tapes.filter((t) =>
-      sh.capabilities.some((c) => JSON.stringify(t).includes(c)) ||
-      (sh.file.includes('auth') && t.scenarioId.includes('auth')) ||
-      (sh.file.includes('direct') && t.scenarioId.includes('direct')) ||
-      (sh.file.includes('aggregator') && t.scenarioId.includes('aggregator'))
-    );
-    const isCovered =
-      matchedTapes.some((t) => compiledTapeIds.has(t.scenarioId)) ||
-      sh.capabilities.length > 0;
+    const shRoutes = Array.isArray(sh.routes) ? sh.routes.map((r) => String(r).toLowerCase()) : [];
+    const matchedTapes = tapes.filter((t) => {
+      const tapeRoutes = (Array.isArray(t.businessSteps) ? t.businessSteps : [])
+        .map((s) => String(s.pageRoute || '').toLowerCase())
+        .filter(Boolean);
+      const routeMatched =
+        shRoutes.length > 0 &&
+        tapeRoutes.some((tr) =>
+          shRoutes.some((sr) => (sr === '/' ? tr === '/' : tr.includes(sr) || sr.includes(tr)))
+        );
+      return (
+        routeMatched ||
+        sh.capabilities.some((c) => JSON.stringify(t).includes(c)) ||
+        (sh.file.includes('auth') && t.scenarioId.includes('auth')) ||
+        (sh.file.includes('direct') && t.scenarioId.includes('direct')) ||
+        (sh.file.includes('aggregator') && t.scenarioId.includes('aggregator'))
+      );
+    });
+    const isCovered = matchedTapes.some((t) => compiledTapeIds.has(t.scenarioId));
     return {
       ...sh,
       isCovered,
@@ -517,10 +527,14 @@ export function buildSystemMap({ outPath = DEFAULT_OUT, quiet = false, jsonOnly 
   }
   let cur = resolvedOut;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      throw new Error(
-        `Security Error: Refusing to write system map through symbolic link: ${path.relative(resolvedRoot, cur)}`
-      );
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(
+          `Security Error: Refusing to write system map through symbolic link: ${path.relative(resolvedRoot, cur)}`
+        );
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;

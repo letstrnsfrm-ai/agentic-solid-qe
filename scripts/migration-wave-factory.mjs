@@ -73,8 +73,12 @@ function assertSafeOutputPath(projectRoot, relOutPath) {
   }
   let cur = resolved;
   while (cur !== resolvedRoot) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-      throw new Error(`Security Error: Refusing to write through symbolic link: '${path.relative(resolvedRoot, cur)}'.`);
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) {
+        throw new Error(`Security Error: Refusing to write through symbolic link: '${path.relative(resolvedRoot, cur)}'.`);
+      }
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
     }
     const parent = path.dirname(cur);
     if (parent === cur) break;
@@ -804,7 +808,11 @@ function main() {
   const scanDir = getFlag(args, '--scan');
   const squad = getFlag(args, '--squad', '');
   const waveArg = getFlag(args, '--wave');
-  const wave = waveArg !== undefined ? Number(waveArg) : null;
+  const wave = args.includes('--scaffold-wave0')
+    ? 0
+    : waveArg !== undefined
+      ? Number(waveArg)
+      : null;
   const batchSize = Number(getFlag(args, '--batch-size', '5'));
   const workers = Number(getFlag(args, '--workers', '4'));
   const shouldRun = args.includes('--run') || args.includes('--scaffold-wave0');

@@ -108,17 +108,33 @@ function writeValidatedTape(rootDir, scenarioId, tapeObj, { dryRun = false } = {
   return { safeId, relFile, written: !dryRun };
 }
 
+function walkFilesRecursive(dir, suffix, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  try {
+    if (fs.lstatSync(dir).isSymbolicLink()) return out;
+  } catch {
+    return out;
+  }
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walkFilesRecursive(full, suffix, out);
+    } else if (entry.isFile() && entry.name.endsWith(suffix)) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
 export function listTapes(rootDir = process.cwd()) {
   const tapesDir = path.join(rootDir, '.exploratory/tapes');
   if (!fs.existsSync(tapesDir) || fs.lstatSync(tapesDir).isSymbolicLink()) return [];
   const specsDir = path.join(rootDir, 'tests');
-  const specSources =
-    fs.existsSync(specsDir) && !fs.lstatSync(specsDir).isSymbolicLink()
-      ? fs
-          .readdirSync(specsDir, { withFileTypes: true })
-          .filter((e) => !e.isSymbolicLink() && e.isFile() && e.name.endsWith('.spec.ts'))
-          .map((e) => ({ file: e.name, content: fs.readFileSync(path.join(specsDir, e.name), 'utf8') }))
-      : [];
+  const specSources = walkFilesRecursive(specsDir, '.spec.ts').map((full) => ({
+    file: path.basename(full),
+    content: fs.readFileSync(full, 'utf8'),
+  }));
 
   return fs
     .readdirSync(tapesDir, { withFileTypes: true })
@@ -214,12 +230,11 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
   if (!Array.isArray(setData) || setData.length === 0) return [];
   const dataDir = path.join(rootDir, 'src/data');
   assertNoSymlinkEscape(rootDir, dataDir, 'src/data directory');
-  const builderFiles = fs.existsSync(dataDir)
-    ? fs
-        .readdirSync(dataDir, { withFileTypes: true })
-        .filter((e) => !e.isSymbolicLink() && e.isFile() && e.name.endsWith('.builder.ts'))
-        .map((e) => path.join(dataDir, e.name))
-    : [];
+  const domainsDir = path.join(rootDir, 'src/domains');
+  const builderFiles = [
+    ...walkFilesRecursive(dataDir, '.builder.ts'),
+    ...walkFilesRecursive(domainsDir, '.builder.ts'),
+  ];
   const applied = [];
 
   for (const item of setData) {
@@ -237,7 +252,8 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
       throw new Error(`Security Error: Refusing to write sensitive property '${propName}' via --set-data. Use environment variables.`);
     }
     const serializedVal = JSON.stringify(String(item.value ?? ''));
-    let targetFile = builderFiles.find((f) => fs.readFileSync(f, 'utf8').includes(`class ${builderClass}`));
+    const classDeclRe = new RegExp(`\\bclass\\s+${escapeRegExp(builderClass)}\\b`);
+    let targetFile = builderFiles.find((f) => classDeclRe.test(fs.readFileSync(f, 'utf8')));
     if (!targetFile) {
       const kebab = builderClass
         .replace(/Builder$/, '')
@@ -265,7 +281,7 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
     const mm = content.match(methodRe);
     if (mm) {
       const propRe = new RegExp(
-        `(\\b${safePropRe}\\s*:\\s*)(?:'[^']*'|\"[^\"]*\"|-?\\d+(?:\\.\\d+)?|true|false|null)(,?)`
+        `(\\b${safePropRe}\\s*:\\s*)(?:'(?:\\\\.|[^'\\\\])*'|"(?:\\\\.|[^"\\\\])*"|-?\\d+(?:\\.\\d+)?|true|false|null|[^,\\n}]+)(,?)`
       );
       if (propRe.test(mm[2])) {
         const updatedBody = mm[2].replace(propRe, (_, p1, p2) => `${p1}${serializedVal}${p2}`);
@@ -367,11 +383,12 @@ export function patchTape(
   for (const exp of addExpects) {
     const resolvedValRef =
       exp.expectedValueRef || (BOOLEAN_ASSERTIONS.has(exp.assertionType) ? 'true' : undefined);
+    const resolvedTargetProp = exp.targetProperty || 'root';
     updated.expectedStates.push({
-      description: exp.description || `Verify ${exp.targetComponent}${exp.targetProperty ? `.${exp.targetProperty}` : ''} ${exp.assertionType}`,
+      description: exp.description || `Verify ${exp.targetComponent}.${resolvedTargetProp} ${exp.assertionType}`,
       assertionType: exp.assertionType,
       targetComponent: exp.targetComponent,
-      ...(exp.targetProperty ? { targetProperty: exp.targetProperty } : {}),
+      targetProperty: resolvedTargetProp,
       ...(resolvedValRef ? { expectedValueRef: resolvedValRef } : {}),
     });
   }

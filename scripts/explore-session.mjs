@@ -301,8 +301,11 @@ export function createDraftTape({
   baseUrl = process.env.BASE_URL || 'http://localhost:3000',
   actor = 'primary',
   resumesFrom = null,
+  storageStatePath = null,
 } = {}) {
   const safeId = validateSafeId(scenarioId, 'scenarioId');
+  const builderClass = `${safeId.split('-').map((p) => p[0].toUpperCase() + p.slice(1)).join('')}DataBuilder`;
+  const defaultBuilderRef = `${builderClass}.standard()`;
   return {
     schemaVersion: '1.0.0',
     scenarioId: safeId,
@@ -313,9 +316,18 @@ export function createDraftTape({
     tags: ['@p0', '@smoke'],
     persona: {
       role: actor,
-      dataBuilderRef: `${safeId.split('-').map((p) => p[0].toUpperCase() + p.slice(1)).join('')}DataBuilder.standard()`,
+      dataBuilderRef: defaultBuilderRef,
+      ...(storageStatePath ? { storageStatePath } : {}),
     },
-    actors: [{ actorId: actor, role: actor, portalBaseUrl: baseUrl }],
+    actors: [
+      {
+        actorId: actor,
+        role: actor,
+        dataBuilderRef: defaultBuilderRef,
+        portalBaseUrl: baseUrl,
+        ...(storageStatePath ? { storageStatePath } : {}),
+      },
+    ],
     preconditions: ['Seeded prerequisite state ready via cortex explore'],
     ...(resumesFrom ? { resumesFrom } : {}),
     capturedVariables: [],
@@ -384,9 +396,20 @@ export function switchDraftActor(draftTape, { actorId, role, portalBaseUrl, stor
   const safeActor = validateSafeId(actorId, 'actorId');
   if (!Array.isArray(draftTape.actors)) draftTape.actors = [];
   if (!draftTape.actors.some((a) => a.actorId === safeActor)) {
+    const builderClass = `${String(draftTape.scenarioId || 'explore-draft')
+      .split('-')
+      .filter(Boolean)
+      .map((p) => p[0].toUpperCase() + p.slice(1))
+      .join('')}DataBuilder`;
+    const actorMethod = safeActor
+      .split(/[^a-zA-Z0-9]+/)
+      .filter(Boolean)
+      .map((p, idx) => (idx === 0 ? p.toLowerCase() : p[0].toUpperCase() + p.slice(1)))
+      .join('') || 'standard';
     draftTape.actors.push({
       actorId: safeActor,
       role: role || safeActor,
+      dataBuilderRef: `${builderClass}.${actorMethod}()`,
       ...(portalBaseUrl ? { portalBaseUrl } : {}),
       ...(storageStatePath ? { storageStatePath } : {}),
     });
@@ -569,7 +592,7 @@ export function formatCompactOutput(payload = {}) {
   const refLines = payload.snapshotDelta?.deltaLines || payload.snapshot || [];
   if (refLines.length > 0) {
     const terseRefs = refLines.map((l) => {
-      const m = l.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?.*?\[ref=(e\d+)\]/);
+      const m = l.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?.*?\[[^\]]*\bref=(e\d+)[^\]]*\]/);
       if (m) return `@${m[3]}[${m[1]}${m[2] ? ` "${m[2]}"` : ''}]`;
       return l;
     });
@@ -621,7 +644,17 @@ export function appendRecordedAssertion(
   draftTape,
   { refOrSelector, assertionType = 'toBeVisible', expectedValue = 'true', refMap, pageRoute, businessStep, actor, domainGraph }
 ) {
-  const allowedAssertions = new Set(['toBeVisible', 'toContainText', 'toHaveText', 'toHaveValue', 'toHaveURL', 'toBeEnabled', 'toBeHidden']);
+  const allowedAssertions = new Set([
+    'toBeVisible',
+    'toContainText',
+    'toHaveText',
+    'toHaveValue',
+    'toHaveURL',
+    'toBeEnabled',
+    'toBeDisabled',
+    'toBeChecked',
+    'toBeHidden',
+  ]);
   const safeAssertion = allowedAssertions.has(assertionType) ? assertionType : 'toBeVisible';
   const loc = resolveSemanticLocator(refOrSelector, refMap);
   const compName =
@@ -935,6 +968,10 @@ async function cmdStart(args) {
   let resumesFrom = null;
   let checkpointPath = null;
   let specPid = null;
+  const resolvedAuth = authPath ? resolveConfinedPath(ROOT, authPath, '.auth/', '--auth') : null;
+  if (resolvedAuth && fs.existsSync(resolvedAuth.absPath) && !fromSpec && !checkpointName) {
+    runAgentBrowser(session, ['state', 'load', resolvedAuth.absPath], { allowFail: true });
+  }
 
   if (fromSpec) {
     const safeSpec = resolveConfinedPath(ROOT, fromSpec, 'tests/', '--from-spec');
@@ -1048,10 +1085,6 @@ async function cmdStart(args) {
     runAgentBrowser(session, openArgs);
   }
 
-  if (authPath) {
-    resolveConfinedPath(ROOT, authPath, '.auth/', '--auth');
-  }
-
   let [snap, rawLiveUrl] = await Promise.all([
     runAgentBrowserAsync(session, ['snapshot', '-i'], { allowFail: true }),
     fromSpec && currentUrl
@@ -1077,6 +1110,7 @@ async function cmdStart(args) {
     baseUrl: tapeStartUrl,
     actor: actorId,
     resumesFrom,
+    storageStatePath: resolvedAuth ? resolvedAuth.relPath : null,
   });
 
   writePrivateJson(LIVE_DRAFT_TAPE_FILE, draftTape);
@@ -1346,9 +1380,12 @@ async function cmdActor(args) {
   if (!state || !draftTape) {
     throw new Error('No active explore session. Run `cortex explore start ...` first.');
   }
-  if (authPath) resolveConfinedPath(ROOT, authPath, '.auth/', '--auth');
+  const resolvedAuth = authPath ? resolveConfinedPath(ROOT, authPath, '.auth/', '--auth') : null;
 
   const actorSession = `${state.session}-${actorId}`;
+  if (resolvedAuth && fs.existsSync(resolvedAuth.absPath)) {
+    runAgentBrowser(actorSession, ['state', 'load', resolvedAuth.absPath], { allowFail: true });
+  }
   const rawTargetUrl = urlFlag ? interpolateVariables(urlFlag, state.variables) : state.url;
   const targetUrl = rawTargetUrl ? assertSafeExploreUrl(rawTargetUrl, '--url') : '';
   if (targetUrl) {
@@ -1358,7 +1395,7 @@ async function cmdActor(args) {
     actorId,
     role,
     portalBaseUrl: targetUrl,
-    storageStatePath: authPath,
+    storageStatePath: resolvedAuth ? resolvedAuth.relPath : null,
   });
 
   let snap = runAgentBrowser(actorSession, ['snapshot', '-i'], { allowFail: true });

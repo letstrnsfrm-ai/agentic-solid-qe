@@ -172,7 +172,9 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
     errors.push(`[${file}] Invalid charter '${tape.charter}'.`);
   }
 
-  if (tape.persona && typeof tape.persona === 'object') {
+  if (!tape.persona || typeof tape.persona !== 'object' || Array.isArray(tape.persona)) {
+    errors.push(`[${file}] persona must be a non-null object.`);
+  } else {
     checkUnknownKeys(tape.persona, VALID_PERSONA_KEYS, `[${file} persona]`, errors);
     if (!isSafeMemberRef(tape.persona.dataBuilderRef)) {
       errors.push(
@@ -196,6 +198,10 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
       errors.push(`[${file}] actors must be an array when provided.`);
     } else {
       for (const actor of tape.actors) {
+        if (!actor || typeof actor !== 'object' || Array.isArray(actor)) {
+          errors.push(`[${file}] actors entry must be a non-null object.`);
+          continue;
+        }
         checkUnknownKeys(actor, VALID_ACTOR_KEYS, `[${file} actor]`, errors);
         if (
           !actor.actorId ||
@@ -298,6 +304,10 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
       errors.push(`[${file}] capturedVariables must be an array when provided.`);
     } else {
       for (const cv of tape.capturedVariables) {
+        if (!cv || typeof cv !== 'object' || Array.isArray(cv)) {
+          errors.push(`[${file}] capturedVariables entry must be a non-null object.`);
+          continue;
+        }
         checkUnknownKeys(cv, VALID_CAPTURED_VAR_KEYS, `[${file} capturedVariables]`, errors);
         if (
           !cv.name ||
@@ -338,6 +348,10 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
     errors.push(`[${file}] semanticSteps must be a non-empty array.`);
   } else {
     for (const step of tape.semanticSteps) {
+      if (!step || typeof step !== 'object' || Array.isArray(step)) {
+        errors.push(`[${file}] semanticSteps entry must be a non-null object.`);
+        continue;
+      }
       const stepLabel = `[${file} step #${step.stepIndex}]`;
       const isPasswordTarget =
         SENSITIVE_FIELD_REGEX.test(step.intent ?? '') ||
@@ -459,6 +473,10 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
 
   if (Array.isArray(tape.networkContracts)) {
     for (const nc of tape.networkContracts) {
+      if (!nc || typeof nc !== 'object' || Array.isArray(nc)) {
+        errors.push(`[${file}] networkContracts entry must be a non-null object.`);
+        continue;
+      }
       checkUnknownKeys(nc, VALID_NETWORK_KEYS, `[${file} networkContracts]`, errors);
       if (hasQuerySecretParam(nc.urlPattern)) {
         errors.push(
@@ -500,6 +518,10 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
     errors.push(`[${file}] expectedStates must be a non-empty array.`);
   } else {
     for (const state of tape.expectedStates) {
+      if (!state || typeof state !== 'object' || Array.isArray(state)) {
+        errors.push(`[${file}] expectedStates entry must be a non-null object.`);
+        continue;
+      }
       checkUnknownKeys(state, VALID_STATE_KEYS, `[${file} expectedStates]`, errors);
       if (!VALID_ASSERTIONS.has(state.assertionType)) {
         errors.push(`[${file}] Invalid assertionType '${state.assertionType}'.`);
@@ -518,7 +540,8 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         state.assertionType === 'toHaveURL' &&
         typeof state.expectedValueRef === 'string' &&
         /^\/[a-zA-Z0-9._/?=&%#:~-]*$/.test(state.expectedValueRef) &&
-        !state.expectedValueRef.includes('..');
+        !state.expectedValueRef.includes('..') &&
+        !hasQuerySecretParam(state.expectedValueRef);
       if (
         typeof state.expectedValueRef !== 'string' ||
         (!isCapturedVarRef && !isSafeUrlPathRef && !isSafeMemberRef(state.expectedValueRef))

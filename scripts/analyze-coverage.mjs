@@ -200,6 +200,7 @@ const tapes = tapeFiles.map((f) => {
     }
 
     return {
+      file: path.relative(ROOT, f).replace(/\\/g, '/'),
       scenarioId,
       charter: data.charter,
       persona: data.persona?.role,
@@ -212,6 +213,7 @@ const tapes = tapeFiles.map((f) => {
     };
   } catch {
     return {
+      file: path.relative(ROOT, f).replace(/\\/g, '/'),
       scenarioId: path.basename(f),
       charter: 'invalid-json',
       compiledToSpec: null,
@@ -259,34 +261,59 @@ const defectFiles = walkFiles(path.join(ROOT, 'defects'), '.md').filter(
 );
 const openDefects = defectFiles.map((f) => path.relative(ROOT, f));
 
-// 5. Existing SOLID Architecture (Global + Domain-Scoped)
+const matchSquad = (p) =>
+  !filterSquad || String(p || '').toLowerCase().includes(filterSquad);
+
+// 5. Existing SOLID Architecture (Global + Domain-Scoped) — filter by relative path before basename
+const relPath = (f) => path.relative(ROOT, f).replace(/\\/g, '/');
 const contracts = walkFiles(path.join(ROOT, 'src/contracts'), '.ts').map((f) => path.basename(f));
 const components = [
   ...walkFiles(path.join(ROOT, 'src/components'), '.ts').filter((f) => !f.endsWith('.step.ts')),
   ...walkFiles(path.join(ROOT, 'src/shared/components'), '.ts'),
   ...walkFiles(path.join(ROOT, 'src/domains'), '.component.ts'),
-].map((f) => path.basename(f));
+]
+  .filter((f) => matchSquad(relPath(f)))
+  .map((f) => path.basename(f));
 const wizardSteps = [
   ...walkFiles(path.join(ROOT, 'src/components'), '.step.ts'),
   ...walkFiles(path.join(ROOT, 'src/steps'), '.step.ts'),
   ...walkFiles(path.join(ROOT, 'src/domains'), '.step.ts'),
-].map((f) => path.basename(f));
+]
+  .filter((f) => matchSquad(relPath(f)))
+  .map((f) => path.basename(f));
 const pages = [
   ...walkFiles(path.join(ROOT, 'src/pages'), '.ts'),
   ...walkFiles(path.join(ROOT, 'src/domains'), '.page.ts'),
-].map((f) => path.basename(f));
+]
+  .filter((f) => matchSquad(relPath(f)))
+  .map((f) => path.basename(f));
 const dataBuilders = [
   ...walkFiles(path.join(ROOT, 'src/data'), '.ts'),
   ...walkFiles(path.join(ROOT, 'src/domains'), '.builder.ts'),
-].map((f) => path.basename(f));
-const apiClients = apiClientFilePaths.map((f) => path.basename(f));
+]
+  .filter((f) => matchSquad(relPath(f)))
+  .map((f) => path.basename(f));
+const apiClients = apiClientFilePaths
+  .filter((f) => matchSquad(relPath(f)))
+  .map((f) => path.basename(f));
 
-// 6. Compute Recommended Next Action & 5-Stage Incremental Coverage Maturity
+const scopedShards = shards.filter((s) => !filterSquad || s.squad === filterSquad || matchSquad(s.file));
+const scopedUncovered = scopedShards.filter((s) => !s.isCoveredBySpec).map((s) => s.file);
+const scopedStale = scopedShards.filter((s) => s.isStale).map((s) => s.file);
+const scopedTapes = tapes.filter((t) => !filterSquad || matchSquad(t.file) || matchSquad(t.scenarioId));
+const scopedUncompiled = scopedTapes
+  .filter((t) => !t.compiledToSpec && t.charter !== 'invalid-json')
+  .map((t) => t.scenarioId);
+const scopedSpecs = specsWithContent
+  .filter((s) => !filterSquad || matchSquad(s.file))
+  .map(({ rawContent, ...rest }) => rest);
+
+// 6. Compute Recommended Next Action & 5-Stage Incremental Coverage Maturity (squad-scoped when --squad is set)
 let recommendedNextAction;
 let nextSingleScenarioToAutomate = null;
 let coverageMaturityStage;
 
-const hasMultiPersonaOrBoundary = tapes.some((t) =>
+const hasMultiPersonaOrBoundary = scopedTapes.some((t) =>
   ['multi-persona-auth', 'boundary-analysis', 'state-interruption', 'accessibility-audit'].includes(
     t.charter
   )
@@ -294,16 +321,16 @@ const hasMultiPersonaOrBoundary = tapes.some((t) =>
 const hasEnterprisePatterns =
   wizardSteps.length > 0 ||
   apiClients.length > 0 ||
-  tapes.some((t) => ['api-contract', 'cross-portal-handoff'].includes(t.charter));
+  scopedTapes.some((t) => ['api-contract', 'cross-portal-handoff'].includes(t.charter));
 
-if (missingAuthSessions.length > 0 || (shards.length === 0 && specsWithContent.length === 0)) {
+if (missingAuthSessions.length > 0 || (scopedShards.length === 0 && scopedSpecs.length === 0)) {
   coverageMaturityStage = {
     stage: 0,
     name: 'Stage 0: Foundation, Auth & Legacy Onboarding',
     nextMilestone:
       'Configure target Base URL, capture .auth/<persona>.json via /00-env-bootstrap, and seed initial route shards (or migrate legacy prompts/scripts via /05-skill-migrator).',
   };
-} else if (uncompiledTapes.length > 0 || uncoveredShards.length > 0) {
+} else if (scopedUncompiled.length > 0 || scopedUncovered.length > 0) {
   coverageMaturityStage = {
     stage: 1,
     name: 'Stage 1: P0 Golden-Path Baseline (1 Test at a Time)',
@@ -335,33 +362,21 @@ if (missingAuthSessions.length > 0 || (shards.length === 0 && specsWithContent.l
 
 if (missingAuthSessions.length > 0) {
   recommendedNextAction = `Invoke /00-env-bootstrap to capture missing persona session(s) required by Session Tapes: ${missingAuthSessions.join(', ')}`;
-} else if (uncompiledTapes.length > 0) {
-  nextSingleScenarioToAutomate = uncompiledTapes[0];
-  recommendedNextAction = `Invoke '/02-solid-architect ${nextSingleScenarioToAutomate}' (or run 'npx cortex compile ${nextSingleScenarioToAutomate} --apply') to compile and verify 1 Session Tape at a time (${uncompiledTapes.length} uncompiled: ${uncompiledTapes.join(', ')})`;
-} else if (shards.length === 0 && specsWithContent.length === 0) {
+} else if (scopedUncompiled.length > 0) {
+  nextSingleScenarioToAutomate = scopedUncompiled[0];
+  recommendedNextAction = `Invoke '/02-solid-architect ${nextSingleScenarioToAutomate}' (or run 'npx cortex compile ${nextSingleScenarioToAutomate} --apply') to compile and verify 1 Session Tape at a time (${scopedUncompiled.length} uncompiled: ${scopedUncompiled.join(', ')})`;
+} else if (scopedShards.length === 0 && scopedSpecs.length === 0) {
   recommendedNextAction = needsTargetUrlConfig
     ? `Invoke /00-env-bootstrap (or run 'npm run init:app -- --url <https://your-app> --name "<App Name>"') to configure Base URL, capture auth state, and discover initial feature shards.`
     : `Invoke /00-env-bootstrap to capture persona auth state and map unfamiliar app routes, or /01-cli-explorer to explore ${baseUrl} in --headed mode.`;
-} else if (uncoveredShards.length > 0) {
-  nextSingleScenarioToAutomate = uncoveredShards[0];
-  recommendedNextAction = `Invoke /01-cli-explorer to explore 1 critical business flow for uncovered shard '${nextSingleScenarioToAutomate}' (${uncoveredShards.length} uncovered total: ${uncoveredShards.join(', ')})`;
-} else if (staleShards.length > 0) {
-  recommendedNextAction = `Invoke /03-drift-healer or /01-cli-explorer to re-verify stale domain shard(s): ${staleShards.join(', ')}`;
+} else if (scopedUncovered.length > 0) {
+  nextSingleScenarioToAutomate = scopedUncovered[0];
+  recommendedNextAction = `Invoke /01-cli-explorer to explore 1 critical business flow for uncovered shard '${nextSingleScenarioToAutomate}' (${scopedUncovered.length} uncovered total: ${scopedUncovered.join(', ')})`;
+} else if (scopedStale.length > 0) {
+  recommendedNextAction = `Invoke /03-drift-healer or /01-cli-explorer to re-verify stale domain shard(s): ${scopedStale.join(', ')}`;
 } else {
-  recommendedNextAction = `All ${shards.length} domain shard(s) and ${tapes.length} tape(s) have spec coverage. Invoke /agentic-solid-qe to plan the next incremental coverage stage, /01-cli-explorer for the next single P1/P2 business scenario or backend API contract, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
+  recommendedNextAction = `All ${scopedShards.length} domain shard(s) and ${scopedTapes.length} tape(s) have spec coverage. Invoke /agentic-solid-qe to plan the next incremental coverage stage, /01-cli-explorer for the next single P1/P2 business scenario or backend API contract, /03-drift-healer to triage test failures, or /04-ci-pipeline to curate CI tags & sharded workflows.`;
 }
-
-const matchSquad = (p) =>
-  !filterSquad || String(p || '').toLowerCase().includes(filterSquad);
-
-const scopedShards = shards.filter((s) => !filterSquad || s.squad === filterSquad || matchSquad(s.path));
-const scopedUncovered = uncoveredShards.filter(matchSquad);
-const scopedStale = staleShards.filter(matchSquad);
-const scopedTapes = tapes.filter((t) => !filterSquad || matchSquad(t.file) || matchSquad(t.scenarioId));
-const scopedUncompiled = uncompiledTapes.filter(matchSquad);
-const scopedSpecs = specsWithContent
-  .filter((s) => !filterSquad || matchSquad(s.file))
-  .map(({ rawContent, ...rest }) => rest);
 
 const pendingUpgradePatches = walkFiles(path.join(ROOT, '.agents/upgrade-patches')).map((f) =>
   path.relative(ROOT, f).replace(/\\/g, '/')
@@ -494,11 +509,11 @@ const report = isCompact
       automatedSpecs: scopedSpecs,
       existingArchitecture: {
         contracts,
-        pages: pages.filter(matchSquad),
-        components: components.filter(matchSquad),
-        wizardSteps: wizardSteps.filter(matchSquad),
-        dataBuilders: dataBuilders.filter(matchSquad),
-        apiClients: apiClients.filter(matchSquad),
+        pages,
+        components,
+        wizardSteps,
+        dataBuilders,
+        apiClients,
       },
       recommendedNextAction,
     };

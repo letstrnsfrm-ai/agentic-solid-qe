@@ -150,8 +150,12 @@ export function capToTokens(text = '', maxTokens = 400, hint = 'narrow scope or 
   const clean = stripAnsi(text).replace(/\r\n/g, '\n');
   if (estimateTokens(clean) <= maxTokens) return clean;
   const lines = clean.split('\n');
+  const budget = Math.max(8, Math.min(maxTokens, maxTokens - Math.min(16, Math.floor(maxTokens * 0.25))));
+  if (lines.length === 1) {
+    const maxChars = Math.max(16, budget * 4);
+    return `${lines[0].slice(0, maxChars)}... (trimmed to <=${maxTokens} tok; ${hint})`;
+  }
   const kept = [];
-  const budget = Math.max(40, maxTokens - 16);
   for (const line of lines) {
     const candidate = kept.length > 0 ? `${kept.join('\n')}\n${line}` : line;
     if (estimateTokens(candidate) > budget && kept.length > 0) {

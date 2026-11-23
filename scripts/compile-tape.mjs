@@ -618,7 +618,7 @@ export function compileSessionTape({
           .join('\n\n');
 
         if (
-          injectedMethodsCode.includes('requireEnv(') &&
+          (baseBuilderContent.includes('requireEnv(') || injectedMethodsCode.includes('requireEnv(')) &&
           !/\bfunction\s+requireEnv\b/.test(baseBuilderContent)
         ) {
           baseBuilderContent = `${REQUIRE_ENV_HELPER_CODE}${baseBuilderContent}`;
@@ -932,6 +932,7 @@ export class ${clientClass} implements ApiClientContract {
       let implementsClause = 'IdentifiableComponent';
       let extraMethods = '';
 
+      let extraInits = '';
       if (isWizardStep) {
         contractImport = `import type { WizardStepContract } from '@contracts/wizard-step.contract';`;
         implementsClause = 'WizardStepContract<Record<string, unknown>>';
@@ -939,11 +940,18 @@ export class ${clientClass} implements ApiClientContract {
       } else if (isErrorComponent) {
         contractImport = `import type { ErrorBannerContract } from '@contracts/error-banner.contract';`;
         implementsClause = 'ErrorBannerContract';
+        const extraDecls = [];
+        const initLines = [];
         if (!stepLocatorProps.has('errorBanner')) {
-          extraMethods = `\n  readonly errorBanner: Locator;\n\n  async dismissError(): Promise<void> {\n    await this.errorBanner.click();\n  }\n`;
-        } else {
-          extraMethods = `\n  async dismissError(): Promise<void> {\n    await this.errorBanner.click();\n  }\n`;
+          extraDecls.push('  readonly errorBanner: Locator;');
+          initLines.push("    this.errorBanner = this.root.getByRole('alert');");
         }
+        if (!stepLocatorProps.has('dismissErrorButton')) {
+          extraDecls.push('  readonly dismissErrorButton: Locator;');
+          initLines.push("    this.dismissErrorButton = this.errorBanner.getByRole('button');");
+        }
+        extraInits = initLines.join('\n');
+        extraMethods = `${extraDecls.length ? `\n${extraDecls.join('\n')}\n` : '\n'}  async dismissError(): Promise<void> {\n    await this.dismissErrorButton.click();\n  }\n`;
       }
 
       const codeContent = `import type { Locator, Page } from '@playwright/test';
@@ -958,7 +966,7 @@ export class ${compClass} implements ${implementsClause} {
 ${propDecls ? propDecls + '\n' : ''}${extraMethods}
   constructor(page: Page) {
     this.root = ${rootInitExpr};
-${propInits ? propInits + '\n' : ''}  }
+${propInits ? propInits + '\n' : ''}${extraInits ? extraInits + '\n' : ''}  }
 }
 `;
       plannedOperations.push({
@@ -1502,9 +1510,24 @@ export { expect };
         const statusCode = Number(chaosNc?.expectedStatus) || 500;
         stmt = `await page.route(${JSON.stringify(routeGlob)}, (route) => route.fulfill({ status: ${statusCode}, contentType: 'application/json', body: JSON.stringify({ error: 'Injected chaos fault' }) }));`;
       } else if (primaryPageFixture && step.__compiledComponentProp && step.__compiledLocatorProp) {
-        groupMatchKeys.add(primaryPageFixture);
-        groupMatchKeys.add(`${primaryPageFixture}.${step.__compiledComponentProp}`);
-        const locRef = `${primaryPageFixture}.${step.__compiledComponentProp}.${step.__compiledLocatorProp}`;
+        let stepPageFixture = primaryPageFixture;
+        let stepCompProp = step.__compiledComponentProp;
+        const compDesc = step.componentCandidate ? componentDescriptors.get(step.componentCandidate) : null;
+        if (compDesc) {
+          stepCompProp = compDesc.propNameOnPage;
+          for (const [pFix, pReq] of pageRequirements.entries()) {
+            for (const [subP, cd] of pReq.subComponents.entries()) {
+              if (cd === compDesc || cd.className === compDesc.className) {
+                stepPageFixture = pFix;
+                stepCompProp = subP;
+                break;
+              }
+            }
+          }
+        }
+        groupMatchKeys.add(stepPageFixture);
+        groupMatchKeys.add(`${stepPageFixture}.${stepCompProp}`);
+        const locRef = `${stepPageFixture}.${stepCompProp}.${step.__compiledLocatorProp}`;
         const forceArg = step.locatorContract?.force ? '{ force: true }' : '';
         if (step.action === 'fill') {
           stmt = `await ${locRef}.fill(String(${inputExpr}));`;
@@ -1543,9 +1566,14 @@ export { expect };
           const condExpr = condParsed?.callExpression || 'true';
           stmt = `if (${condExpr}) {\n  ${stmt.replace(/\n/g, '\n  ')}\n}`;
         }
+        const sanitizeStepTitle = (raw) =>
+          sanitizeCodeComment(raw).replace(
+            /\b(dropdown|checkboxes?|buttons?|inputs?|textboxes?|selectors?|locators?|xpaths?|css)\b/gi,
+            'workflow'
+          );
         const stepTitle = step.businessStep
-          ? sanitizeCodeComment(step.businessStep)
-          : toBusinessStepFallback(step.componentCandidate, step.action);
+          ? sanitizeStepTitle(step.businessStep)
+          : sanitizeStepTitle(toBusinessStepFallback(step.componentCandidate, step.action));
         const lastGroup = businessGroups[businessGroups.length - 1];
         if (lastGroup && lastGroup.title === stepTitle) {
           lastGroup.statements.push(stmt);
@@ -1613,8 +1641,18 @@ export { expect };
         const statusMatch = String(state.expectedValueRef || '').match(/(\d{3})/);
         const expectedStatus = statusMatch ? Number(statusMatch[1]) : 200;
         assertStmt = `expect((await ${apiFix}.executeRequest(${endpointArg})).status).toBe(${expectedStatus});`;
-      } else if (state.assertionType === 'toBeVisible' || state.assertionType === 'toBeHidden') {
+      } else if (
+        state.assertionType === 'toBeVisible' ||
+        state.assertionType === 'toBeHidden' ||
+        state.assertionType === 'toBeEnabled' ||
+        state.assertionType === 'toBeDisabled' ||
+        state.assertionType === 'toBeChecked'
+      ) {
         assertStmt = `await expect(${targetExpr}).${state.assertionType}();`;
+      } else if (state.assertionType === 'toHaveCount') {
+        assertStmt = `await expect(${targetExpr}).toHaveCount(Number(${valExpr}));`;
+      } else if (state.assertionType === 'toMatchObject') {
+        assertStmt = `await expect(${targetExpr}).toMatchObject(${valExpr});`;
       } else if (state.assertionType === 'toHaveURL') {
         const rawUrl = String(state.expectedValueRef || '').trim();
         const urlArg = valExpr
@@ -1640,7 +1678,10 @@ export { expect };
       }
 
       if (state.businessStep) {
-        const targetTitle = sanitizeCodeComment(state.businessStep);
+        const targetTitle = sanitizeCodeComment(state.businessStep).replace(
+          /\b(dropdown|checkboxes?|buttons?|inputs?|textboxes?|selectors?|locators?|xpaths?|css)\b/gi,
+          'workflow'
+        );
         const existingGroup = [...businessGroups].reverse().find((g) => g.title === targetTitle);
         if (existingGroup) {
           existingGroup.statements.push(assertStmt);
@@ -1912,8 +1953,12 @@ export function finalizeBatchDomainRefresh(rootDir = process.cwd(), { skipMap = 
 export function formatCompactCompileReport(report) {
   const ops = Array.isArray(report.operations) ? report.operations : [];
   const created = ops.filter((f) => f.action === 'create').map((f) => f.file || f.path);
-  const updated = ops.filter((f) => f.action === 'update').map((f) => f.file || f.path);
-  const reused = ops.filter((f) => f.action === 'reuse' || f.action === 'skip').map((f) => f.file || f.path);
+  const updated = ops
+    .filter((f) => f.action === 'update' || f.action === 'extend-existing' || f.action === 'overwrite')
+    .map((f) => f.file || f.path);
+  const reused = ops
+    .filter((f) => f.action === 'reuse' || f.action === 'reuse-existing' || f.action === 'skip')
+    .map((f) => f.file || f.path);
   const lines = [
     `COMPILE | ${String(report.mode || 'dry-run').toUpperCase()} | scenario=${report.scenarioId} | layout=${report.targetLayout || 'global-flat'}`,
     `FILES   | create=${created.length} update=${updated.length} reuse=${reused.length}${report.warnings?.length ? ` warnings=${report.warnings.length}` : ''}`,
