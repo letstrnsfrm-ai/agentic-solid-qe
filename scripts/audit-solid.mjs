@@ -603,7 +603,12 @@ for (const file of specFiles) {
     .replace(/^\s*import\s+.*$/gm, '')
     .replace(/\btest(?:\.describe)?\s*\(\s*(['"`])(?:\\.|(?!\1)[^\\])*\1/g, 'test(');
 
-  if (/['"`]https?:\/\/[^'"`]+['"`]/.test(specBodyOnly)) {
+  // Allowlist standard non-routable XML/SOAP/W3C namespace URIs (e.g. xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/") (#53)
+  const specBodyWithoutXmlns = specBodyOnly.replace(
+    /\bxmlns(?::[a-zA-Z0-9_-]+)?\s*=\s*\\?(['"])https?:\/\/(?:schemas\.xmlsoap\.org|www\.w3\.org)\/[^'"]*\\?\1/gi,
+    'xmlns=""'
+  );
+  if (/['"`]https?:\/\/[^'"`]+['"`]/.test(specBodyWithoutXmlns)) {
     violations.push(
       `[DIP Hardcoded URL Ban] ${specRel} contains a hardcoded http(s):// URL. Use baseURL via Page objects or Data Builders.`
     );

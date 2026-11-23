@@ -18,6 +18,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SYNC_SCRIPT = path.join(REPO_ROOT, 'scripts/sync-skills.mjs');
+const HAS_RELEASE_NOTES_SCRIPT = fs.existsSync(path.join(REPO_ROOT, 'scripts/generate-release-notes.mjs'));
+const IS_FRAMEWORK_SOURCE_REPO =
+  fs.existsSync(path.join(REPO_ROOT, '.exploratory/tapes/saucedemo-e2e-checkout.json')) &&
+  fs.existsSync(path.join(REPO_ROOT, 'src/pages/checkout.page.ts')) &&
+  fs.existsSync(path.join(REPO_ROOT, 'tests/e2e-checkout.spec.ts'));
 
 function runNode(scriptPath, args = [], cwd = REPO_ROOT) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
@@ -2936,22 +2941,24 @@ test('Enterprise Security Hardening: heal-drift locator allowlist, DEFECT redact
 
     // 7. orchestrate.mjs --squad validation & generate-release-notes.mjs symlink rejection
     const { assertSafeSquadName: assertSafeOrchestrateSquad } = await import('./orchestrate.mjs');
-    const { resolveSafeRepoOutputPath } = await import('./generate-release-notes.mjs');
     assert.equal(assertSafeOrchestrateSquad('Claims-Portal'), 'claims-portal');
     assert.throws(() => assertSafeOrchestrateSquad('claims; rm -rf /'), /Invalid --squad/);
 
-    const realOut = path.join(tmpDir, 'real-notes.md');
-    const symOut = path.join(tmpDir, 'sym-notes.md');
-    fs.writeFileSync(realOut, 'ok', 'utf8');
-    fs.symlinkSync(realOut, symOut);
-    assert.throws(
-      () => resolveSafeRepoOutputPath('sym-notes.md', '--output', tmpDir),
-      /Security Error: Refusing to write --output to symbolic link/
-    );
-    assert.throws(
-      () => resolveSafeRepoOutputPath('../outside-notes.md', '--output', tmpDir),
-      /Output path must reside within the repository root/
-    );
+    if (HAS_RELEASE_NOTES_SCRIPT) {
+      const { resolveSafeRepoOutputPath } = await import('./generate-release-notes.mjs');
+      const realOut = path.join(tmpDir, 'real-notes.md');
+      const symOut = path.join(tmpDir, 'sym-notes.md');
+      fs.writeFileSync(realOut, 'ok', 'utf8');
+      fs.symlinkSync(realOut, symOut);
+      assert.throws(
+        () => resolveSafeRepoOutputPath('sym-notes.md', '--output', tmpDir),
+        /Security Error: Refusing to write --output to symbolic link/
+      );
+      assert.throws(
+        () => resolveSafeRepoOutputPath('../outside-notes.md', '--output', tmpDir),
+        /Output path must reside within the repository root/
+      );
+    }
 
     // 8. audit-solid.mjs [Enterprise Dependency Pinning Gate] rejects floating semver ranges
     fs.writeFileSync(
@@ -4007,14 +4014,16 @@ test('38. Token-Efficiency 5-Pillar Suite: static budgets, compact CLI/failure s
   assert.ok(estimateTokens(covCompact.stdout) <= 220, `analyze-coverage --compact too large: ${estimateTokens(covCompact.stdout)} tok`);
   assert.match(covCompact.stdout, /^STAGE\s+\|/m);
 
-  const compCompact = runNode(
-    path.join(REPO_ROOT, 'scripts/compile-tape.mjs'),
-    ['saucedemo-e2e-checkout', '--compact'],
-    REPO_ROOT
-  );
-  assert.equal(compCompact.status, 0, compCompact.stderr);
-  assert.ok(estimateTokens(compCompact.stdout) <= 220, `compile-tape --compact too large: ${estimateTokens(compCompact.stdout)} tok`);
-  assert.match(compCompact.stdout, /^COMPILE \| DRY-RUN/m);
+  if (IS_FRAMEWORK_SOURCE_REPO) {
+    const compCompact = runNode(
+      path.join(REPO_ROOT, 'scripts/compile-tape.mjs'),
+      ['saucedemo-e2e-checkout', '--compact'],
+      REPO_ROOT
+    );
+    assert.equal(compCompact.status, 0, compCompact.stderr);
+    assert.ok(estimateTokens(compCompact.stdout) <= 220, `compile-tape --compact too large: ${estimateTokens(compCompact.stdout)} tok`);
+    assert.match(compCompact.stdout, /^COMPILE \| DRY-RUN/m);
+  }
 
   const healCompact = runNode(
     path.join(REPO_ROOT, 'scripts/heal-drift.mjs'),
@@ -4026,21 +4035,23 @@ test('38. Token-Efficiency 5-Pillar Suite: static budgets, compact CLI/failure s
   assert.match(healCompact.stdout, /^HEAL\s+\|/m);
 
   // 3. Pillar 3: Single-call <=400-token Context Packs via `cortex context`
-  const ctxRoute = runNode(SYNC_SCRIPT, ['context', '--route', '/checkout'], REPO_ROOT);
-  assert.equal(ctxRoute.status, 0, ctxRoute.stderr);
-  assert.ok(estimateTokens(ctxRoute.stdout) <= 420, `context --route exceeded budget: ${estimateTokens(ctxRoute.stdout)}`);
-  assert.match(ctxRoute.stdout, /checkout\.md/);
-  assert.doesNotMatch(ctxRoute.stdout, /shards\/auth\.md/);
+  if (IS_FRAMEWORK_SOURCE_REPO) {
+    const ctxRoute = runNode(SYNC_SCRIPT, ['context', '--route', '/checkout'], REPO_ROOT);
+    assert.equal(ctxRoute.status, 0, ctxRoute.stderr);
+    assert.ok(estimateTokens(ctxRoute.stdout) <= 420, `context --route exceeded budget: ${estimateTokens(ctxRoute.stdout)}`);
+    assert.match(ctxRoute.stdout, /checkout\.md/);
+    assert.doesNotMatch(ctxRoute.stdout, /shards\/auth\.md/);
 
-  const ctxTape = runNode(SYNC_SCRIPT, ['context', '--tape', 'saucedemo-e2e-checkout'], REPO_ROOT);
-  assert.equal(ctxTape.status, 0, ctxTape.stderr);
-  assert.ok(estimateTokens(ctxTape.stdout) <= 420, `context --tape exceeded budget: ${estimateTokens(ctxTape.stdout)}`);
-  assert.match(ctxTape.stdout, /TAPE\s+\| saucedemo-e2e-checkout/);
+    const ctxTape = runNode(SYNC_SCRIPT, ['context', '--tape', 'saucedemo-e2e-checkout'], REPO_ROOT);
+    assert.equal(ctxTape.status, 0, ctxTape.stderr);
+    assert.ok(estimateTokens(ctxTape.stdout) <= 420, `context --tape exceeded budget: ${estimateTokens(ctxTape.stdout)}`);
+    assert.match(ctxTape.stdout, /TAPE\s+\| saucedemo-e2e-checkout/);
 
-  const ctxSpec = runNode(SYNC_SCRIPT, ['context', '--spec', 'tests/e2e-checkout.spec.ts'], REPO_ROOT);
-  assert.equal(ctxSpec.status, 0, ctxSpec.stderr);
-  assert.match(ctxSpec.stdout, /SPEC\s+\| tests\/e2e-checkout\.spec\.ts/);
-  assert.doesNotMatch(ctxSpec.stdout, /tags=.*@fixtures/);
+    const ctxSpec = runNode(SYNC_SCRIPT, ['context', '--spec', 'tests/e2e-checkout.spec.ts'], REPO_ROOT);
+    assert.equal(ctxSpec.status, 0, ctxSpec.stderr);
+    assert.match(ctxSpec.stdout, /SPEC\s+\| tests\/e2e-checkout\.spec\.ts/);
+    assert.doesNotMatch(ctxSpec.stdout, /tags=.*@fixtures/);
+  }
 
   // 4. Pillar 4 & 5: Adopter init propagation, cortex tape clone/patch, audit:solid budget enforcement & report-cloud tokenFootprint
   assert.throws(() => assertSafeScenarioId('../escape'), /Invalid scenarioId/);
@@ -4069,50 +4080,52 @@ test('38. Token-Efficiency 5-Pillar Suite: static budgets, compact CLI/failure s
     assert.equal(pkg.scripts.tape, 'node scripts/tape-cli.mjs');
 
     // cortex tape list / show / clone / patch + validate-tapes
-    const listRes = runNode(path.join(tmpRoot, 'scripts/tape-cli.mjs'), ['list'], tmpRoot);
-    assert.equal(listRes.status, 0, listRes.stderr);
-    assert.match(listRes.stdout, /saucedemo-e2e-checkout/);
+    if (IS_FRAMEWORK_SOURCE_REPO) {
+      const listRes = runNode(path.join(tmpRoot, 'scripts/tape-cli.mjs'), ['list'], tmpRoot);
+      assert.equal(listRes.status, 0, listRes.stderr);
+      assert.match(listRes.stdout, /saucedemo-e2e-checkout/);
 
-    const showRes = runNode(path.join(tmpRoot, 'scripts/tape-cli.mjs'), ['show', 'saucedemo-e2e-checkout'], tmpRoot);
-    assert.equal(showRes.status, 0, showRes.stderr);
-    assert.match(showRes.stdout, /toContainText\(CheckoutBuilder\.backpackOrderSummary\(\)\.totalText\)/);
+      const showRes = runNode(path.join(tmpRoot, 'scripts/tape-cli.mjs'), ['show', 'saucedemo-e2e-checkout'], tmpRoot);
+      assert.equal(showRes.status, 0, showRes.stderr);
+      assert.match(showRes.stdout, /toContainText\(CheckoutBuilder\.backpackOrderSummary\(\)\.totalText\)/);
 
-    const cloneRes = runNode(
-      path.join(tmpRoot, 'scripts/tape-cli.mjs'),
-      [
-        'clone',
-        'saucedemo-e2e-checkout',
-        'saucedemo-checkout-variant',
-        '--title',
-        'Checkout Variant Flow',
-        '--tags',
-        '@p1,@regression',
-      ],
-      tmpRoot
-    );
-    assert.equal(cloneRes.status, 0, cloneRes.stderr);
+      const cloneRes = runNode(
+        path.join(tmpRoot, 'scripts/tape-cli.mjs'),
+        [
+          'clone',
+          'saucedemo-e2e-checkout',
+          'saucedemo-checkout-variant',
+          '--title',
+          'Checkout Variant Flow',
+          '--tags',
+          '@p1,@regression',
+        ],
+        tmpRoot
+      );
+      assert.equal(cloneRes.status, 0, cloneRes.stderr);
 
-    const patchRes = runNode(
-      path.join(tmpRoot, 'scripts/tape-cli.mjs'),
-      [
-        'patch',
-        'saucedemo-checkout-variant',
-        '--add-tag',
-        '@smoke',
-        '--set-step',
-        '1',
-        'intent=Navigate to Swag Labs login entry',
-        '--add-expect',
-        'checkoutPage.summary.totalLabel|toBeVisible',
-      ],
-      tmpRoot
-    );
-    assert.equal(patchRes.status, 0, patchRes.stderr);
-    assert.match(patchRes.stdout, /@smoke/);
-    assert.match(patchRes.stdout, /Navigate to Swag Labs login entry/);
+      const patchRes = runNode(
+        path.join(tmpRoot, 'scripts/tape-cli.mjs'),
+        [
+          'patch',
+          'saucedemo-checkout-variant',
+          '--add-tag',
+          '@smoke',
+          '--set-step',
+          '1',
+          'intent=Navigate to Swag Labs login entry',
+          '--add-expect',
+          'checkoutPage.summary.totalLabel|toBeVisible',
+        ],
+        tmpRoot
+      );
+      assert.equal(patchRes.status, 0, patchRes.stderr);
+      assert.match(patchRes.stdout, /@smoke/);
+      assert.match(patchRes.stdout, /Navigate to Swag Labs login entry/);
 
-    const valRes = runNode(path.join(tmpRoot, 'scripts/validate-tapes.mjs'), [], tmpRoot);
-    assert.equal(valRes.status, 0, `validate-tapes failed on cloned/patched tape: ${valRes.stderr}\n${valRes.stdout}`);
+      const valRes = runNode(path.join(tmpRoot, 'scripts/validate-tapes.mjs'), [], tmpRoot);
+      assert.equal(valRes.status, 0, `validate-tapes failed on cloned/patched tape: ${valRes.stderr}\n${valRes.stdout}`);
+    }
 
     // Pillar 5: report-cloud emits tokenFootprint
     const repRes = runNode(path.join(tmpRoot, 'scripts/report-cloud.mjs'), ['--dry-run'], tmpRoot);
@@ -4158,20 +4171,22 @@ test('3-Layer Shared-Module Protection: fixture-aware impact graph, transactiona
   const { analyzeAndHealDrift, healDriftWithGuardrail } = await import('./heal-drift.mjs');
 
   // 1. Fixture-aware precision on the real repo (no false-positive explosion via app.fixture.ts)
-  const repoGraph = buildImpactGraph(REPO_ROOT);
-  const checkoutImpact = analyzeImpact(REPO_ROOT, { files: ['src/pages/checkout.page.ts'], graph: repoGraph });
-  assert.deepEqual(checkoutImpact.affectedSpecs, ['tests/e2e-checkout.spec.ts']);
+  if (IS_FRAMEWORK_SOURCE_REPO) {
+    const repoGraph = buildImpactGraph(REPO_ROOT);
+    const checkoutImpact = analyzeImpact(REPO_ROOT, { files: ['src/pages/checkout.page.ts'], graph: repoGraph });
+    assert.deepEqual(checkoutImpact.affectedSpecs, ['tests/e2e-checkout.spec.ts']);
 
-  const overlayImpact = analyzeImpact(REPO_ROOT, { files: ['src/shared/ui/overlay-handler.ts'], graph: repoGraph });
-  assert.equal(overlayImpact.highestRisk, 'high');
-  assert.ok(overlayImpact.affectedSpecs.includes('tests/auth-and-inventory.spec.ts'));
-  assert.ok(overlayImpact.affectedSpecs.includes('tests/e2e-checkout.spec.ts'));
-  assert.match(formatCompactImpact(overlayImpact), /SHARED fanIn=2/);
+    const overlayImpact = analyzeImpact(REPO_ROOT, { files: ['src/shared/ui/overlay-handler.ts'], graph: repoGraph });
+    assert.equal(overlayImpact.highestRisk, 'high');
+    assert.ok(overlayImpact.affectedSpecs.includes('tests/auth-and-inventory.spec.ts'));
+    assert.ok(overlayImpact.affectedSpecs.includes('tests/e2e-checkout.spec.ts'));
+    assert.match(formatCompactImpact(overlayImpact), /SHARED fanIn=2/);
 
-  // 2. Context pack surfaces IMPACT | line for --file and --spec within token budget
-  const filePack = buildContextPack(REPO_ROOT, { file: 'src/pages/login.page.ts' });
-  const filePackTxt = formatContextPack(filePack, { maxTokens: 400 });
-  assert.match(filePackTxt, /IMPACT \| src\/pages\/login\.page\.ts/);
+    // 2. Context pack surfaces IMPACT | line for --file and --spec within token budget
+    const filePack = buildContextPack(REPO_ROOT, { file: 'src/pages/login.page.ts' });
+    const filePackTxt = formatContextPack(filePack, { maxTokens: 400 });
+    assert.match(filePackTxt, /IMPACT \| src\/pages\/login\.page\.ts/);
+  }
 
   // 3. Isolated sandbox: test smart cap, @regression detection, transactional rollback & cross-squad boundary
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-impact-guard-'));
@@ -4525,10 +4540,12 @@ test('39. Unified agentic-solid-qe Single Entry Point: gatePayload/GATE_OPTIONS,
     assert.equal(v2Entry?.compiled, false, 'Uncompiled cloned tape must not match prefix spec in listTapes');
 
     // 9. Reference repo Stage 2 maturity parity between orchestrate.mjs and analyze-coverage.mjs
-    const rootBp = buildOrchestrationBlueprint(REPO_ROOT);
-    assert.match(rootBp.maturityStage, /^Stage 2 — Persona, Boundary & Resilience Expansion/);
-    assert.equal(rootBp.healthSnapshot.handoffRecommendations, 1);
-    assert.equal(rootBp.nextAction.gatePayload?.gateId, 'stage2-expansion-advisory');
+    if (IS_FRAMEWORK_SOURCE_REPO) {
+      const rootBp = buildOrchestrationBlueprint(REPO_ROOT);
+      assert.match(rootBp.maturityStage, /^Stage 2 — Persona, Boundary & Resilience Expansion/);
+      assert.equal(rootBp.healthSnapshot.handoffRecommendations, 1);
+      assert.equal(rootBp.nextAction.gatePayload?.gateId, 'stage2-expansion-advisory');
+    }
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -6271,7 +6288,7 @@ test('audit-solid: Data Builders referenced only by tests/*.setup.ts are not fla
   }
 });
 
-test('generate-release-notes: syncReleaseManifests aligns package.json, package-lock.json & CHANGELOG.json', async () => {
+test('generate-release-notes: syncReleaseManifests aligns package.json, package-lock.json & CHANGELOG.json', { skip: !HAS_RELEASE_NOTES_SCRIPT }, async () => {
   const { syncReleaseManifests } = await import('./generate-release-notes.mjs');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-rel-sync-'));
   try {
@@ -6305,7 +6322,7 @@ test('generate-release-notes: syncReleaseManifests aligns package.json, package-
   }
 });
 
-test('generate-release-notes: checkReleaseManifestSync catches drifted manifests (#46)', async () => {
+test('generate-release-notes: checkReleaseManifestSync catches drifted manifests (#46)', { skip: !HAS_RELEASE_NOTES_SCRIPT }, async () => {
   const { checkReleaseManifestSync, syncReleaseManifests } = await import('./generate-release-notes.mjs');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-rel-gate-'));
   try {
@@ -6592,6 +6609,49 @@ test('v0.48.15 regression suite: #50 (agent-browser core skill) & #51 (--emit-se
 
     const fixtureSrc = fs.readFileSync(path.join(tmpDir, 'src/fixtures/app.fixture.ts'), 'utf8');
     assert.ok(fixtureSrc.includes('SeederWireP0Seeder'), 'seeder must be registered in app.fixture.ts');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('audit-solid: DIP Hardcoded URL Ban allows standard XML/SOAP/W3C xmlns namespace URIs while still banning real URLs (#53)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-xmlns-'));
+  try {
+    const initRes = runNode(SYNC_SCRIPT, ['init', tmpDir, '--url', 'https://example.com', '--name', 'XmlnsApp']);
+    assert.equal(initRes.status, 0, initRes.stderr);
+    const soapSpec = path.join(tmpDir, 'tests/soap-gateway.spec.ts');
+    fs.writeFileSync(
+      soapSpec,
+      `import { test, expect } from '@fixtures/app.fixture';
+import { UserBuilder } from '@data/user.builder';
+test('SOAP envelope contract @api-contract', async () => {
+  await test.step('Verify SOAP XML namespace payload', async () => {
+    void UserBuilder;
+    const xml = '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"></soap:Envelope>';
+    expect(xml).toContain('Envelope');
+  });
+});
+`,
+      'utf8'
+    );
+    const okRes = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.equal(okRes.status, 0, `Expected xmlns namespace URIs to pass audit:solid: ${okRes.stdout}\n${okRes.stderr}`);
+
+    // Real hardcoded URL must still be rejected
+    fs.writeFileSync(
+      soapSpec,
+      `import { test } from '@playwright/test';
+test('Bad URL', async ({ page }) => {
+  await test.step('Navigate directly', async () => {
+    await page.goto('https://hardcoded.example.com/login');
+  });
+});
+`,
+      'utf8'
+    );
+    const badRes = runNode(path.join(tmpDir, 'scripts/audit-solid.mjs'), [], tmpDir);
+    assert.notEqual(badRes.status, 0);
+    assert.match(badRes.stdout + badRes.stderr, /DIP Hardcoded URL Ban/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
