@@ -6727,3 +6727,61 @@ test('verify-fast: respects playwright.config.ts workers by default and only pas
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('security-audit: Zip-Slip tar validation, repo slug hardening, ReDoS guards & orchestrate symlink confinement', async () => {
+  const { validateTarArchiveEntries, resolveUpgradeRepoSlug } = await import('./upgrade-framework.mjs');
+  const { isSafeRegexPattern } = await import('./dotnet-enterprise-analyzer.mjs');
+  const { validateSafeCaptureRequest } = await import('./explore-session.mjs');
+  const { ensureCiPipelineConfigured } = await import('./orchestrate.mjs');
+
+  // 1. Zip-Slip tar entry validation
+  assert.equal(validateTarArchiveEntries(['repo-v1/package.json', 'repo-v1/scripts/sync-skills.mjs']), true);
+  assert.throws(() => validateTarArchiveEntries(['../evil.mjs']), /Zip-Slip/);
+  assert.throws(() => validateTarArchiveEntries(['repo-v1/../../etc/passwd']), /Zip-Slip/);
+  assert.throws(() => validateTarArchiveEntries(['/etc/passwd']), /Zip-Slip/);
+  assert.throws(() => validateTarArchiveEntries(['C:\\Windows\\win.ini']), /Zip-Slip/);
+  assert.throws(() => validateTarArchiveEntries(['repo-v1/file\0.txt']), /Zip-Slip/);
+
+  // 2. Repo slug rejects leading hyphen/dot
+  assert.equal(resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'acme/agentic-solid-qe' }), 'acme/agentic-solid-qe');
+  assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: '-evil/repo' }), /Security Error/);
+  assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'owner/-evil' }), /Security Error/);
+
+  // 3. Hardened ReDoS validator blocks alternation/nested-group/braced/backref bypasses
+  assert.equal(isSafeRegexPattern('/orders/([A-Z0-9-]+)'), true);
+  assert.equal(isSafeRegexPattern('^I enter "([^"]+)" into the field$'), true);
+  assert.equal(isSafeRegexPattern('(a|a)+$'), false);
+  assert.equal(isSafeRegexPattern('(a{1,50})+$'), false);
+  assert.equal(isSafeRegexPattern('((a)+)+$'), false);
+  assert.equal(isSafeRegexPattern('([a-z]+)\\1+'), false);
+  assert.equal(isSafeRegexPattern('a{1,500}'), false);
+  assert.throws(
+    () => validateSafeCaptureRequest({ varName: 'orderId', from: 'url', expr: '(a|aa)+$' }),
+    /ReDoS/
+  );
+  assert.throws(
+    () => validateSafeCaptureRequest({ varName: 'orderId', from: 'url', expr: '((a)+)+$' }),
+    /ReDoS/
+  );
+  assert.equal(
+    validateSafeCaptureRequest({ varName: 'orderId', from: 'url', expr: '/orders/([0-9]+)' }).expr,
+    '/orders/([0-9]+)'
+  );
+
+  // 4. ensureCiPipelineConfigured refuses symlinked workflow destination
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-sec-sym-'));
+  try {
+    const outsideFile = path.join(os.tmpdir(), `asqe-outside-${process.pid}.yml`);
+    fs.writeFileSync(outsideFile, 'original', 'utf8');
+    try {
+      fs.mkdirSync(path.join(tmpDir, '.github/workflows'), { recursive: true });
+      fs.symlinkSync(outsideFile, path.join(tmpDir, '.github/workflows/playwright-ci.yml'));
+      assert.throws(() => ensureCiPipelineConfigured(tmpDir), /symlinked path/i);
+    } finally {
+      fs.rmSync(outsideFile, { force: true });
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

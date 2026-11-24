@@ -15,9 +15,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_REPO_SLUG = 'letstrnsfrm-ai/agentic-solid-qe';
-const SAFE_REPO_SLUG_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const SAFE_REPO_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const SAFE_SQUAD_NAME_RE = /^[a-z0-9][a-z0-9-]*$/i;
 const SEMVER_TAG_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+const MAX_TARBALL_BYTES = 50 * 1024 * 1024; // 50 MB download cap
+const ALLOWED_TARBALL_HOSTS = new Set(['codeload.github.com', 'objects.githubusercontent.com']);
 
 export function isEnterpriseOfflineMode(env = process.env) {
   return (
@@ -152,7 +154,7 @@ export async function fetchLatestReleaseTag(repoSlug = resolveUpgradeRepoSlug())
   }
 
   // 2. Fallback: git ls-remote --tags
-  const gitRes = spawnSync('git', ['ls-remote', '--tags', '--refs', repoGitUrl], {
+  const gitRes = spawnSync('git', ['ls-remote', '--tags', '--refs', '--', repoGitUrl], {
     encoding: 'utf8',
     timeout: 8000,
   });
@@ -411,6 +413,23 @@ export function buildReleaseTarballUrl(repoSlug, targetTag) {
   return `https://codeload.github.com/${repoSlug}/tar.gz/refs/tags/${tag}`;
 }
 
+export function validateTarArchiveEntries(entries = []) {
+  for (const rawEntry of entries) {
+    const entry = String(rawEntry || '').trim();
+    if (!entry) continue;
+    if (
+      entry.includes('\0') ||
+      entry.startsWith('/') ||
+      entry.startsWith('\\') ||
+      /^[A-Za-z]:/.test(entry) ||
+      /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(entry)
+    ) {
+      throw new Error(`Security Error: Unsafe archive entry '${entry}' detected (Zip-Slip protection).`);
+    }
+  }
+  return true;
+}
+
 export async function runTarballOrCloneSync({
   repoSlug,
   targetTag,
@@ -425,27 +444,68 @@ export async function runTarballOrCloneSync({
     const tarballUrl = buildReleaseTarballUrl(repoSlug, targetTag);
     const tarballPath = path.join(tmpDir, 'release.tar.gz');
     try {
-      const headers = { 'User-Agent': 'agentic-solid-qe-upgrader' };
       const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-      if (token) headers.Authorization = `Bearer ${token}`;
-      const res = await fetch(tarballUrl, { headers, signal: AbortSignal.timeout(30000) });
-      if (res.ok) {
+      let fetchUrl = tarballUrl;
+      let res = null;
+      for (let hop = 0; hop < 2; hop++) {
+        const parsedHop = new URL(fetchUrl);
+        if (parsedHop.protocol !== 'https:' || !ALLOWED_TARBALL_HOSTS.has(parsedHop.hostname.toLowerCase())) {
+          throw new Error(`Security Error: Disallowed release tarball host '${parsedHop.hostname}'.`);
+        }
+        const headers = { 'User-Agent': 'agentic-solid-qe-upgrader' };
+        // Only attach GitHub token to codeload.github.com, never to cross-origin redirect targets
+        if (token && parsedHop.hostname.toLowerCase() === 'codeload.github.com') {
+          headers.Authorization = `Bearer ${token}`;
+        }
+        res = await fetch(fetchUrl, { headers, redirect: 'manual', signal: AbortSignal.timeout(30000) });
+        if (res.status >= 300 && res.status < 400) {
+          const loc = res.headers.get('location');
+          if (!loc) break;
+          fetchUrl = new URL(loc, fetchUrl).toString();
+          continue;
+        }
+        break;
+      }
+      if (res && res.ok) {
+        const contentLen = Number(res.headers.get('content-length') || 0);
+        if (Number.isFinite(contentLen) && contentLen > MAX_TARBALL_BYTES) {
+          throw new Error(`Security Error: Release tarball exceeds ${MAX_TARBALL_BYTES}-byte safety limit.`);
+        }
         const buf = Buffer.from(await res.arrayBuffer());
-        fs.writeFileSync(tarballPath, buf);
-        const extractDir = path.join(tmpDir, 'extracted');
-        fs.mkdirSync(extractDir, { recursive: true });
-        const tarRes = spawnSync('tar', ['-xzf', tarballPath, '-C', extractDir], {
+        if (buf.byteLength > MAX_TARBALL_BYTES) {
+          throw new Error(`Security Error: Release tarball exceeds ${MAX_TARBALL_BYTES}-byte safety limit.`);
+        }
+        fs.writeFileSync(tarballPath, buf, { mode: 0o600 });
+        const listRes = spawnSync('tar', ['-tzf', tarballPath], {
           stdio: 'pipe',
           encoding: 'utf8',
+          maxBuffer: 10 * 1024 * 1024,
         });
-        if (tarRes.status === 0) {
-          const topEntries = fs.readdirSync(extractDir, { withFileTypes: true }).filter((d) => d.isDirectory());
-          if (topEntries.length > 0) {
-            extractedDir = path.join(extractDir, topEntries[0].name);
+        if (listRes.status === 0) {
+          const entries = String(listRes.stdout || '').split(/\r?\n/).filter(Boolean);
+          validateTarArchiveEntries(entries);
+          const extractDir = path.join(tmpDir, 'extracted');
+          fs.mkdirSync(extractDir, { recursive: true, mode: 0o700 });
+          const tarRes = spawnSync('tar', ['-xzf', tarballPath, '-C', extractDir, '--no-same-owner', '--no-same-permissions'], {
+            stdio: 'pipe',
+            encoding: 'utf8',
+          });
+          if (tarRes.status === 0) {
+            const topEntries = fs
+              .readdirSync(extractDir, { withFileTypes: true })
+              .filter((d) => !d.isSymbolicLink() && d.isDirectory());
+            if (topEntries.length > 0) {
+              const candidateDir = path.join(extractDir, topEntries[0].name);
+              assertSafePatchDestination(extractDir, candidateDir, 'extracted release directory');
+              extractedDir = candidateDir;
+            }
           }
         }
       }
-    } catch {
+    } catch (err) {
+      if (String(err?.message || '').startsWith('Security Error:')) {
+        throw err;
+      }
       /* fall through to shallow git clone */
     }
 
@@ -453,7 +513,7 @@ export async function runTarballOrCloneSync({
       const cloneDir = path.join(tmpDir, 'repo');
       const cloneRes = spawnSync(
         'git',
-        ['clone', '--branch', targetTag, '--depth', '1', `https://github.com/${repoSlug}.git`, cloneDir],
+        ['clone', '--branch', targetTag, '--depth', '1', '--', `https://github.com/${repoSlug}.git`, cloneDir],
         { stdio: 'inherit', shell: false }
       );
       if (cloneRes.status !== 0) {
@@ -462,7 +522,11 @@ export async function runTarballOrCloneSync({
       extractedDir = cloneDir;
     }
 
-    const syncScript = path.join(extractedDir, 'scripts', 'sync-skills.mjs');
+    const syncScript = assertSafePatchDestination(
+      extractedDir,
+      path.join(extractedDir, 'scripts', 'sync-skills.mjs'),
+      'extracted sync-skills.mjs'
+    );
     if (!fs.existsSync(syncScript)) {
       console.error(`❌ Downloaded release ${targetTag} is missing scripts/sync-skills.mjs.`);
       return 1;
@@ -582,7 +646,7 @@ Options:
   if (force) syncFlags.push('--force');
   if (squadName) syncFlags.push('--squad', squadName);
 
-  if (/[&|<>^%!"`\r\n;$]/.test(targetRoot)) {
+  if (/[&|<>^%!"'`()\t\r\n;$]/.test(targetRoot)) {
     console.error(
       `❌ Security Error: Target directory '${targetRoot}' contains disallowed shell metacharacters.`
     );

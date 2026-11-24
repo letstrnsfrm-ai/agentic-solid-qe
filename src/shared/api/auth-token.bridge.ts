@@ -65,12 +65,15 @@ function isForbiddenTargetUrl(parsed: URL): boolean {
     /^169\.254\./.test(checkHost) ||
     /^127\./.test(checkHost) ||
     /^0\./.test(checkHost) ||
+    /^(?:22[4-9]|2[34]\d|25[0-5])\./.test(checkHost) ||
     bare === '::' ||
     bare === '0:0:0:0:0:0:0:0' ||
+    bare === '0:0:0:0:0:0:0:1' ||
     /^64:ff9b:/i.test(bare) ||
     /^fe[89ab][0-9a-f]:/i.test(bare) ||
     /^ff[0-9a-f]{2}:/i.test(bare) ||
     /^fd00:ec2::/i.test(bare) ||
+    /^(?:0*:)*ffff:0:/i.test(bare) ||
     /^::[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i.test(bare)
   ) {
     return true;
@@ -292,7 +295,7 @@ export class AuthTokenBridge {
 
     if (filteredCookies.length > 0) {
       const serialized = filteredCookies
-        .map((c) => [c.name, sanitizeHeaderValue(String(c.value ?? ''))] as const)
+        .map((c) => [c.name, sanitizeHeaderValue(String(c.value ?? '')).replace(/;/g, '')] as const)
         .filter(([, val]) => val.length > 0)
         .map(([name, val]) => `${name}=${val}`)
         .join('; ');
