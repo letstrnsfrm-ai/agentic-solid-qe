@@ -121,7 +121,11 @@
       "additionalProperties": false,
       "properties": {
         "scenarioId": { "type": "string", "pattern": "^[a-z0-9-]+$" },
-        "specFile": { "type": "string", "minLength": 1 },
+        "specFile": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^tests/[a-zA-Z0-9_./-]+\\.spec\\.ts$"
+        },
         "resumeStep": { "type": "string", "minLength": 3 },
         "handoffStrategy": {
           "type": "string",
@@ -341,7 +345,11 @@
         "required": ["urlPattern", "method", "expectedStatus"],
         "additionalProperties": false,
         "properties": {
-          "urlPattern": { "type": "string" },
+          "urlPattern": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!.*(?:\\$\\{))[\\x21-\\x5F\\x61-\\x7E]+$"
+          },
           "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
           "expectedStatus": { "type": "integer" },
           "maxLatencyMs": {
@@ -432,7 +440,41 @@
           },
           "locatorContract": {
             "type": "object",
-            "description": "Optional semantic locator contract for assertion-only elements so compile-tape emits real locators instead of this.root."
+            "description": "Optional semantic locator contract for assertion-only elements so compile-tape emits real locators instead of this.root.",
+            "required": ["strategy", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "iframeSelector": { "type": "string" },
+              "portalScope": { "type": "boolean" },
+              "force": { "type": "boolean" },
+              "parentScope": {
+                "type": "object",
+                "required": ["strategy", "value"],
+                "additionalProperties": false,
+                "properties": {
+                  "strategy": {
+                    "type": "string",
+                    "enum": ["getByRole", "getByLabel", "getByTestId", "locator"]
+                  },
+                  "role": { "type": "string" },
+                  "value": { "type": "string" },
+                  "nameExact": { "type": "boolean" },
+                  "filterTextRef": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_.()]*$"
+                  }
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": ["getByRole", "getByLabel", "getByPlaceholder", "getByText", "getByTestId", "locator"]
+              },
+              "role": { "type": "string" },
+              "value": { "type": "string" },
+              "nameExact": { "type": "boolean", "default": true },
+              "nth": { "type": "integer", "minimum": 0 },
+              "hint": { "type": "string" }
+            }
           },
           "afterStepIndex": {
             "type": "integer",

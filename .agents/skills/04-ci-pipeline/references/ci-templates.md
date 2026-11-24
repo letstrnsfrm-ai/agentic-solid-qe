@@ -37,5 +37,6 @@ Ensure the CI workflow executes deterministic static gates before launching brow
    ```bash
    npx playwright test --project=chromium --shard=${{ matrix.shard }}
    ```
-3. **Failure Forensics Artifact Upload:**
-   Upload `playwright-report/` and `test-results/` (traces and failure screenshots) with `if: always()` so `03-drift-healer` or engineers can inspect failures immediately.
+3. **Supply-Chain & Failure Forensics Hardening:**
+   - Pin all GitHub Actions by full commit SHA, set `permissions: contents: read`, and set `persist-credentials: false` on `actions/checkout` (`persistCredentials: false` in Azure Pipelines).
+   - Upload `playwright-report/` with `include-hidden-files: false` and `retention-days: 3` (avoid long-lived retention on traces/reports that may capture session state).

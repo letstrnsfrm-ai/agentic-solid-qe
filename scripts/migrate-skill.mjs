@@ -39,6 +39,7 @@ const legacyMigrator = fs.existsSync(legacyMigratorUrl)
       }),
       loadMigrationManifest: () => null,
       migrateMonolithAllSlices: () => ({ found: false, slices: [], compiledSlices: [] }),
+      sanitizeSafeAppBaseUrl: (u, fb = 'http://localhost:3000') => u || fb,
       syncDiscoveryToManifest: () => null,
     };
 const {
@@ -48,8 +49,19 @@ const {
   discoverLegacyTests,
   loadMigrationManifest,
   migrateMonolithAllSlices,
+  sanitizeSafeAppBaseUrl,
   syncDiscoveryToManifest,
 } = legacyMigrator;
+
+const impactGraphUrl = new URL('./impact-graph.mjs', import.meta.url);
+const { stripComments: lexicalStripComments } = fs.existsSync(impactGraphUrl)
+  ? await import(impactGraphUrl.href)
+  : {
+      stripComments: (code) =>
+        String(code || '')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/\/\/.*$/gm, ''),
+    };
 
 const ROOT = process.cwd();
 const MAX_SKILL_TOKENS = 500;
@@ -202,9 +214,7 @@ function walkFiles(dir, extList) {
 }
 
 function stripComments(code) {
-  return code
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/.*$/gm, '');
+  return lexicalStripComments(code);
 }
 
 function slugifyId(rawName, indexPrefix = '06') {
@@ -427,7 +437,9 @@ function runWorkspaceDiscovery() {
         : scanRoot;
   let resolvedLegacyRoot;
   try {
-    resolvedLegacyRoot = assertSafeLegacyScanRoot(rawLegacyRoot, ROOT);
+    resolvedLegacyRoot = assertSafeLegacyScanRoot(rawLegacyRoot, ROOT, {
+      allowSiblingDirs: Boolean(legacyRootArg),
+    });
   } catch (err) {
     console.error(`❌ ${err.message}`);
     process.exit(1);
@@ -498,7 +510,9 @@ if (legacyTargetArg) {
         : ROOT;
   let resolvedLegacyRoot;
   try {
-    resolvedLegacyRoot = assertSafeLegacyScanRoot(rawLegacyRoot, ROOT);
+    resolvedLegacyRoot = assertSafeLegacyScanRoot(rawLegacyRoot, ROOT, {
+      allowSiblingDirs: Boolean(legacyRootArg),
+    });
   } catch (err) {
     console.error(`❌ ${err.message}`);
     process.exit(1);
@@ -722,7 +736,7 @@ if (CORE_SKILL_IDS.has(defaultSkillId)) {
 
 // 2. Discover scripts referenced in the markdown + co-located scripts
 const scriptRegex =
-  /(?:node|bash|sh|python3?|npx\s+tsx|ts-node)?\s*([./a-zA-Z0-9_-]+\.(?:sh|mjs|js|ts|py))\b/g;
+  /(?:node|bash|sh|python3?|npx\s+tsx|ts-node)?\s*(?<![./a-zA-Z0-9_-])([./a-zA-Z0-9_-]{1,200}\.(?:sh|mjs|js|ts|py))\b/g;
 const referencedScriptTokens = new Set();
 for (const m of rawDoc.matchAll(scriptRegex)) {
   const token = m[1].trim();
@@ -773,15 +787,15 @@ for (const sp of candidateScriptPaths) {
 
 // 3. Classify each script & scan for hardcoded URLs/secrets/UI anti-patterns
 const HARDCODED_SECRET_ASSIGN_REGEX =
-  /((?:password|secret|client[_-]?secret|api[_-]?key|access[_-]?token|auth[_-]?token|token)\s*[:=]\s*)(['"`])([^'"`$]{4,})\2/gi;
+  /((?:['"`]?(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key|token)['"`]?)\s*[:=]\s*)(['"`])(?!\$\{|\$[A-Z_][A-Z0-9_]*\2|\$[0-9]+\2|<REDACTED|<ENV:)((?:(?!\2)[^\r\n]){4,})\2/gi;
 const DB_CONN_URI_REGEX =
   /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|mssql|amqp|amqps):\/\/[^/\s:@'"`]+:[^/\s@'"`]+@[^\s'"`]+/gi;
 const BASIC_AUTH_URL_REGEX =
   /\bhttps?:\/\/[^/\s:@'"`]+:[^/\s@'"`]+@[^\s'"`]+/gi;
 const KNOWN_TOKEN_LITERAL_REGEX =
-  /(['"`])((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[0-9A-Za-z-]{10,}|npm_[A-Za-z0-9]{36}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}[^'"`]*|ChangeMe123!)\1/g;
+  /(['"`])((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[0-9A-Za-z-]{10,}|npm_[A-Za-z0-9]{36}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}[^'"`]*|ChangeMe123!)\1/g;
 const BARE_TOKEN_REGEX =
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35}\b|\bxox[baprs]-[0-9A-Za-z-]{10,}\b|\bnpm_[A-Za-z0-9]{36}\b|\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b|\b(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])|\bChangeMe123!(?![A-Za-z0-9_])/g;
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bglpat-[A-Za-z0-9_-]{20,}\b|\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bsk-[A-Za-z0-9_-]{20,}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35}\b|\bxox[baprs]-[0-9A-Za-z-]{10,}\b|\bnpm_[A-Za-z0-9]{36}\b|\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b|\b(?:Bearer\s+)?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])|\bChangeMe123!(?![A-Za-z0-9_])/g;
 const PRIVATE_KEY_BLOCK_REGEX =
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
 const BIDI_CONTROL_REGEX = /[\u202A-\u202E\u2066-\u2069]/g;
@@ -799,27 +813,30 @@ function redactHardcodedSecrets(textBody, fileName = '') {
     .replace(PRIVATE_KEY_BLOCK_REGEX, '<REDACTED_PRIVATE_KEY_USE_ENV_SECRET>')
     .replace(DB_CONN_URI_REGEX, '<REDACTED_DATABASE_URI_USE_ENV_SECRET>')
     .replace(BASIC_AUTH_URL_REGEX, '<REDACTED_BASIC_AUTH_URL_USE_ENV_SECRET>')
-    .replace(HARDCODED_SECRET_ASSIGN_REGEX, `$1${envReplacement}`)
-    .replace(KNOWN_TOKEN_LITERAL_REGEX, envReplacement)
+    .replace(HARDCODED_SECRET_ASSIGN_REGEX, (_, prefix) => `${prefix}${envReplacement}`)
+    .replace(KNOWN_TOKEN_LITERAL_REGEX, () => envReplacement)
     .replace(BARE_TOKEN_REGEX, '<REDACTED_SECRET_TOKEN>');
 }
 
 const analyzedScripts = [];
 for (const [absPath, originalRef] of resolvedScripts.entries()) {
-  const content = readTextSafe(absPath);
   const fileName = path.basename(absPath);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(fileName)) {
+    continue;
+  }
+  const content = readTextSafe(absPath);
   const hardcodedUrls = [
     ...new Set([...content.matchAll(/https?:\/\/[^\s'"`)]+/g)].map((m) => m[0])),
   ];
+  HARDCODED_SECRET_ASSIGN_REGEX.lastIndex = 0;
   const hasHardcodedSecrets =
-    /(?:password|secret|client[_-]?secret|api[_-]?key|access[_-]?token|auth[_-]?token|token)\s*[:=]\s*['"`][^'"`$]{4,}['"`]/i.test(
-      content
-    ) ||
+    HARDCODED_SECRET_ASSIGN_REGEX.test(content) ||
     DB_CONN_URI_REGEX.test(content) ||
     BASIC_AUTH_URL_REGEX.test(content) ||
     KNOWN_TOKEN_LITERAL_REGEX.test(content) ||
     BARE_TOKEN_REGEX.test(content) ||
     PRIVATE_KEY_BLOCK_REGEX.test(content);
+  HARDCODED_SECRET_ASSIGN_REGEX.lastIndex = 0;
   DB_CONN_URI_REGEX.lastIndex = 0;
   BASIC_AUTH_URL_REGEX.lastIndex = 0;
   KNOWN_TOKEN_LITERAL_REGEX.lastIndex = 0;
@@ -896,9 +913,15 @@ const discoveredRoutes = [
 const discoveredTestIds = [
   ...new Set(
     [
-      ...combinedSourceText.matchAll(/data-test(?:id)?=['"`]([^'"`]+)['"`]/g),
-      ...combinedSourceText.matchAll(/getByTestId\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g),
-    ].map((m) => m[1])
+      ...combinedSourceText.matchAll(/data-test(?:id)?=['"`]([^'"`\r\n]{1,120})['"`]/g),
+      ...combinedSourceText.matchAll(/getByTestId\s*\(\s*['"`]([^'"`\r\n]{1,120})['"`]\s*\)/g),
+    ]
+      .map((m) =>
+        String(m[1] || '')
+          .replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069`|]/g, '')
+          .trim()
+      )
+      .filter(Boolean)
   ),
 ];
 
@@ -962,7 +985,7 @@ function resolveRepoBaseUrl() {
   if (fs.existsSync(domainMemoryPath)) {
     const m = readTextSafe(domainMemoryPath).match(/-\s*\*\*Base URL:\*\*\s*`([^`]+)`/);
     if (m && /^https?:\/\//.test(m[1].trim())) {
-      return m[1].trim();
+      return sanitizeSafeAppBaseUrl(m[1].trim(), 'http://localhost:3000');
     }
   }
   return 'http://localhost:3000';
@@ -1224,6 +1247,7 @@ ${testIdsLines.join('\n')}
   const domainMemoryPath = path.join(ROOT, '.agents/domain/domain-memory.md');
   if (squadArg) {
     const absSquadHub = assertNoSymlinkEscape(ROOT, path.join(ROOT, parentHubRel), 'squad domain hub');
+    const safeTableTitle = skillTitle.replace(/\|/g, '-').replace(/`/g, "'");
     if (!fs.existsSync(absSquadHub)) {
       fs.mkdirSync(path.dirname(absSquadHub), { recursive: true });
       const hubBody = `# Domain Sub-Hub: ${squadArg} (Tier 1 Bounded Context)
@@ -1245,14 +1269,14 @@ ${testIdsLines.join('\n')}
 
 | Feature Shard | Routes | Shard Path | Summary |
 | :--- | :--- | :--- | :--- |
-| **${skillTitle}** | ${routesFormatted} | \`${targetDomainShard}\` | Onboarded via \`/${defaultSkillId}\` |
+| **${safeTableTitle}** | ${routesFormatted} | \`${targetDomainShard}\` | Onboarded via \`/${defaultSkillId}\` |
 `;
       fs.writeFileSync(absSquadHub, hubBody, 'utf8');
       appliedList.push(rel(absSquadHub));
     } else {
       const hubContent = fs.readFileSync(absSquadHub, 'utf8');
       if (!hubContent.includes(path.basename(absShardPath)) && hubContent.split('\n').length < MAX_DOMAIN_LINES) {
-        const row = `| **${skillTitle}** | ${routesFormatted} | \`${targetDomainShard}\` | Onboarded via \`/${defaultSkillId}\` |\n`;
+        const row = `| **${safeTableTitle}** | ${routesFormatted} | \`${targetDomainShard}\` | Onboarded via \`/${defaultSkillId}\` |\n`;
         fs.appendFileSync(absSquadHub, row, 'utf8');
         appliedList.push(rel(absSquadHub));
       }
@@ -1280,9 +1304,10 @@ ${testIdsLines.join('\n')}
     assertNoSymlinkEscape(ROOT, domainMemoryPath, 'domain-memory.md');
     const memContent = fs.readFileSync(domainMemoryPath, 'utf8');
     if (!memContent.includes(path.basename(absShardPath)) && memContent.split('\n').length < MAX_DOMAIN_LINES) {
+      const safeTableTitle = skillTitle.replace(/\|/g, '-').replace(/`/g, "'");
       const updatedMem = insertRowIntoDomainMemoryTable(
         memContent,
-        `**${skillTitle}**`,
+        `**${safeTableTitle}**`,
         ownerSquad,
         routesFormatted,
         targetDomainShard,
@@ -1297,6 +1322,7 @@ ${testIdsLines.join('\n')}
 }
 
 function insertRowIntoDomainMemoryTable(memContent, label, ownerSquad, routes, shardPath, summary) {
+  const cleanCell = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ').replace(/\|/g, '-');
   const lines = memContent.split('\n');
   let tableHeaderIdx = -1;
   let isFiveColumn = true;
@@ -1309,7 +1335,7 @@ function insertRowIntoDomainMemoryTable(memContent, label, ownerSquad, routes, s
     }
   }
   const newRow = isFiveColumn
-    ? `| ${label} | \`${ownerSquad}\` | ${routes} | \`${shardPath}\` | ${summary} |`
+    ? `| ${cleanCell(label)} | \`${cleanCell(ownerSquad)}\` | ${cleanCell(routes)} | \`${cleanCell(shardPath)}\` | ${cleanCell(summary)} |`
     : `| ${label} | ${routes} | \`${shardPath}\` | ${summary} |`;
 
   if (tableHeaderIdx === -1) {

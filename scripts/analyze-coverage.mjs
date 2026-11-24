@@ -466,13 +466,20 @@ const scopedHandoffRecommendations = handoffRecommendations.filter(
 
 let legacyMigrationProgress = null;
 const migrationManifestPath = path.join(ROOT, '.agents/domain/migration-manifest.json');
-if (fs.existsSync(migrationManifestPath)) {
+if (fs.existsSync(migrationManifestPath) && !fs.lstatSync(migrationManifestPath).isSymbolicLink()) {
   try {
     const mm = JSON.parse(fs.readFileSync(migrationManifestPath, 'utf8'));
     const items = Object.values(mm.items || {});
-    const countsByStatus = { discovered: 0, decomposed: 0, taped: 0, verified: 0 };
+    const countsByStatus = Object.assign(Object.create(null), {
+      discovered: 0,
+      decomposed: 0,
+      taped: 0,
+      verified: 0,
+    });
+    const allowedStatuses = new Set(['discovered', 'decomposed', 'taped', 'verified', 'pending', 'quarantined', 'needs-triage']);
     let nextRecommendedLegacyTest = null;
     for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
       const hasCompiledSpec =
         Array.isArray(item.tapes) &&
         item.tapes.some((tp) => {
@@ -481,15 +488,17 @@ if (fs.existsSync(migrationManifestPath)) {
           const sidRe = new RegExp(`(?<![a-z0-9-])${sid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9-])`);
           return specsWithContent.some((s) => path.basename(s.file, '.spec.ts') === sid || sidRe.test(s.rawContent));
         });
-      const effectiveStatus = hasCompiledSpec ? 'verified' : item.status || 'discovered';
+      const rawStatus = hasCompiledSpec ? 'verified' : String(item.status || 'discovered');
+      const effectiveStatus = allowedStatuses.has(rawStatus) ? rawStatus : 'discovered';
       countsByStatus[effectiveStatus] = (countsByStatus[effectiveStatus] || 0) + 1;
-      if (!nextRecommendedLegacyTest && effectiveStatus === 'discovered') {
+      const safeItemId = typeof item.id === 'string' && /^[a-z0-9][a-z0-9-]*$/i.test(item.id) ? item.id : null;
+      if (!nextRecommendedLegacyTest && effectiveStatus === 'discovered' && safeItemId) {
         nextRecommendedLegacyTest = {
-          id: item.id,
+          id: safeItemId,
           wave: item.wave,
           kind: item.kind,
           file: item.file,
-          command: `npm run migrate:skill -- --legacy ${item.id}`,
+          command: `npm run migrate:skill -- --legacy ${safeItemId}`,
         };
       }
     }

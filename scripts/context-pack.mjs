@@ -23,9 +23,14 @@ import { buildImpactGraph, getFileImpact } from './impact-graph.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
+const MAX_CONTEXT_FILE_BYTES = 1024 * 1024;
+
 function readTextSafe(filePath) {
   try {
-    return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+    if (!fs.existsSync(filePath)) return '';
+    const st = fs.lstatSync(filePath);
+    if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_CONTEXT_FILE_BYTES) return '';
+    return fs.readFileSync(filePath, 'utf8');
   } catch {
     return '';
   }

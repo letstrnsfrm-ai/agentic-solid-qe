@@ -5,7 +5,8 @@ export interface UserPersona {
   readonly expectedErrorBanner?: string;
 }
 
-const DEFAULT_SECRET = process.env.SAUCEDEMO_PASSWORD ?? 'secret_sauce';
+const SAUCEDEMO_DEMO_SECRET = process.env.SAUCEDEMO_PASSWORD ?? 'secret_sauce';
+const DEFAULT_SECRET = process.env.TEST_PASSWORD || SAUCEDEMO_DEMO_SECRET;
 
 /**
  * Typed Data Builder (DIP) centralizing persona credentials and expected validation messages.
@@ -15,7 +16,7 @@ export class UserBuilder {
   static standardUser(): UserPersona {
     return {
       role: 'standard',
-      username: 'standard_user',
+      username: process.env.TEST_USERNAME || 'standard_user',
       password: DEFAULT_SECRET,
     };
   }

@@ -30,7 +30,8 @@ const LIVE_DRAFT_TAPE_FILE = path.join(EXPLORATORY_DIR, 'live-draft-tape.json');
 
 const SAFE_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const SENSITIVE_FIELD_RE = /(pass(word|code)?|secret|token|api[-_]?key|ssn|social|cvv|cvc|card|\bpin\b|_pin|pin_|\botp\b|_otp|otp_|mfa|auth)/i;
-const SENSITIVE_VALUE_RE = /^(sk_|pk_|ghp_|gho_|Bearer\s+|eyJ[A-Za-z0-9_-]+\.|[0-9]{3}-[0-9]{2}-[0-9]{4}|(?:\d[ -]*?){13,16})$/;
+const SENSITIVE_VALUE_RE =
+  /^(?:(?:sk|pk|rk)_(?:live|test|[A-Za-z0-9])[A-Za-z0-9_-]{4,}|gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,}|glpat-[A-Za-z0-9_-]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|Bearer\s+\S+|eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]*)?|[0-9]{3}-[0-9]{2}-[0-9]{4}|(?:\d[ -]?){13,19})$/;
 const FORBIDDEN_IDENTIFIERS = new Set([
   '__proto__',
   'prototype',
@@ -38,6 +39,10 @@ const FORBIDDEN_IDENTIFIERS = new Set([
   'toString',
   'valueOf',
   'hasOwnProperty',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
   'eval',
   'arguments',
   'default',
@@ -67,6 +72,18 @@ export function validateSafeId(val, label = 'id') {
     throw new Error(`Invalid ${label} '${val}'. Must match ^[a-z0-9][a-z0-9-]*$.`);
   }
   return val;
+}
+
+export function assertValidCdpPort(rawPort, label = 'CDP port') {
+  const str = String(rawPort ?? '').trim();
+  if (!/^[1-9]\d{3,4}$/.test(str)) {
+    throw new Error(`Security Error: Invalid ${label} '${rawPort}'. Expected loopback TCP port 1024..65535.`);
+  }
+  const n = Number(str);
+  if (!Number.isInteger(n) || n < 1024 || n > 65535) {
+    throw new Error(`Security Error: Invalid ${label} '${rawPort}'. Expected loopback TCP port 1024..65535.`);
+  }
+  return n;
 }
 
 export function assertSafeExploreUrl(rawUrl, label = 'URL', env = process.env) {
@@ -150,10 +167,10 @@ export function parseSnapshotRefs(snapshotText = '') {
     return hm ? hm[1].trim() : undefined;
   };
   for (const rawLine of String(snapshotText).split('\n')) {
-    const line = rawLine.trim();
+    const line = rawLine.trim().slice(0, 600);
     if (!line) continue;
     // Format 1: `- button "Sign In" [ref=e5]` or `- checkbox [ref=e5, checked=false]` or `- combobox [expanded=false, ref=e5]`
-    let m = line.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?.*?\[[^\]]*\bref=(e\d+)[^\]]*\]/);
+    let m = line.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?[^\r\n]{0,400}?\[[^\]]*\bref=(e\d+)[^\]]*\]/);
     if (m) {
       const role = m[1].toLowerCase();
       const name = m[2] || '';
@@ -269,7 +286,7 @@ export function resolveSemanticLocator(refOrSelector, refMap) {
 const NON_SECRET_NUMERIC_FIELD_RE =
   /\b(age|year|value|mileage|excess|count|quantity|qty|amount|price|days|months|seats|doors|engine|cc)\b/i;
 const STRICT_SECRET_NAME_RE =
-  /(pass(word|code)?|secret|token|api[-_]?key|ssn|social|cvv|cvc|\bpin\b|_pin|pin_|\botp\b|_otp|otp_)/i;
+  /(pass(word|code)?|secret|token|api[-_]?key|ssn|social|cvv|cvc|card|\bpin\b|_pin|pin_|\botp\b|_otp|otp_)/i;
 
 export function isSensitiveInput(fieldMeta = {}, value = '') {
   if (typeof value === 'string' && SENSITIVE_VALUE_RE.test(value.trim())) return true;
@@ -590,10 +607,36 @@ export function finalizeDraftTape(draftTape, scenarioId) {
 // ─── Phase 2: Speed, Token Compression, Domain Reuse & Seeder Promotion ─────
 
 export function resolveLocalBin(binName, rootDir = ROOT) {
+  if (process.platform === 'win32') {
+    const winJsEntries = {
+      playwright: [
+        path.join(rootDir, 'node_modules', '@playwright', 'test', 'cli.js'),
+        path.join(rootDir, 'node_modules', 'playwright', 'cli.js'),
+      ],
+      tsc: [path.join(rootDir, 'node_modules', 'typescript', 'bin', 'tsc')],
+      'agent-browser': [path.join(rootDir, 'node_modules', 'agent-browser', 'bin', 'agent-browser.js')],
+    };
+    for (const candidate of winJsEntries[binName] || []) {
+      if (fs.existsSync(candidate)) {
+        return { command: process.execPath, prefixArgs: [candidate] };
+      }
+    }
+  }
   const ext = process.platform === 'win32' ? '.cmd' : '';
   const localPath = path.join(rootDir, 'node_modules', '.bin', `${binName}${ext}`);
   if (fs.existsSync(localPath)) {
     return { command: localPath, prefixArgs: [] };
+  }
+  if (process.platform === 'win32') {
+    const npxCliCandidates = [
+      process.env.npm_execpath ? path.join(path.dirname(process.env.npm_execpath), 'npx-cli.js') : '',
+      path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+    ].filter(Boolean);
+    for (const npxJs of npxCliCandidates) {
+      if (fs.existsSync(npxJs)) {
+        return { command: process.execPath, prefixArgs: [npxJs, '--no-install', binName] };
+      }
+    }
   }
   return { command: 'npx', prefixArgs: ['--no-install', binName] };
 }
@@ -680,7 +723,8 @@ export function formatCompactOutput(payload = {}) {
   const refLines = payload.snapshotDelta?.deltaLines || payload.snapshot || [];
   if (refLines.length > 0) {
     const terseRefs = refLines.map((l) => {
-      const m = l.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?.*?\[[^\]]*\bref=(e\d+)[^\]]*\]/);
+      const bounded = String(l).slice(0, 600);
+      const m = bounded.match(/^-\s+([a-zA-Z0-9_-]+)(?:\s+"([^"]*)")?[^\r\n]{0,400}?\[[^\]]*\bref=(e\d+)[^\]]*\]/);
       if (m) return `@${m[3]}[${m[1]}${m[2] ? ` "${m[2]}"` : ''}]`;
       return l;
     });
@@ -887,28 +931,44 @@ ${extractLines}
 
 function writePrivateJson(filePath, data) {
   assertNoSymlinkEscape(ROOT, filePath, 'explore state file');
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
-    fs.chmodSync(filePath, 0o600);
+    fs.chmodSync(dir, 0o700);
+  } catch {}
+  const tmpFile = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2) + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+    flag: 'wx',
+  });
+  try {
+    fs.chmodSync(tmpFile, 0o600);
   } catch {
     /* non-POSIX */
   }
+  fs.renameSync(tmpFile, filePath);
 }
 
 function readJsonOrNull(filePath) {
+  assertNoSymlinkEscape(ROOT, filePath, 'JSON state file');
   if (!fs.existsSync(filePath)) return null;
+  const st = fs.lstatSync(filePath);
+  if (st.isSymbolicLink() || st.size > 2 * 1024 * 1024) {
+    throw new Error(`Security Error: Refusing to read oversized or symlinked state file '${filePath}'.`);
+  }
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
 function runAgentBrowser(session, args, { allowFail = false, timeoutMs = 45_000 } = {}) {
+  const safeSession = validateSafeId(session, 'session');
   const { command, prefixArgs } = resolveLocalBin('agent-browser');
-  const fullArgs = [...prefixArgs, '--session', session, ...args];
+  const fullArgs = [...prefixArgs, '--session', safeSession, ...args];
   const isIdempotent = args.includes('open') || args[0] === 'snapshot';
   const maxAttempts = isIdempotent ? 2 : 1;
   let res;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    res = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8', timeout: timeoutMs });
+    res = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8', timeout: timeoutMs, shell: false });
     if (res.status === 0) break;
     const errText = `${res.stderr || ''} ${res.stdout || ''} ${res.error?.message || ''}`;
     const isTransient = /os error 11|Resource temporarily unavailable|EAGAIN|ETIMEDOUT/i.test(errText);
@@ -924,10 +984,11 @@ function runAgentBrowser(session, args, { allowFail = false, timeoutMs = 45_000 
 }
 
 export function runAgentBrowserAsync(session, args, { allowFail = false } = {}) {
+  const safeSession = validateSafeId(session, 'session');
   const { command, prefixArgs } = resolveLocalBin('agent-browser');
-  const fullArgs = [...prefixArgs, '--session', session, ...args];
+  const fullArgs = [...prefixArgs, '--session', safeSession, ...args];
   return new Promise((resolve, reject) => {
-    const child = spawn(command, fullArgs, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, fullArgs, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
     let stdout = '';
     let stderr = '';
     child.stdout?.on('data', (chunk) => {
@@ -952,9 +1013,15 @@ export function runAgentBrowserAsync(session, args, { allowFail = false } = {}) 
 
 async function collectSinglePassCdpTelemetry(cdpPort) {
   if (!cdpPort) return null;
+  let validPort;
+  try {
+    validPort = assertValidCdpPort(cdpPort, 'state.cdpPort');
+  } catch {
+    return null;
+  }
   try {
     const pw = await import('@playwright/test');
-    const browser = await pw.chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
+    const browser = await pw.chromium.connectOverCDP(`http://127.0.0.1:${validPort}`);
     try {
       const ctx = browser.contexts()[0];
       const page = ctx?.pages()[0];
@@ -993,11 +1060,20 @@ function emitOutput(payload, { json = false } = {}) {
 async function waitForLiveHandshake(timeoutMs = 60_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    assertNoSymlinkEscape(ROOT, LIVE_SESSION_FILE, 'live-session.json');
     if (fs.existsSync(LIVE_SESSION_FILE)) {
       try {
+        const st = fs.lstatSync(LIVE_SESSION_FILE);
+        if (st.isSymbolicLink() || st.size > 1024 * 1024) {
+          throw new Error('Security Error: Unsafe live-session.json.');
+        }
         const data = JSON.parse(fs.readFileSync(LIVE_SESSION_FILE, 'utf8'));
-        if (data && data.cdpPort && data.readyAt) return data;
-      } catch {
+        if (data && data.cdpPort && data.readyAt) {
+          data.cdpPort = assertValidCdpPort(data.cdpPort, 'handshake cdpPort');
+          return data;
+        }
+      } catch (err) {
+        if (String(err?.message || '').startsWith('Security Error:')) throw err;
         /* still writing */
       }
     }
@@ -1365,6 +1441,11 @@ export function validateSafeCaptureRequest({ varName, from = 'url', expr = '' } 
     if (!cleanExpr || cleanExpr.startsWith('-')) {
       throw new Error(`Security Error: Capture --from ${from} requires a non-flag element ref or selector in --expr.`);
     }
+    if (!/^@e\d+$/i.test(cleanExpr) && SENSITIVE_FIELD_RE.test(cleanExpr)) {
+      throw new Error(
+        `Security Error: Refusing to capture sensitive credential/password selector '${cleanExpr}'.`
+      );
+    }
     return { varName, from, expr: cleanExpr };
   }
   // --from eval: permit ONLY @eN ref shorthand or strictly allowlisted read-only DOM expressions
@@ -1378,6 +1459,11 @@ export function validateSafeCaptureRequest({ varName, from = 'url', expr = '' } 
   }
   if (/^@e\d+$/.test(cleanExpr)) {
     return { varName, from: 'text', expr: cleanExpr };
+  }
+  if (SENSITIVE_FIELD_RE.test(cleanExpr)) {
+    throw new Error(
+      `Security Error: Refusing to capture sensitive credential/password DOM expression '${cleanExpr}'.`
+    );
   }
   if (!SAFE_READONLY_DOM_EVAL_RE.test(cleanExpr)) {
     throw new Error(
@@ -1410,9 +1496,10 @@ async function executeActions(actionTuples, { stepTitle, scope = '', json = fals
     }
   };
 
-  if (!state.recordedBuilderValues || typeof state.recordedBuilderValues !== 'object') {
-    state.recordedBuilderValues = {};
-  }
+  state.recordedBuilderValues = Object.assign(
+    Object.create(null),
+    state.recordedBuilderValues && typeof state.recordedBuilderValues === 'object' ? state.recordedBuilderValues : {}
+  );
   for (const tuple of actionTuples) {
     const [rawAction, target, rawVal, extraVal] = tuple;
     let pageRoute = '/';
@@ -1826,9 +1913,9 @@ async function cmdFinish(args) {
         const refClass = refParts[0];
         const propName = refParts[refParts.length - 1];
         if (bOp.className && refClass && refClass !== bOp.className) continue;
-        if (!propName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(propName)) continue;
+        if (!propName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(propName) || FORBIDDEN_IDENTIFIERS.has(propName)) continue;
         if (SENSITIVE_FIELD_RE.test(propName) || SENSITIVE_VALUE_RE.test(String(rawSampleVal || '').trim())) continue;
-        const propRe = new RegExp(`(\\b${propName}\\s*:\\s*)(?:'[^']*'|\"[^\"]*\")(,?)`);
+        const propRe = new RegExp(`(\\b${propName}\\s*:\\s*)(?:'(?:\\\\.|[^'\\\\])*'|"(?:\\\\.|[^"\\\\])*")(,?)`);
         if (propRe.test(bSrc)) {
           bSrc = bSrc.replace(propRe, (_, p1, p2) => `${p1}${JSON.stringify(String(rawSampleVal))}${p2}`);
           changed = true;

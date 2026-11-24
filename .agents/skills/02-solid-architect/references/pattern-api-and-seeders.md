@@ -23,7 +23,9 @@ export class MotorQuoteApiClient implements ApiClientContract {
   ) {}
 
   async createQuote<TPayload>(payload: TPayload): Promise<ApiResponseEnvelope<QuoteSeedResponse>> {
-    const headers = this.storageStatePath ? AuthTokenBridge.extractAuthHeaders(this.storageStatePath) : {};
+    const headers = this.storageStatePath
+      ? AuthTokenBridge.extractAuthHeaders(this.storageStatePath, { targetOrigin: this.baseUrl })
+      : {};
     const res = await this.request.post(`${this.baseUrl}/api/v1/quotes`, { data: payload, headers });
     return { status: res.status(), ok: res.ok(), headers: res.headers(), body: (await res.json()) as QuoteSeedResponse };
   }

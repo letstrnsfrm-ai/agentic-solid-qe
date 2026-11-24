@@ -303,11 +303,19 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
     const unindexed = [...routes].filter((r) => !indexedRoutes.has(r));
     if (unindexed.length === 0 && existingGraph.summary.totalShards + createdShards.length > 0) continue;
 
-    const routeList = unindexed.length > 0 ? unindexed : [...routes].length > 0 ? [...routes] : ['/'];
+    const cleanInline = (val) =>
+      String(val ?? '')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069`]+/g, '')
+        .trim();
+    const routeList = (unindexed.length > 0 ? unindexed : [...routes].length > 0 ? [...routes] : ['/']).map(
+      (r) => cleanInline(r) || '/'
+    );
     const routeLines = routeList.map((r) => `- \`${r}\``).join('\n');
-    const compLines = [...components].map((c) => `- \`${c}\``).join('\n') || '- _TBD_';
-    const apiLine = tape.apiBaseUrl ? `\n- **API Base URL:** \`${tape.apiBaseUrl}\`` : '';
-    const ownerSquad = matchedHub ? matchedHub.ownerSquad : '@org/unassigned';
+    const compLines = [...components].map((c) => `- \`${cleanInline(c)}\``).filter((l) => l !== '- ``').join('\n') || '- _TBD_';
+    const apiLine = tape.apiBaseUrl ? `\n- **API Base URL:** \`${cleanInline(tape.apiBaseUrl)}\`` : '';
+    const ownerSquad = cleanInline(matchedHub ? matchedHub.ownerSquad : '@org/unassigned') || '@org/unassigned';
+    const safeTitle = cleanInline(tape.title || scenarioId) || scenarioId;
 
     const actorLines =
       Array.isArray(tape.actors) && tape.actors.length > 0
@@ -315,7 +323,7 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
           tape.actors
             .map(
               (a) =>
-                `- **${a.actorId}** (\`${a.role}\`): \`${a.portalBaseUrl}\`${a.storageStatePath ? ` (\`${a.storageStatePath}\`)` : ''}`
+                `- **${cleanInline(a.actorId)}** (\`${cleanInline(a.role)}\`): \`${cleanInline(a.portalBaseUrl)}\`${a.storageStatePath ? ` (\`${cleanInline(a.storageStatePath)}\`)` : ''}`
             )
             .join('\n') +
           '\n'
@@ -327,13 +335,13 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
           tape.networkContracts
             .map(
               (nc) =>
-                `- \`${nc.method} ${nc.urlPattern}\` (Expected: \`${nc.expectedStatus}\`)${nc.clientCandidate ? ` -> \`${nc.clientCandidate}\`` : ''}${nc.responseSchemaSummary ? ` — \`${nc.responseSchemaSummary}\`` : ''}`
+                `- \`${cleanInline(nc.method)} ${cleanInline(nc.urlPattern)}\` (Expected: \`${cleanInline(nc.expectedStatus)}\`)${nc.clientCandidate ? ` -> \`${cleanInline(nc.clientCandidate)}\`` : ''}${nc.responseSchemaSummary ? ` — \`${cleanInline(nc.responseSchemaSummary)}\`` : ''}`
             )
             .join('\n') +
           '\n'
         : '';
 
-    const content = `# Feature Shard: ${tape.title || scenarioId}
+    const content = `# Feature Shard: ${safeTitle}
 
 - **Owner Squad:** \`${ownerSquad}\`
 - **Last Verified:** \`${today}\`
@@ -352,8 +360,8 @@ ${actorLines}${networkLines}`;
     for (const r of routeList) indexedRoutes.add(r);
 
     // Auto-index the newly seeded shard in Tier 1 Squad Hub or Tier 0 domain-memory.md
-    const routeSummary = routeList.map((r) => `\`${r}\``).join(', ');
-    const summaryText = String(tape.title || scenarioId).replace(/[\r\n]+/g, ' ').replace(/\|/g, '-').trim();
+    const routeSummary = routeList.map((r) => `\`${r.replace(/\|/g, '-')}\``).join(', ');
+    const summaryText = safeTitle.replace(/\|/g, '-').trim();
     if (matchedHub) {
       const hubIndexFile = path.join(rootDir, matchedHub.hubPath);
       if (!isUnsafeWritePath(hubIndexFile) && fs.existsSync(hubIndexFile)) {

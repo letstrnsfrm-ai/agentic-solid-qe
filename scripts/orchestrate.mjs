@@ -268,7 +268,11 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
           {
             id: 'auth-session-save',
             label: `(Recommended) Complete interactive login for ${missingAuthSessions.join(', ')}`,
-            command: `npx cortex orchestrate --explore start --url ${coverage.targetApp?.baseUrl || 'http://localhost:3000'} --headed`,
+            command: `npx cortex orchestrate --explore start --url ${
+              /^https?:\/\/[^\s"'`;|&$<>\\]+$/i.test(String(coverage.targetApp?.baseUrl || '').trim())
+                ? String(coverage.targetApp.baseUrl).trim()
+                : 'http://localhost:3000'
+            } --headed`,
           },
         ];
     nextAction = {
@@ -352,19 +356,20 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     const hasLegacyTests = legacyCodeTests.length > 0;
     const waveManifestPath = path.join(rootDir, '.agents/domain/migration-manifest.json');
     let waveManifest = null;
-    if (fs.existsSync(waveManifestPath)) {
-      try {
-        waveManifest = JSON.parse(fs.readFileSync(waveManifestPath, 'utf8'));
-      } catch {
-        waveManifest = null;
-      }
+    try {
+      assertNoSymlinkEscape(rootDir, waveManifestPath, 'migration-manifest.json');
+      const rawWave = readTextSafe(waveManifestPath);
+      if (rawWave) waveManifest = JSON.parse(rawWave);
+    } catch {
+      waveManifest = null;
     }
     const pendingWave0 = (waveManifest?.wave0Prereqs || []).filter((w) => w.status === 'pending');
     const pendingLedger = (waveManifest?.ledger || []).filter((e) => e.status === 'pending');
     const useWaveFactory = pendingWave0.length > 0 || pendingLedger.length > 0 || legacyCodeTests.length >= 10;
 
     if (useWaveFactory) {
-      const targetWave = pendingWave0.length > 0 ? 0 : (pendingLedger[0]?.wave ?? 1);
+      const rawWaveNum = pendingWave0.length > 0 ? 0 : (pendingLedger[0]?.wave ?? 1);
+      const targetWave = Number.isInteger(Number(rawWaveNum)) && Number(rawWaveNum) >= 0 ? Number(rawWaveNum) : 1;
       const waveCmd =
         targetWave === 0
           ? 'npx cortex wave --wave 0 --run --dashboard'
@@ -401,12 +406,17 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     const rawShardPath = typeof nextShard === 'string' ? nextShard : nextShard.shard || nextShard.feature || 'main';
     const shardSlug = path.basename(String(rawShardPath), '.md').replace(/[^a-z0-9-]/gi, '-').toLowerCase() || 'main';
     let shardRoute = '/';
-    const shardFull = path.join(rootDir, String(rawShardPath));
-    if (fs.existsSync(shardFull)) {
-      const m = readTextSafe(shardFull).match(/`(\/[a-zA-Z0-9._/-]*)`/);
-      if (m) shardRoute = m[1];
+    try {
+      const shardFull = assertNoSymlinkEscape(rootDir, path.resolve(rootDir, String(rawShardPath)), 'shard path');
+      if (fs.existsSync(shardFull)) {
+        const m = readTextSafe(shardFull).match(/`(\/[a-zA-Z0-9._/-]*)`/);
+        if (m) shardRoute = m[1];
+      }
+    } catch {
+      shardRoute = '/';
     }
-    const baseUrlClean = String(coverage.targetApp?.baseUrl || 'http://localhost:3000').replace(/\/$/, '');
+    const rawBase = String(coverage.targetApp?.baseUrl || '').trim().replace(/\/$/, '');
+    const baseUrlClean = /^https?:\/\/[^\s"'`;|&$<>\\]+$/i.test(rawBase) ? rawBase : 'http://localhost:3000';
     const targetExploreUrl = shardRoute.startsWith('/') ? `${baseUrlClean}${shardRoute}` : baseUrlClean;
 
     maturityStage =
@@ -450,7 +460,9 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     };
   } else if ((counts.domainShards || 0) === 0 && (counts.automatedSpecs || 0) === 0 && (counts.recordedTapes || 0) === 0) {
     maturityStage = 'Stage 0 — Initial Route & Feature Shard Discovery';
-    const baseUrlClean = coverage.targetApp?.baseUrl || 'http://localhost:3000';
+    const rawBase = String(coverage.targetApp?.baseUrl || '').trim();
+    const baseUrlClean = /^https?:\/\/[^\s"'`;|&$<>\\]+$/i.test(rawBase) ? rawBase : 'http://localhost:3000';
+    const appNameClean = String(coverage.targetApp?.appName || 'Target App').replace(/[\r\n\x00-\x1f\u202a-\u202e\u2066-\u2069]/g, ' ').trim() || 'Target App';
     nextAction = {
       priority: 5,
       skill: '00-env-bootstrap',
@@ -460,7 +472,7 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       humanGate: 'Run live route discovery or select initial route to explore.',
       gatePayload: {
         gateId: 'stage0-discover-shards',
-        question: `No feature shards exist yet for ${coverage.targetApp?.appName || 'Target App'} (${baseUrlClean}). How should agentic-solid-qe initialize coverage?`,
+        question: `No feature shards exist yet for ${appNameClean} (${baseUrlClean}). How should agentic-solid-qe initialize coverage?`,
         options: [
           {
             id: 'discover-shards',
@@ -509,8 +521,8 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     const stageNum = typeof rawStage === 'object' && rawStage ? rawStage.stage : 4;
     const handoffs = coverage.topHandoffRecommendations || coverage.handoffRecommendations || [];
     const tapeFiles = walkFiles(path.join(rootDir, '.exploratory/tapes'), (name) => name.endsWith('.json'));
-    const firstTapeSlug =
-      tapeFiles.length > 0 ? path.basename(tapeFiles[0], '.json') : 'baseline-flow';
+    const rawFirstSlug = tapeFiles.length > 0 ? path.basename(tapeFiles[0], '.json') : 'baseline-flow';
+    const firstTapeSlug = /^[a-z0-9][a-z0-9-]*$/.test(rawFirstSlug) ? rawFirstSlug : 'baseline-flow';
 
     if (stageNum === 2) {
       maturityStage = 'Stage 2 — Persona, Boundary & Resilience Expansion (@smoke / @regression)';
@@ -530,10 +542,13 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     }
     if (handoffs.length > 0) {
       const topH = handoffs[0];
+      const safeScenarioId = /^[a-z0-9][a-z0-9-]*$/.test(String(topH?.scenarioId || ''))
+        ? String(topH.scenarioId)
+        : firstTapeSlug;
       stageOptions.push({
         id: 'stage3-handoff-split',
-        label: `Segment ${topH.stepCount}-step tape '${topH.scenarioId}' at step ${topH.suggestedSplitStep} (${topH.recommendedHandoffStrategy})`,
-        command: `npx cortex orchestrate --tape show ${topH.scenarioId}`,
+        label: `Segment ${Number(topH.stepCount) || 0}-step tape '${safeScenarioId}' at step ${Number(topH.suggestedSplitStep) || 1} (${String(topH.recommendedHandoffStrategy || 'api-seed').replace(/[^a-z0-9_-]/gi, '')})`,
+        command: `npx cortex orchestrate --tape show ${safeScenarioId}`,
       });
     }
     stageOptions.push({
@@ -803,7 +818,7 @@ export async function discoverAndSeedLiveShards(
   rootDir = process.cwd(),
   { baseUrl = '', maxShards = 6, filterPattern = '' } = {}
 ) {
-  const { assertSafeTargetHttpUrl, assertSafeResolvedCloudTarget } = await import('./report-cloud.mjs');
+  const { assertSafeTargetHttpUrl, assertSafeResolvedCloudTarget, safePinnedHttpRequest } = await import('./report-cloud.mjs');
   const graph = buildDomainGraph({ rootDir, writeToDisk: false });
   const rawTargetUrl = String(baseUrl || graph.targetApp?.baseUrl || '').trim();
   if (!rawTargetUrl || rawTargetUrl.includes('localhost:3000') || rawTargetUrl.includes('your-app-url')) {
@@ -812,7 +827,7 @@ export async function discoverAndSeedLiveShards(
   const targetUrl = assertSafeTargetHttpUrl(rawTargetUrl, { label: 'live shard discovery URL' });
   const allowPrivateNet =
     process.env.CORTEX_ALLOW_PRIVATE_NET === '1' || process.env.CORTEX_ALLOW_PRIVATE_NET === 'true';
-  await assertSafeResolvedCloudTarget(targetUrl, { allowPrivateNet });
+  let pinnedTarget = await assertSafeResolvedCloudTarget(targetUrl, { allowPrivateNet });
   const parsedBase = new URL(targetUrl);
   const discoveredLinks = [];
   const seenRoutes = new Set();
@@ -862,37 +877,39 @@ export async function discoverAndSeedLiveShards(
   try {
     let fetchUrl = targetUrl;
     for (let hop = 0; hop < 3; hop++) {
-      const res = await fetch(fetchUrl, {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(10_000),
+      const res = await safePinnedHttpRequest(fetchUrl, {
+        method: 'GET',
+        timeoutMs: 10_000,
+        pinnedTarget,
+        maxBytes: MAX_DISCOVERY_HTML_BYTES,
       });
       if (res.status >= 300 && res.status < 400) {
-        const loc = res.headers.get('location');
+        const loc = typeof res.headers?.location === 'string' ? res.headers.location : '';
         if (!loc) break;
         const nextUrl = assertSafeTargetHttpUrl(new URL(loc, fetchUrl).toString(), {
           label: 'redirected discovery URL',
         });
-        await assertSafeResolvedCloudTarget(nextUrl, { allowPrivateNet });
+        pinnedTarget = await assertSafeResolvedCloudTarget(nextUrl, { allowPrivateNet });
         fetchUrl = nextUrl;
         continue;
       }
       if (res.ok) {
-        const html = await readBoundedResponseText(res, MAX_DISCOVERY_HTML_BYTES);
-        for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+        const html = res.bodyBuffer.toString('utf8').slice(0, MAX_DISCOVERY_HTML_BYTES);
+        for (const m of html.matchAll(/<a\b[^>]{0,400}?\bhref\s*=\s*["']([^"'#]{1,300})["'][^>]{0,400}?>((?:(?!<\/a>)[\s\S]){0,400}?)<\/a>/gi)) {
           addCandidate(m[1], m[2], fetchUrl);
         }
         // SPA fallback / supplement: hash routes, ARIA tabs, modal triggers, and top-level radio view toggles (#29)
         if (discoveredLinks.length === 0) {
-          for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']#\/?([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+          for (const m of html.matchAll(/<a\b[^>]{0,400}?\bhref\s*=\s*["']#\/?([^"']{1,200})["'][^>]{0,400}?>((?:(?!<\/a>)[\s\S]){0,400}?)<\/a>/gi)) {
             addSpaCandidate(m[1], m[2]);
           }
-          for (const m of html.matchAll(/<(?:button|a|div|li)\b[^>]*\brole\s*=\s*["']tab["'][^>]*>([\s\S]*?)<\/(?:button|a|div|li)>/gi)) {
+          for (const m of html.matchAll(/<(?:button|a|div|li)\b[^>]{0,400}?\brole\s*=\s*["']tab["'][^>]{0,400}?>((?:(?!<\/(?:button|a|div|li)>)[\s\S]){0,400}?)<\/(?:button|a|div|li)>/gi)) {
             addSpaCandidate('', m[1]);
           }
-          for (const m of html.matchAll(/<button\b[^>]*\b(?:data-tab|data-modal|data-target|aria-controls)\s*=\s*["']#?([^"']+)["'][^>]*>([\s\S]*?)<\/button>/gi)) {
+          for (const m of html.matchAll(/<button\b[^>]{0,400}?\b(?:data-tab|data-modal|data-target|aria-controls)\s*=\s*["']#?([^"']{1,200})["'][^>]{0,400}?>((?:(?!<\/button>)[\s\S]){0,400}?)<\/button>/gi)) {
             addSpaCandidate(m[1], m[2]);
           }
-          for (const m of html.matchAll(/<label\b[^>]*>(?:(?!(?:<\/label>))[\s\S]){0,1000}?<input\b[^>]*\btype\s*=\s*["']radio["'][^>]*>((?:(?!(?:<\/label>))[\s\S]){0,500}?)<\/label>/gi)) {
+          for (const m of html.matchAll(/<label\b[^>]{0,400}?>(?:(?!(?:<\/label>))[\s\S]){0,1000}?<input\b[^>]{0,400}?\btype\s*=\s*["']radio["'][^>]{0,400}?>((?:(?!(?:<\/label>))[\s\S]){0,500}?)<\/label>/gi)) {
             addSpaCandidate('', m[1]);
           }
         }
@@ -1013,6 +1030,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 22
@@ -1238,12 +1257,19 @@ export async function runOrchestratorLoop(
     // Priority 4: Wave Factory autonomous micro-batch execution in-process
     if (bp.nextAction.skill === '05-skill-migrator') {
       const manifestPath = path.join(rootDir, MIGRATION_MANIFEST_REL_PATH);
-      if (!fs.existsSync(manifestPath)) {
+      let rawManifest = '';
+      try {
+        assertNoSymlinkEscape(rootDir, manifestPath, 'migration-manifest.json');
+        rawManifest = readTextSafe(manifestPath);
+      } catch {
+        rawManifest = '';
+      }
+      if (!rawManifest) {
         stoppedReason = 'human-gate';
         humanGate = 'Run cortex wave --scan <legacy-dir> to initialize the migration ledger.';
         break;
       }
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const manifest = JSON.parse(rawManifest);
       const pendingWave0 = (manifest.wave0Prereqs || []).filter((w) => w.status === 'pending');
       const targetWave = pendingWave0.length > 0 ? 0 : null;
       const selection = selectNextWaveBatch(manifest, {
@@ -1861,8 +1887,15 @@ export async function runAutonomousStep(
   // 5E. Deterministic: 05-skill-migrator wave micro-batch
   if (apply && bp.nextAction.skill === '05-skill-migrator' && bp.nextAction.autoRunnable) {
     const manifestPath = path.join(rootDir, MIGRATION_MANIFEST_REL_PATH);
-    if (fs.existsSync(manifestPath)) {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    let rawManifest = '';
+    try {
+      assertNoSymlinkEscape(rootDir, manifestPath, 'migration-manifest.json');
+      rawManifest = readTextSafe(manifestPath);
+    } catch {
+      rawManifest = '';
+    }
+    if (rawManifest) {
+      const manifest = JSON.parse(rawManifest);
       const pendingWave0 = (manifest.wave0Prereqs || []).filter((w) => w.status === 'pending');
       const selection = selectNextWaveBatch(manifest, {
         squad: squad || '',
@@ -2449,10 +2482,21 @@ Usage:
         });
         process.exit(res.status ?? 1);
       } else if (blueprint.nextAction.npmScript) {
-        const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-        const res = spawnSync(npmCmd, ['run', blueprint.nextAction.npmScript], {
+        let npmCmd = 'npm';
+        let npmArgs = ['run', blueprint.nextAction.npmScript];
+        if (process.platform === 'win32') {
+          const npmCliJs = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+          if (fs.existsSync(npmCliJs)) {
+            npmCmd = process.execPath;
+            npmArgs = [npmCliJs, 'run', blueprint.nextAction.npmScript];
+          } else {
+            npmCmd = 'npm.cmd';
+          }
+        }
+        const res = spawnSync(npmCmd, npmArgs, {
           cwd: rootDir,
           stdio: jsonOut ? 'pipe' : 'inherit',
+          shell: false,
         });
         process.exit(res.status ?? 1);
       }

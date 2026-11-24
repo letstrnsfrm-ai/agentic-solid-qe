@@ -18,6 +18,8 @@ export interface AppFixtures {
 
 const activeExploreContexts = new Map<string, { page: Page; context: BrowserContext; held: boolean }>();
 
+const isCI = Boolean(process.env.CI || process.env.TF_BUILD);
+
 export const test = base.extend<AppFixtures>({
   loginPage: async ({ page }, use) => {
     await use(new LoginPage(page));
@@ -35,7 +37,7 @@ export const test = base.extend<AppFixtures>({
       activeExploreContexts.set(testInfo.testId, state);
       try {
         await use();
-        if (!process.env.CI && process.env.PW_PAUSE_FOR_EXPLORE === '1' && !state.held) {
+        if (!isCI && process.env.PW_PAUSE_FOR_EXPLORE === '1' && !state.held) {
           state.held = true;
           await holdForExplore(page, context);
         }
@@ -47,7 +49,7 @@ export const test = base.extend<AppFixtures>({
   ],
 });
 
-if (!process.env.CI && process.env.PW_PAUSE_FOR_EXPLORE === '1' && process.env.PW_EXPLORE_UNTIL_STEP) {
+if (!isCI && process.env.PW_PAUSE_FOR_EXPLORE === '1' && process.env.PW_EXPLORE_UNTIL_STEP) {
   const targetStep = process.env.PW_EXPLORE_UNTIL_STEP.toLowerCase();
   const originalStep = test.step.bind(test);
   test.step = (async <T>(title: string, body: () => Promise<T>, options?: { box?: boolean }): Promise<T> => {

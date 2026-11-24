@@ -394,24 +394,63 @@ const MANIFEST_REL_PATH = '.agents/framework-manifest.json';
 const UPGRADE_PATCHES_DIR = path.join(TARGET_ROOT, '.agents/upgrade-patches');
 const previousManifest = (() => {
   const manifestPath = path.join(TARGET_ROOT, MANIFEST_REL_PATH);
-  if (!fs.existsSync(manifestPath)) return { version: null, files: {} };
+  const emptyFiles = Object.create(null);
+  if (!fs.existsSync(manifestPath)) return { version: null, files: emptyFiles };
   try {
     const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const safeFiles = Object.create(null);
+    if (parsed.files && typeof parsed.files === 'object' && !Array.isArray(parsed.files)) {
+      for (const [k, v] of Object.entries(parsed.files)) {
+        if (typeof v === 'string') safeFiles[k] = v;
+      }
+    }
     return {
       version: typeof parsed.version === 'string' ? parsed.version : null,
-      files: parsed.files && typeof parsed.files === 'object' ? parsed.files : {},
+      files: safeFiles,
     };
   } catch {
-    return { version: null, files: {} };
+    return { version: null, files: emptyFiles };
   }
 })();
 
-const nextManagedFiles = {};
+const nextManagedFiles = Object.create(null);
 const preservedLocalEdits = [];
 let unchangedSyncCount = 0;
 
-function copyRecursive(src, dest, { overwrite = true, trackManifest = false } = {}) {
+function isUnsafeSource(sourceRoot, candidateSrc) {
+  if (!sourceRoot) return false;
+  const resolvedRoot = path.resolve(sourceRoot);
+  const resolvedSrc = path.resolve(candidateSrc);
+  const relSrc = path.relative(resolvedRoot, resolvedSrc);
+  if (relSrc.startsWith('..') || path.isAbsolute(relSrc)) return true;
+  let cur = resolvedSrc;
+  while (cur !== resolvedRoot) {
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) return true;
+    } catch {
+      return true;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  try {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    const realSrc = fs.realpathSync(resolvedSrc);
+    const realRel = path.relative(realRoot, realSrc);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) return true;
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+function copyRecursive(src, dest, { overwrite = true, trackManifest = false, sourceRoot = null } = {}) {
   if (!fs.existsSync(src)) return;
+  if (sourceRoot && isUnsafeSource(sourceRoot, src)) {
+    console.warn(`⚠️  Skipped unsafe/symlinked source path: ${src}`);
+    return;
+  }
   const stat = fs.lstatSync(src);
   if (stat.isSymbolicLink()) return;
   if (isUnsafeDest(dest)) return;
@@ -420,7 +459,7 @@ function copyRecursive(src, dest, { overwrite = true, trackManifest = false } = 
       fs.mkdirSync(dest, { recursive: true });
     }
     for (const entry of fs.readdirSync(src)) {
-      copyRecursive(path.join(src, entry), path.join(dest, entry), { overwrite, trackManifest });
+      copyRecursive(path.join(src, entry), path.join(dest, entry), { overwrite, trackManifest, sourceRoot });
     }
   } else {
     const relPath = rel(dest).replace(/\\/g, '/');
@@ -446,7 +485,7 @@ function copyRecursive(src, dest, { overwrite = true, trackManifest = false } = 
         unchangedSyncCount++;
         return;
       }
-      const prevHash = previousManifest.files[relPath];
+      const prevHash = Object.hasOwn(previousManifest.files, relPath) ? previousManifest.files[relPath] : undefined;
       if (trackManifest && prevHash && destHash !== prevHash && !forceOverwrite) {
         const patchDest = path.join(UPGRADE_PATCHES_DIR, relPath);
         if (!dryRun && !isUnsafeDest(patchDest)) {
@@ -819,16 +858,25 @@ function mergeConsumerPackageJson() {
 
   function ensureLocalBinLinks() {
     if (dryRun) return;
-    const binDir = path.join(TARGET_ROOT, 'node_modules', '.bin');
+    const nodeModulesDir = path.join(TARGET_ROOT, 'node_modules');
+    const binDir = path.join(nodeModulesDir, '.bin');
     const targetScript = path.join(TARGET_ROOT, 'scripts', 'sync-skills.mjs');
-    if (!fs.existsSync(targetScript)) return;
+    if (!fs.existsSync(targetScript) || isUnsafeDest(targetScript)) return;
     try {
       fs.chmodSync(targetScript, 0o755);
-      if (fs.existsSync(path.join(TARGET_ROOT, 'node_modules'))) {
+      if (fs.existsSync(nodeModulesDir) && !isUnsafeDest(nodeModulesDir) && !isUnsafeDest(binDir)) {
         fs.mkdirSync(binDir, { recursive: true });
+        if (isUnsafeDest(binDir)) return;
         for (const binName of Object.keys(requiredBins)) {
           const linkPath = path.join(binDir, binName);
-          if (!fs.existsSync(linkPath)) {
+          let hasExistingEntry = false;
+          try {
+            fs.lstatSync(linkPath);
+            hasExistingEntry = true;
+          } catch (err) {
+            if (err?.code !== 'ENOENT') hasExistingEntry = true;
+          }
+          if (!hasExistingEntry && !isUnsafeDest(linkPath)) {
             fs.symlinkSync(targetScript, linkPath);
           }
         }
@@ -1111,13 +1159,17 @@ const REQUIRED_GITIGNORE_ENTRIES = [
   '.agent-browser/',
   '.playwright/',
   '.auth/',
-  '.exploratory/checkpoints/',
-  '.exploratory/live-*',
+  '.exploratory/*',
+  '!.exploratory/tapes/',
   '.agents/legacy-backups/',
+  '.agents/upgrade-patches/',
+  '.agents/domain/autonomous-session.json',
+  '.agents/domain/autonomous-decisions.md',
   '.env',
   '.env.*',
   '!.env.example',
   '*.tsbuildinfo',
+  '*.tgz',
 ];
 
 /**
@@ -1482,8 +1534,11 @@ if (orgBrainSource) {
       'src/shared',
     ]) {
       const srcPath = path.join(resolvedBrainRoot, sharedRel);
-      if (fs.existsSync(srcPath) && !fs.lstatSync(srcPath).isSymbolicLink()) {
-        copyRecursive(srcPath, path.join(TARGET_ROOT, sharedRel), { overwrite: true });
+      if (fs.existsSync(srcPath) && !isUnsafeSource(resolvedBrainRoot, srcPath)) {
+        copyRecursive(srcPath, path.join(TARGET_ROOT, sharedRel), {
+          overwrite: true,
+          sourceRoot: resolvedBrainRoot,
+        });
       }
     }
     console.log(`🌐 Synced Federated Org Brain from: ${resolvedBrainRoot}`);

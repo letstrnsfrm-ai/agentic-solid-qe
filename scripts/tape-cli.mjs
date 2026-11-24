@@ -239,6 +239,10 @@ const FORBIDDEN_BUILDER_IDENTIFIERS = new Set([
   'toString',
   'valueOf',
   'hasOwnProperty',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
   'eval',
   'arguments',
   'default',
@@ -248,6 +252,44 @@ const FORBIDDEN_BUILDER_IDENTIFIERS = new Set([
   'import',
   'export',
 ]);
+
+function findMatchingCloseBrace(src, openIdx) {
+  let depth = 0;
+  let quote = null;
+  for (let i = openIdx; i < src.length; i++) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (quote) {
+      if (ch === '\\') {
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < src.length && src[i] !== '\n') i++;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
 
 export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = false } = {}) {
   if (!Array.isArray(setData) || setData.length === 0) return [];
@@ -272,7 +314,7 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
         throw new Error(`Security Error: Disallowed identifier '${ident}' in --set-data reference '${item.ref}'.`);
       }
     }
-    if (/(?:password|passcode|secret|token|api[_-]?key|ssn|cvv|\bpin\b|_pin|pin_|\botp\b|_otp|otp_)/i.test(propName)) {
+    if (/(?:password|passcode|secret|token|api[_-]?key|ssn|cvv|card|\bpin\b|_pin|pin_|\botp\b|_otp|otp_)/i.test(propName)) {
       throw new Error(`Security Error: Refusing to write sensitive property '${propName}' via --set-data. Use environment variables.`);
     }
     const serializedVal = JSON.stringify(String(item.value ?? ''));
@@ -286,7 +328,9 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
         builderClass
           .replace(/Builder$/, '')
           .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-          .toLowerCase() || builderClass.toLowerCase();
+          .replace(/[^a-zA-Z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .toLowerCase() || 'default';
       targetFile = assertNoSymlinkEscape(rootDir, path.join(dataDir, `${kebab}.builder.ts`), 'Data Builder file');
       const newContent = `/**\n * Typed Data Builder (DIP).\n */\nexport class ${builderClass} {\n  static ${methodName}() {\n    return {\n      ${propName}: ${serializedVal},\n    };\n  }\n}\n`;
       pendingWrites.set(targetFile, newContent);
@@ -304,32 +348,7 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
     const headMatch = content.match(methodHeadRe);
     if (headMatch) {
       const openBraceIdx = headMatch.index + headMatch[0].length - 1;
-      let depth = 0;
-      let quote = null;
-      let closeBraceIdx = -1;
-      for (let i = openBraceIdx; i < content.length; i++) {
-        const ch = content[i];
-        if (quote) {
-          if (ch === '\\') {
-            i++;
-            continue;
-          }
-          if (ch === quote) quote = null;
-          continue;
-        }
-        if (ch === "'" || ch === '"' || ch === '`') {
-          quote = ch;
-          continue;
-        }
-        if (ch === '{') depth++;
-        else if (ch === '}') {
-          depth--;
-          if (depth === 0) {
-            closeBraceIdx = i;
-            break;
-          }
-        }
-      }
+      const closeBraceIdx = findMatchingCloseBrace(content, openBraceIdx);
       if (closeBraceIdx < 0) {
         throw new Error(`Malformed return object in '${builderClass}.${methodName}()'.`);
       }
@@ -353,18 +372,8 @@ export function applyBuilderDataOverrides(rootDir, setData = [], { dryRun = fals
       const newMethod = `\n  static ${methodName}() {\n    return {\n      ${propName}: ${serializedVal},\n    };\n  }\n`;
       const clsMatch = content.match(new RegExp(`\\bclass\\s+${escapeRegExp(builderClass)}\\b[^{]*\\{`));
       if (clsMatch) {
-        let depth = 0;
-        let closeIdx = -1;
-        for (let i = clsMatch.index + clsMatch[0].length - 1; i < content.length; i++) {
-          if (content[i] === '{') depth++;
-          else if (content[i] === '}') {
-            depth--;
-            if (depth === 0) {
-              closeIdx = i;
-              break;
-            }
-          }
-        }
+        const openClassBrace = clsMatch.index + clsMatch[0].length - 1;
+        const closeIdx = findMatchingCloseBrace(content, openClassBrace);
         if (closeIdx >= 0) {
           content = `${content.slice(0, closeIdx)}${newMethod}${content.slice(closeIdx)}`;
         } else {

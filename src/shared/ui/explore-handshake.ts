@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { BrowserContext, Page } from '@playwright/test';
@@ -23,6 +24,8 @@ export interface ExploreHoldOptions {
   scenarioId?: string;
 }
 
+const MAX_CHECKPOINT_FILE_BYTES = 2 * 1024 * 1024; // 2 MB cap
+
 function getCheckpointsDir(): string {
   return path.resolve(process.cwd(), '.exploratory', 'checkpoints');
 }
@@ -40,6 +43,7 @@ const FORBIDDEN_CHECKPOINT_HOSTS = new Set([
   '169.254.170.2',
   '100.100.100.200',
   '[fd00:ec2::254]',
+  'fd00:ec2::254',
   'metadata.google.internal',
   'metadata.azure.com',
   'metadata',
@@ -55,10 +59,11 @@ function decodeHexIpv4Mapped(bare: string): string | null {
 }
 
 function isForbiddenCheckpointHost(rawHost: string): boolean {
-  const host = rawHost.toLowerCase();
+  const host = rawHost.toLowerCase().replace(/^\.+/, '');
   const bare = host.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   const isLocal = bare === 'localhost' || bare === '127.0.0.1' || bare === '::1';
   if (isLocal) return false;
+  if (bare.endsWith('.localhost')) return true;
   const mappedV4 = decodeHexIpv4Mapped(bare);
   const checkHost = mappedV4 || bare;
   if (
@@ -68,15 +73,23 @@ function isForbiddenCheckpointHost(rawHost: string): boolean {
     /^169\.254\./.test(checkHost) ||
     /^127\./.test(checkHost) ||
     /^0\./.test(checkHost) ||
+    /^192\.0\.0\./.test(checkHost) ||
+    /^198\.1[89]\./.test(checkHost) ||
     /^(?:22[4-9]|2[34]\d|25[0-5])\./.test(checkHost) ||
     bare === '::' ||
     bare === '0:0:0:0:0:0:0:0' ||
     bare === '0:0:0:0:0:0:0:1' ||
     /^64:ff9b:/i.test(bare) ||
+    /^2002:/i.test(bare) ||
+    /^2001:0*:/i.test(bare) ||
+    /^2001:db8:/i.test(bare) ||
+    /^100::/i.test(bare) ||
+    /^fec0:/i.test(bare) ||
     /^fe[89ab][0-9a-f]:/i.test(bare) ||
     /^ff[0-9a-f]{2}:/i.test(bare) ||
-    /^fd00:ec2::/i.test(bare) ||
+    /^fd00:0*ec2:/i.test(bare) ||
     /^(?:0*:)*ffff:0:/i.test(bare) ||
+    /^::[0-9a-f]{1,4}$/i.test(bare) ||
     /^::[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i.test(bare)
   ) {
     return true;
@@ -98,6 +111,10 @@ function isForbiddenCheckpointHost(rawHost: string): boolean {
 }
 
 function assertSafeCheckpointUrl(rawUrl: string): string {
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f\\]/.test(rawUrl) || /^https?:\/(?!\/)/i.test(rawUrl.trim())) {
+    throw new Error(`Unsafe checkpoint URL '${rawUrl}'.`);
+  }
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -157,7 +174,7 @@ function resolveSafeCheckpointPath(nameOrRelPath: string): string {
   const isRelPath = nameOrRelPath.startsWith('.exploratory/checkpoints/');
   const target = isRelPath
     ? path.resolve(process.cwd(), nameOrRelPath)
-    : path.resolve(checkpointsDir, `${nameOrRelPath.replace(/[^a-z0-9-]/gi, '-').toLowerCase()}.json`);
+    : path.resolve(checkpointsDir, `${nameOrRelPath.replace(/[^a-z0-9-]/gi, '-').toLowerCase() || 'checkpoint'}.json`);
   const rel = path.relative(checkpointsDir, target);
   if (rel.startsWith('..') || path.isAbsolute(rel) || !target.endsWith('.json')) {
     throw new Error(`Unsafe checkpoint path outside .exploratory/checkpoints/: ${nameOrRelPath}`);
@@ -168,9 +185,18 @@ function resolveSafeCheckpointPath(nameOrRelPath: string): string {
 
 function writePrivateJson(filePath: string, data: unknown): void {
   assertNoSymlinkEscape(process.cwd(), filePath);
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmpFile = path.join(dir, `.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}.json`);
+  const fd = fs.openSync(tmpFile, 'wx', 0o600);
   try {
+    fs.writeFileSync(fd, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmpFile, filePath);
+  try {
+    fs.chmodSync(dir, 0o700);
     fs.chmodSync(filePath, 0o600);
   } catch {
     /* non-POSIX filesystem */
@@ -243,13 +269,34 @@ export async function restoreCheckpoint(
       `Missing Point-A checkpoint state at ${checkpointRelPath}. Run the parent spec or 'npx cortex explore start' first.`
     );
   }
+  const st = fs.lstatSync(checkpointFile);
+  if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_CHECKPOINT_FILE_BYTES) {
+    throw new Error(`Invalid or oversized checkpoint file at ${checkpointRelPath}.`);
+  }
   const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8')) as Partial<ExploreCheckpoint>;
+  const rawCheckpointUrl = typeof checkpoint.url === 'string' ? checkpoint.url.trim() : '';
   const targetUrl =
-    typeof checkpoint.url === 'string' && /^https?:\/\//i.test(checkpoint.url)
-      ? assertSafeCheckpointUrl(checkpoint.url)
+    rawCheckpointUrl && rawCheckpointUrl !== 'about:blank'
+      ? assertSafeCheckpointUrl(rawCheckpointUrl)
       : '';
   if (Array.isArray(checkpoint.cookies) && checkpoint.cookies.length > 0) {
-    await context.addCookies(checkpoint.cookies);
+    const safeCookies = checkpoint.cookies.filter((c) => {
+      if (!c) return false;
+      if (typeof c.url === 'string' && c.url) {
+        try {
+          assertSafeCheckpointUrl(c.url);
+        } catch {
+          return false;
+        }
+      }
+      if (typeof c.domain === 'string' && c.domain && isForbiddenCheckpointHost(c.domain)) {
+        return false;
+      }
+      return true;
+    });
+    if (safeCookies.length > 0) {
+      await context.addCookies(safeCookies);
+    }
   }
   const localEntries = checkpoint.localStorage && typeof checkpoint.localStorage === 'object' ? checkpoint.localStorage : {};
   const sessionEntries = checkpoint.sessionStorage && typeof checkpoint.sessionStorage === 'object' ? checkpoint.sessionStorage : {};
@@ -275,6 +322,14 @@ export async function restoreCheckpoint(
   return checkpoint.variables && typeof checkpoint.variables === 'object' ? checkpoint.variables : {};
 }
 
+function parseSafeCdpPort(raw: string | undefined): number {
+  if (raw && /^\d{4,5}$/.test(raw)) {
+    const n = Number(raw);
+    if (n >= 1024 && n <= 65535) return n;
+  }
+  return 9222;
+}
+
 /**
  * Holds a live Playwright browser open for CDP attachment (`agent-browser --cdp <port>`).
  * In handshake mode (`PW_EXPLORE_HANDSHAKE=1`), works headless without Playwright Inspector
@@ -285,10 +340,10 @@ export async function holdForExplore(
   context: BrowserContext,
   options: ExploreHoldOptions = {}
 ): Promise<void> {
-  if (process.env.CI || process.env.PW_PAUSE_FOR_EXPLORE !== '1') return;
+  if (process.env.CI || process.env.TF_BUILD || process.env.PW_PAUSE_FOR_EXPLORE !== '1') return;
 
   const { checkpointPath } = await captureCheckpoint(page, context, options);
-  const cdpPort = /^\d{4,5}$/.test(process.env.EXPLORE_CDP_PORT || '') ? Number(process.env.EXPLORE_CDP_PORT) : 9222;
+  const cdpPort = parseSafeCdpPort(process.env.EXPLORE_CDP_PORT);
   const manifest = {
     pid: process.pid,
     cdpPort,
@@ -302,6 +357,7 @@ export async function holdForExplore(
 
   const releaseSentinelFile = getReleaseSentinelFile();
   const liveSessionFile = getLiveSessionFile();
+  assertNoSymlinkEscape(process.cwd(), releaseSentinelFile);
   if (fs.existsSync(releaseSentinelFile)) {
     try {
       fs.unlinkSync(releaseSentinelFile);

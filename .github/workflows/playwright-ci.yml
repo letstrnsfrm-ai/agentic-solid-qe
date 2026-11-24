@@ -28,6 +28,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 22
@@ -49,6 +51,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 22
@@ -73,7 +76,7 @@ jobs:
           name: playwright-report-smoke
           path: playwright-report/
           include-hidden-files: false
-          retention-days: 7
+          retention-days: 3
 
   playwright-e2e:
     name: Playwright E2E (Shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
@@ -88,6 +91,8 @@ jobs:
         shardTotal: [2]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 22
@@ -107,8 +112,12 @@ jobs:
               console.error("❌ Invalid grep_tags input. Must be a safe @tag expression.");
               process.exit(1);
             }
-            const targetUrl = process.env.INPUT_TARGET_URL || "";
+            const targetUrl = (process.env.INPUT_TARGET_URL || "").trim();
             if (targetUrl) {
+              if (/[\x00-\x1f\x7f\\]/.test(targetUrl) || /^https?:\/(?!\/)/i.test(targetUrl)) {
+                console.error("❌ Security Error: Malformed target_url.");
+                process.exit(1);
+              }
               let parsed;
               try {
                 parsed = new URL(targetUrl);
@@ -116,29 +125,34 @@ jobs:
                 console.error("❌ Invalid target_url URL format.");
                 process.exit(1);
               }
-              const host = parsed.hostname.toLowerCase();
-              const isLocal = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-              if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocal)) {
-                console.error("❌ Security Error: target_url must use https:// for non-localhost environments.");
+              const host = parsed.hostname.toLowerCase().replace(/\.+$/, "");
+              const bare = host.replace(/^\[|\]$/g, "");
+              if (parsed.protocol !== "https:") {
+                console.error("❌ Security Error: target_url in CI must use https://.");
                 process.exit(1);
               }
               if (
                 parsed.username ||
                 parsed.password ||
-                /^169\.254\.|^10\.|^192\.168\.|^172\.(?:1[6-9]|2\d|3[01])\.|^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|^0\.|^\[(?:0*:)*ffff:|^\[fe80:|^\[f[cd][0-9a-f]{2}:|^metadata|^instance-data$/i.test(host)
+                bare === "localhost" ||
+                bare.endsWith(".localhost") ||
+                bare === "::" ||
+                bare === "::1" ||
+                /^127\.|^169\.254\.|^10\.|^192\.168\.|^172\.(?:1[6-9]|2\d|3[01])\.|^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|^0\.|^192\.0\.0\.|^198\.1[89]\.|^(?:22[4-9]|2[34]\d|25[0-5])\./i.test(bare) ||
+                /^(?:0*:)*ffff:|^64:ff9b:|^2002:|^2001:0*:|^2001:db8:|^100::|^fec0:|^fe[89ab][0-9a-f]:|^f[cd][0-9a-f]{2}:|^ff[0-9a-f]{2}:|^::[0-9a-f]{1,4}(?::[0-9a-f]{1,4})?$|^metadata|^instance-data$/i.test(bare)
               ) {
-                console.error("❌ Security Error: target_url contains forbidden private/metadata host or embedded credentials.");
+                console.error("❌ Security Error: target_url contains forbidden loopback/private/metadata host or embedded credentials.");
                 process.exit(1);
               }
               const allowed = new Set(
                 (process.env.ALLOWED_TARGET_HOSTS || "")
                   .split(",")
-                  .map((s) => s.trim().toLowerCase())
+                  .map((s) => s.trim().toLowerCase().replace(/\.+$/, ""))
                   .filter(Boolean)
               );
               if (process.env.CONFIGURED_BASE_URL) {
                 try {
-                  allowed.add(new URL(process.env.CONFIGURED_BASE_URL).hostname.toLowerCase());
+                  allowed.add(new URL(process.env.CONFIGURED_BASE_URL).hostname.toLowerCase().replace(/\.+$/, ""));
                 } catch {}
               }
               if (allowed.size === 0 || !allowed.has(host)) {
@@ -166,7 +180,7 @@ jobs:
           name: blob-report-${{ matrix.shardIndex }}
           path: blob-report/
           include-hidden-files: false
-          retention-days: 7
+          retention-days: 3
 
   merge-reports:
     name: Merge Sharded HTML Reports
@@ -176,6 +190,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 22
@@ -186,10 +202,26 @@ jobs:
           path: all-blob-reports
           pattern: blob-report-*
           merge-multiple: true
+      - name: Verify Downloaded Blob Report Archive Integrity
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const dir = path.resolve("all-blob-reports");
+            if (!fs.existsSync(dir)) process.exit(0);
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              const st = fs.lstatSync(full);
+              if (st.isSymbolicLink() || !st.isFile() || !entry.name.endsWith(".zip") || entry.name.includes("..")) {
+                console.error(`❌ Security Error: Unexpected or symlinked blob artifact entry: ${entry.name}`);
+                process.exit(1);
+              }
+            }
+          '
       - run: npx --no-install playwright merge-reports --reporter=html ./all-blob-reports
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: playwright-report-merged
           path: playwright-report/
           include-hidden-files: false
-          retention-days: 7
+          retention-days: 3

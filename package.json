@@ -1,6 +1,6 @@
 {
   "name": "agentic-solid-qe",
-  "version": "0.48.17",
+  "version": "0.48.18",
   "description": "Zero-API-key agent skill framework bridging Autonomous Exploratory Testing (agent-browser) and SOLID Playwright TypeScript Architecture.",
   "license": "MIT",
   "type": "module",
@@ -9,6 +9,28 @@
     "asqe": "./scripts/sync-skills.mjs",
     "agentic-solid-qe": "./scripts/sync-skills.mjs"
   },
+  "files": [
+    "AGENTS.md",
+    "CHANGELOG.json",
+    "playwright.config.ts",
+    "tsconfig.json",
+    ".npmrc",
+    ".env.example",
+    ".agents/skills/",
+    ".agents/domain/domain-memory.md",
+    ".agents/domain/session-tape.schema.json",
+    ".agents/domain/shards/",
+    ".claude/commands/",
+    ".github/copilot-instructions.md",
+    ".github/prompts/",
+    ".github/workflows/playwright-ci.yml",
+    ".azure-pipelines/playwright-ci.yml",
+    ".exploratory/tapes/",
+    "defects/",
+    "scripts/",
+    "src/",
+    "tests/"
+  ],
   "scripts": {
     "cortex": "node scripts/sync-skills.mjs",
     "asqe": "node scripts/sync-skills.mjs",

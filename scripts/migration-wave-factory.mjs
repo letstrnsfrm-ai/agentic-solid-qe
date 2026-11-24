@@ -524,7 +524,9 @@ export function executeWaveBatch(
     return { wave: 0, processed: scaffolded.length, results: scaffolded };
   }
 
-  const scanRootAbs = assertSafeLegacyScanRoot(path.resolve(projectRoot, manifest.scanRoot || '.'), projectRoot);
+  const scanRootAbs = assertSafeLegacyScanRoot(path.resolve(projectRoot, manifest.scanRoot || '.'), projectRoot, {
+    allowSiblingDirs: false,
+  });
   // Scan legacy repo ONCE per batch & load domainGraph ONCE (eliminates O(N^2) rescans + per-item subprocesses)
   const cachedDiscovery = discoverLegacyTests(scanRootAbs);
   const sharedDomainGraph = buildDomainGraph({ rootDir: projectRoot, writeToDisk: false });
@@ -535,6 +537,9 @@ export function executeWaveBatch(
 
   for (const item of selection.batch || []) {
     try {
+      if (typeof item?.id !== 'string' || !SAFE_SLUG_RE.test(item.id)) {
+        throw new Error(`Security Error: Invalid legacy item id '${item?.id}'.`);
+      }
       const rawSquad = item.squad && item.squad !== 'core' ? String(item.squad).trim() : '';
       if (rawSquad && !SAFE_SLUG_RE.test(rawSquad)) {
         throw new Error(`Security Error: Invalid squad '${item.squad}' in migration ledger.`);
@@ -609,11 +614,15 @@ export function executeWaveBatch(
         compiledForVerify.push({ item, entryResult, specRel });
       }
     } catch (err) {
+      const safeFallbackId =
+        typeof item?.id === 'string' && SAFE_SLUG_RE.test(item.id) ? item.id : null;
       item.status = 'needs-triage';
       item.lastError = String(err.message || err).slice(0, 240);
-      item.nextAction = `node scripts/migrate-skill.mjs --legacy ${item.id}`;
+      item.nextAction = safeFallbackId
+        ? `node scripts/migrate-skill.mjs --legacy ${safeFallbackId}`
+        : 'npm run migrate:skill -- --discover';
       item.updatedAt = new Date().toISOString();
-      results.push({ id: item.id, status: 'needs-triage', lastError: item.lastError, nextAction: item.nextAction });
+      results.push({ id: safeFallbackId || 'invalid-item-id', status: 'needs-triage', lastError: item.lastError, nextAction: item.nextAction });
     }
   }
 
@@ -841,13 +850,21 @@ function main() {
   if (scanDir) {
     manifest = initOrUpdateMigrationLedger(path.resolve(ROOT, scanDir), ROOT);
   } else {
-    const manifestPath = path.join(ROOT, MIGRATION_MANIFEST_REL_PATH);
+    const manifestPath = assertNoSymlinkEscape(ROOT, path.join(ROOT, MIGRATION_MANIFEST_REL_PATH), MIGRATION_MANIFEST_REL_PATH);
     if (!fs.existsSync(manifestPath)) {
       throw new Error(`No migration ledger found at ${MIGRATION_MANIFEST_REL_PATH}. Pass --scan <legacy-dir>.`);
     }
+    const st = fs.lstatSync(manifestPath);
+    if (st.isSymbolicLink() || !st.isFile() || st.size > 5 * 1024 * 1024) {
+      throw new Error(`Security Error: Refusing invalid or oversized ${MIGRATION_MANIFEST_REL_PATH}.`);
+    }
     manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     if (!manifest.summary || !Array.isArray(manifest.ledger)) {
-      const upgradeScanRoot = path.resolve(ROOT, manifest.scanRoot || manifest.legacySourceRoot || '.');
+      const upgradeScanRoot = assertSafeLegacyScanRoot(
+        path.resolve(ROOT, manifest.scanRoot || manifest.legacySourceRoot || '.'),
+        ROOT,
+        { allowSiblingDirs: false }
+      );
       manifest = initOrUpdateMigrationLedger(upgradeScanRoot, ROOT);
     }
   }

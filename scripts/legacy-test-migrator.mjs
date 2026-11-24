@@ -12,6 +12,7 @@
  *   5. Parity Manifest: Tracks incremental migration state in .agents/domain/migration-manifest.json.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -109,7 +110,65 @@ function isWithinDir(targetPath, baseDir) {
   return relPath === '' || (!relPath.startsWith('..') && !path.isAbsolute(relPath));
 }
 
-export function assertSafeLegacyScanRoot(resolvedLegacyRoot, workspaceRoot = process.cwd()) {
+export function sanitizeSafeAppBaseUrl(rawUrl, fallback = 'http://localhost:3000') {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed || /[\s"'`;|&$<>\\\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(trimmed)) {
+    return fallback;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return fallback;
+    if (parsed.username || parsed.password) return fallback;
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    if (
+      !host ||
+      host === '169.254.169.254' ||
+      host === '100.100.100.200' ||
+      host === 'metadata.google.internal' ||
+      host === 'metadata' ||
+      host.startsWith('169.254.') ||
+      host.startsWith('fe80:') ||
+      host.startsWith('fd00:ec2:')
+    ) {
+      return fallback;
+    }
+    return trimmed;
+  } catch {
+    return fallback;
+  }
+}
+
+function isProtectedUserHomeOrDotPath(candidatePath) {
+  const normalized = path.resolve(candidatePath);
+  const posixForm = normalized.replace(/\\/g, '/');
+  if (/^\/(?:home|Users)\/[^/]+\/?$/.test(posixForm) || /^[A-Za-z]:\/Users\/[^/]+\/?$/i.test(posixForm)) {
+    return true;
+  }
+  if (/^\/(?:home|Users)\/[^/]+\/\./.test(posixForm) || /^[A-Za-z]:\/Users\/[^/]+\/\./i.test(posixForm)) {
+    return true;
+  }
+  try {
+    const homeDir = path.resolve(os.homedir());
+    if (normalized === homeDir) return true;
+    const relFromHome = path.relative(homeDir, normalized).replace(/\\/g, '/');
+    if (!relFromHome.startsWith('..') && !path.isAbsolute(relFromHome) && relFromHome.startsWith('.')) {
+      return true;
+    }
+    if (fs.existsSync(homeDir)) {
+      const realHome = fs.realpathSync(homeDir);
+      if (normalized === realHome) return true;
+    }
+  } catch {
+    /* ignore unavailable homedir */
+  }
+  return false;
+}
+
+export function assertSafeLegacyScanRoot(
+  resolvedLegacyRoot,
+  workspaceRoot = process.cwd(),
+  { allowSiblingDirs = true } = {}
+) {
   const normalizedTarget = path.resolve(resolvedLegacyRoot);
   const normalizedWorkspace = path.resolve(workspaceRoot);
   const parentBoundary = path.dirname(normalizedWorkspace);
@@ -117,6 +176,7 @@ export function assertSafeLegacyScanRoot(resolvedLegacyRoot, workspaceRoot = pro
   const forbiddenExact = new Set([
     '/',
     '/root',
+    '/home',
     '/etc',
     '/usr',
     '/var',
@@ -132,8 +192,12 @@ export function assertSafeLegacyScanRoot(resolvedLegacyRoot, workspaceRoot = pro
     '/System',
     '/Library',
     '/Users',
+    'C:\\',
+    'C:\\Users',
+    'C:\\Windows',
   ]);
   const forbiddenPrefixes = [
+    '/root/',
     '/etc/',
     '/usr/',
     '/var/',
@@ -149,10 +213,11 @@ export function assertSafeLegacyScanRoot(resolvedLegacyRoot, workspaceRoot = pro
 
   if (
     forbiddenExact.has(normalizedTarget) ||
-    forbiddenPrefixes.some((prefix) => normalizedTarget.startsWith(prefix))
+    forbiddenPrefixes.some((prefix) => normalizedTarget.startsWith(prefix)) ||
+    isProtectedUserHomeOrDotPath(normalizedTarget)
   ) {
     throw new Error(
-      `Security Error: Refusing to scan protected system directory '${normalizedTarget}' as legacy root.`
+      `Security Error: Refusing to scan protected system or user home directory '${normalizedTarget}' as legacy root.`
     );
   }
 
@@ -162,6 +227,16 @@ export function assertSafeLegacyScanRoot(resolvedLegacyRoot, workspaceRoot = pro
   ) {
     throw new Error(
       `Security Error: Legacy root '${normalizedTarget}' resolves outside the repository and its immediate parent directory ('${parentBoundary}').`
+    );
+  }
+
+  if (
+    !allowSiblingDirs &&
+    !isWithinDir(normalizedTarget, normalizedWorkspace) &&
+    normalizedTarget !== parentBoundary
+  ) {
+    throw new Error(
+      `Security Error: Untrusted manifest legacy root '${normalizedTarget}' cannot reference sibling directories outside '${normalizedWorkspace}'.`
     );
   }
 
@@ -192,7 +267,9 @@ export function assertSafeLegacyScanRoot(resolvedLegacyRoot, workspaceRoot = pro
     if (
       forbiddenExact.has(realTarget) ||
       forbiddenPrefixes.some((prefix) => realTarget.startsWith(prefix)) ||
-      (!isWithinDir(realTarget, realWorkspace) && !isWithinDir(realTarget, realParentBoundary))
+      isProtectedUserHomeOrDotPath(realTarget) ||
+      (!isWithinDir(realTarget, realWorkspace) && !isWithinDir(realTarget, realParentBoundary)) ||
+      (!allowSiblingDirs && !isWithinDir(realTarget, realWorkspace) && realTarget !== realParentBoundary)
     ) {
       throw new Error(
         `Security Error: Legacy root '${normalizedTarget}' realpath escapes allowed scan boundary.`
@@ -550,7 +627,7 @@ function mapJavaCsharpTypeToTs(rawType) {
 }
 
 function parseLegacyDataModels(sourceFiles, scanRoot) {
-  const models = {};
+  const models = Object.create(null);
   for (const file of sourceFiles) {
     const content = readTextSafe(file);
     if (!content) continue;
@@ -562,6 +639,7 @@ function parseLegacyDataModels(sourceFiles, scanRoot) {
       /\b(?:public\s+)?record\s+([A-Za-z0-9_]+)\s*\(([^)]+)\)/g
     )) {
       const name = m[1];
+      if (FORBIDDEN_TS_IDENTIFIERS.has(name)) continue;
       const fields = m[2]
         .split(',')
         .map((part) => part.trim().split(/\s+/))
@@ -570,7 +648,8 @@ function parseLegacyDataModels(sourceFiles, scanRoot) {
           name: toCamelCase(parts[parts.length - 1]),
           tsType: mapJavaCsharpTypeToTs(parts[parts.length - 2]),
           sensitive: isSensitiveFieldName(parts[parts.length - 1]),
-        }));
+        }))
+        .filter((f) => f.name && !FORBIDDEN_TS_IDENTIFIERS.has(f.name));
       if (fields.length > 0) {
         models[name] = { name, language, file: relPath, fields };
       }
@@ -578,21 +657,21 @@ function parseLegacyDataModels(sourceFiles, scanRoot) {
 
     // POJO / POCO / DTO classes (*Data, *Dto, *Payload, *Request, *Model, *User)
     const classMatch = content.match(/\bclass\s+([A-Za-z0-9_]+(?:Data|Dto|Payload|Request|Model|User|Input))\b/);
-    if (classMatch && !models[classMatch[1]]) {
+    if (classMatch && !FORBIDDEN_TS_IDENTIFIERS.has(classMatch[1]) && !Object.hasOwn(models, classMatch[1])) {
       const name = classMatch[1];
       const fields = [];
       const seen = new Set();
       if (language === 'java') {
         for (const fm of content.matchAll(/(?:private|public|protected)\s+(?:final\s+)?(String|int|Integer|long|Long|double|Double|boolean|Boolean)\s+([a-zA-Z0-9_]+)\s*(?:=|;)/g)) {
           const fname = toCamelCase(fm[2]);
-          if (seen.has(fname)) continue;
+          if (!fname || FORBIDDEN_TS_IDENTIFIERS.has(fname) || seen.has(fname)) continue;
           seen.add(fname);
           fields.push({ name: fname, tsType: mapJavaCsharpTypeToTs(fm[1]), sensitive: isSensitiveFieldName(fname) });
         }
       } else {
         for (const fm of content.matchAll(/public\s+(string|int|long|double|decimal|bool)\s+([A-Za-z0-9_]+)\s*\{\s*get;/g)) {
           const fname = toCamelCase(fm[2]);
-          if (seen.has(fname)) continue;
+          if (!fname || FORBIDDEN_TS_IDENTIFIERS.has(fname) || seen.has(fname)) continue;
           seen.add(fname);
           fields.push({ name: fname, tsType: mapJavaCsharpTypeToTs(fm[1]), sensitive: isSensitiveFieldName(fname) });
         }
@@ -645,8 +724,8 @@ function extractParameterizationDatasets(content, testMethod, language) {
   const safeMethod = escapeRegExp(testMethod);
   const sigRegex =
     language === 'java'
-      ? new RegExp(`((?:@\\w+(?:\\([^)]*\\))?\\s*)+)(?:public|protected|private)?\\s*(?:static\\s+)?void\\s+${safeMethod}\\s*\\(([^)]*)\\)`)
-      : new RegExp(`((?:\\[[^\\]]+\\]\\s*)+)(?:public|private|internal|protected)?\\s*(?:async\\s+)?(?:Task|void)\\s+${safeMethod}\\s*\\(([^)]*)\\)`);
+      ? new RegExp(`((?:@\\w+(?:\\([^()]{0,2000}\\))?\\s*){1,16})(?:public|protected|private)?\\s*(?:static\\s+)?void\\s+${safeMethod}\\s*\\(([^)]{0,1000})\\)`)
+      : new RegExp(`((?:\\[[^\\]]{1,2000}\\]\\s*){1,16})(?:public|private|internal|protected)?\\s*(?:async\\s+)?(?:Task|void)\\s+${safeMethod}\\s*\\(([^)]{0,1000})\\)`);
 
   const sigMatch = content.match(sigRegex);
   if (!sigMatch) return { params: [], datasets: [] };
@@ -656,7 +735,8 @@ function extractParameterizationDatasets(content, testMethod, language) {
   const params = rawParams
     ? rawParams.split(',').map((p, idx) => {
         const parts = p.trim().split(/\s+/);
-        const name = toCamelCase(parts[parts.length - 1] || `param${idx + 1}`);
+        const rawName = toCamelCase(parts[parts.length - 1] || `param${idx + 1}`);
+        const name = rawName && !FORBIDDEN_TS_IDENTIFIERS.has(rawName) ? rawName : `param${idx + 1}`;
         const tsType = parts.length >= 2 ? mapJavaCsharpTypeToTs(parts[parts.length - 2]) : 'string';
         return { name, tsType, sensitive: isSensitiveFieldName(name) };
       })
@@ -666,14 +746,14 @@ function extractParameterizationDatasets(content, testMethod, language) {
 
   if (language === 'java') {
     // @CsvSource({ "a, 1", "b, 2" })
-    const csvMatch = attrBlock.match(/@CsvSource\s*\(\s*\{?([\s\S]*?)\}?\s*\)/);
+    const csvMatch = attrBlock.match(/@CsvSource\s*\(\s*\{?([\s\S]{0,8000}?)\}?\s*\)/);
     if (csvMatch) {
       for (const rm of csvMatch[1].matchAll(/"([^"]+)"/g)) {
         rows.push(rm[1].split(',').map((v) => parseTypedLiteralToken(v.trim())));
       }
     }
     // @ValueSource(strings = { "a", "b" }) or ints = { 1, 2 }
-    const valMatch = attrBlock.match(/@ValueSource\s*\(\s*\w+\s*=\s*\{([^}]+)\}\s*\)/);
+    const valMatch = attrBlock.match(/@ValueSource\s*\(\s*\w+\s*=\s*\{([^}]{0,8000})\}\s*\)/);
     if (valMatch) {
       for (const tok of splitArgTokens(valMatch[1])) {
         rows.push([tok]);
@@ -683,24 +763,24 @@ function extractParameterizationDatasets(content, testMethod, language) {
     const dpRef = attrBlock.match(/dataProvider\s*=\s*"([^"]+)"/);
     if (dpRef) {
       const escapedDpName = dpRef[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const dpRegex = new RegExp(`@DataProvider\\s*\\(\\s*name\\s*=\\s*"${escapedDpName}"\\s*\\)[\\s\\S]*?return\\s+new\\s+Object\\s*\\[\\]\\[\\]\\s*\\{([\\s\\S]*?)\\};`);
+      const dpRegex = new RegExp(`@DataProvider\\s*\\(\\s*name\\s*=\\s*"${escapedDpName}"\\s*\\)[\\s\\S]{0,4000}?return\\s+new\\s+Object\\s*\\[\\]\\[\\]\\s*\\{([\\s\\S]{0,16000}?)\\};`);
       const dpMatch = content.match(dpRegex);
       if (dpMatch) {
-        for (const rm of dpMatch[1].matchAll(/\{([^{}]+)\}/g)) {
+        for (const rm of dpMatch[1].matchAll(/\{([^{}]{1,2000})\}/g)) {
           rows.push(splitArgTokens(rm[1]));
         }
       }
     }
   } else {
     // C# [TestCase(...)], [InlineData(...)], [DataRow(...)]
-    for (const m of attrBlock.matchAll(/\[(?:TestCase|InlineData|DataRow)\s*\(([^)]*)\)\]/g)) {
+    for (const m of attrBlock.matchAll(/\[(?:TestCase|InlineData|DataRow)\s*\(([^)]{0,2000})\)\]/g)) {
       const tokens = splitArgTokens(m[1]);
       if (tokens.length > 0) rows.push(tokens);
     }
   }
 
   const datasets = rows.map((rowVals, idx) => {
-    const values = {};
+    const values = Object.create(null);
     rowVals.forEach((val, colIdx) => {
       const param = params[colIdx] || { name: `arg${colIdx + 1}`, sensitive: false };
       values[param.name] = param.sensitive ? `<ENV:LEGACY_${param.name.toUpperCase()}>` : val;
@@ -773,13 +853,13 @@ function computeWaveAndValue({ kind, tags, lineCount, assertionCount, pageObject
 function extractDotNetSetupHooks(content) {
   const hookBodies = [];
   for (const m of content.matchAll(
-    /\[(?:OneTimeSetUp|SetUp)\][\s\S]*?(?:public|private|protected)\s+(?:async\s+)?(?:Task|void)\s+\w+\s*\([^)]*\)\s*\{/g
+    /\[(?:OneTimeSetUp|SetUp)\][\s\S]{0,600}?(?:public|private|protected)\s+(?:async\s+)?(?:Task|void)\s+\w+\s*\([^)]{0,500}\)\s*\{/g
   )) {
     const openIdx = m.index + m[0].length - 1;
     hookBodies.push(extractBraceBlock(content, openIdx));
   }
   for (const m of content.matchAll(
-    /(?:public\s+)?async\s+Task\s+InitializeAsync\s*\([^)]*\)\s*\{/g
+    /(?:public\s+)?async\s+Task\s+InitializeAsync\s*\([^)]{0,500}\)\s*\{/g
   )) {
     const openIdx = m.index + m[0].length - 1;
     hookBodies.push(extractBraceBlock(content, openIdx));
@@ -800,8 +880,11 @@ function extractDotNetAppSettingsBaseUrl(scanRoot) {
         parsed.AppUrl ||
         parsed.TestSettings?.BaseUrl ||
         parsed.Selenium?.BaseUrl;
-      if (typeof candidate === 'string' && /^https?:\/\//.test(candidate)) {
-        return { baseUrl: candidate, sourceFile: name };
+      if (typeof candidate === 'string' && /^https?:\/\//.test(candidate.trim())) {
+        const safeUrl = sanitizeSafeAppBaseUrl(candidate, '');
+        if (safeUrl) {
+          return { baseUrl: safeUrl, sourceFile: name };
+        }
       }
     } catch {
       /* ignore non-JSON appsettings */
@@ -926,8 +1009,8 @@ function extractTestMethodsFromFile(filePath, scanRoot, pageObjectNames) {
   const tests = [];
   const methodPattern =
     language === 'java'
-      ? /((?:@\w+(?:\([^)]*\))?\s*)+)(?:public|protected|private)?\s*(?:static\s+)?void\s+([A-Za-z0-9_]+)\s*\([^)]*\)\s*(?:throws\s+[^{]+)?\{/g
-      : /((?:\[[^\]]+\]\s*)+)(?:public|private|internal|protected)?\s*(?:async\s+)?(?:Task|void)\s+([A-Za-z0-9_]+)\s*\([^)]*\)\s*\{/g;
+      ? /((?:@\w+(?:\([^()]{0,2000}\))?\s*){1,16})(?:public|protected|private)?\s*(?:static\s+)?void\s+([A-Za-z0-9_]+)\s*\([^)]{0,1000}\)\s*(?:throws\s+[^{]{1,300})?\{/g
+      : /((?:\[[^\]]{1,2000}\]\s*){1,16})(?:public|private|internal|protected)?\s*(?:async\s+)?(?:Task|void)\s+([A-Za-z0-9_]+)\s*\([^)]{0,1000}\)\s*\{/g;
 
   for (const m of content.matchAll(methodPattern)) {
     const attrBlock = m[1] || '';
@@ -981,7 +1064,7 @@ function extractTestMethodsFromFile(filePath, scanRoot, pageObjectNames) {
       navigationCount,
     });
 
-    const id = slugifyKebab(`${language === 'java' ? 'java' : 'cs'}-${className}-${testMethod}`);
+    const id = slugifyKebab(`${language === 'java' ? 'java' : 'cs'}-${className}-${testMethod}`) || 'legacy-test';
     const entry = {
       id,
       language,
@@ -1017,7 +1100,7 @@ export function discoverLegacyTests(scanRoot) {
   const stackInfo = detectLegacyTestProject(scanRoot);
   const sourceFiles = walkSourceFiles(scanRoot, ['.java', '.cs']);
 
-  const pageObjects = {};
+  const pageObjects = Object.create(null);
   const pageObjectNames = new Set();
 
   for (const file of sourceFiles) {
@@ -1026,6 +1109,7 @@ export function discoverLegacyTests(scanRoot) {
     const language = file.endsWith('.java') ? 'java' : 'csharp';
     const classMatch = content.match(/\bclass\s+([A-Za-z0-9_]+)/);
     const className = classMatch ? classMatch[1] : path.basename(file, path.extname(file));
+    if (FORBIDDEN_TS_IDENTIFIERS.has(className)) continue;
     const isPo =
       /Page(?:Object)?$/i.test(className) ||
       /@FindBy\b|\[FindsBy\b/.test(content);
@@ -1634,15 +1718,15 @@ function buildPageTs(pageClassName, componentSpecs) {
 export function scaffoldPageObjectsToSolid(pageObjects, targetNames = []) {
   const namesToProcess =
     targetNames.length > 0
-      ? targetNames.filter((n) => pageObjects[n])
-      : Object.keys(pageObjects);
+      ? targetNames.filter((n) => pageObjects && Object.hasOwn(pageObjects, n))
+      : Object.keys(pageObjects || {});
 
   const files = [];
   for (const poName of namesToProcess) {
     const po = pageObjects[poName];
     const baseName = poName.replace(/Page(?:Object)?$/i, '') || poName;
-    const basePascal = toPascalCase(baseName);
-    const baseKebab = slugifyKebab(baseName);
+    const basePascal = toPascalCase(baseName) || 'Default';
+    const baseKebab = slugifyKebab(baseName) || 'default';
     const locators = po.locators || [];
     const methods = po.methods || [];
 
@@ -1662,7 +1746,12 @@ export function scaffoldPageObjectsToSolid(pageObjects, targetNames = []) {
         splitFromGodPageObject: false,
         content,
       });
-      componentSpecs.push({ className: compClassName, slug, propName: toCamelCase(baseName) });
+      const propCandidate = toCamelCase(baseName);
+      componentSpecs.push({
+        className: compClassName,
+        slug,
+        propName: propCandidate && !FORBIDDEN_TS_IDENTIFIERS.has(propCandidate) ? propCandidate : 'component',
+      });
     } else {
       const grouped = new Map();
       for (const loc of locators) {
@@ -1688,7 +1777,7 @@ export function scaffoldPageObjectsToSolid(pageObjects, targetNames = []) {
             splitFromGodPageObject: true,
             content,
           });
-          componentSpecs.push({ className: compClassName, slug, propName: toCamelCase(suffix) });
+          componentSpecs.push({ className: compClassName, slug, propName: toCamelCase(suffix) || 'section' });
         });
       }
     }
@@ -1708,8 +1797,8 @@ export function scaffoldPageObjectsToSolid(pageObjects, targetNames = []) {
 
 function scaffoldDataBuilder(match, params, datasets, dataModels) {
   const baseName = match.className.replace(/Tests?$/i, '') || match.testMethod;
-  const builderPascal = `${toPascalCase(baseName)}Builder`;
-  const builderKebab = slugifyKebab(baseName);
+  const builderPascal = `${toPascalCase(baseName) || 'Default'}Builder`;
+  const builderKebab = slugifyKebab(baseName) || 'default';
 
   // Collect fields from matching dataModel or parameterization params
   const matchingModel = Object.values(dataModels || {}).find((m) => {
@@ -1874,10 +1963,14 @@ export function buildLegacyMigrationPlan(scanRoot, targetIdOrFile, options = {})
           : ['@regression'];
 
   const appSettings = match.language === 'csharp' ? extractDotNetAppSettingsBaseUrl(scanRoot) : null;
+  const preferredOptUrl =
+    options.baseUrl && options.baseUrl !== 'http://localhost:3000'
+      ? sanitizeSafeAppBaseUrl(options.baseUrl, '')
+      : '';
   const baseUrl =
-    options.baseUrl && /^https?:\/\//.test(options.baseUrl) && options.baseUrl !== 'http://localhost:3000'
-      ? options.baseUrl
-      : appSettings?.baseUrl || (options.baseUrl && /^https?:\/\//.test(options.baseUrl) ? options.baseUrl : 'http://localhost:3000');
+    preferredOptUrl ||
+    appSettings?.baseUrl ||
+    sanitizeSafeAppBaseUrl(options.baseUrl, 'http://localhost:3000');
 
   const hasAuthSlice = match.suggestedSlices.some((s) => s.type === 'auth-session');
   const useStorageState =

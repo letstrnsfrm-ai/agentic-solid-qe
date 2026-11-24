@@ -92,15 +92,15 @@ export function assertSafeAuthOutputPath(outPath, root = process.cwd()) {
   return { authDir, resolvedOut };
 }
 
+import { resolveLocalBin } from './explore-session.mjs';
+
 function runAgentBrowser(session, cmdArgs) {
   const safeSession = assertSafeSessionName(session);
-  const binName = process.platform === 'win32' ? 'agent-browser.cmd' : 'agent-browser';
-  const localBin = path.join(process.cwd(), 'node_modules', '.bin', binName);
-  const cmd = fs.existsSync(localBin) ? localBin : process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const prefix = fs.existsSync(localBin) ? [] : ['--no-install', 'agent-browser'];
-  const res = spawnSync(cmd, [...prefix, '--session', safeSession, ...cmdArgs], {
+  const { command, prefixArgs } = resolveLocalBin('agent-browser', process.cwd());
+  const res = spawnSync(command, [...prefixArgs, '--session', safeSession, ...cmdArgs], {
     encoding: 'utf8',
     timeout: 15000,
+    shell: false,
   });
   if (res.status !== 0) {
     throw new Error(`agent-browser ${cmdArgs.join(' ')} failed: ${res.stderr || res.stdout}`);
@@ -112,10 +112,7 @@ export function buildStorageState({ cookies = [], origin = '', localStorageEntri
   const safeCookies = Array.isArray(cookies) ? cookies : [];
   const safeEntries = Array.isArray(localStorageEntries) ? localStorageEntries : [];
   const validOrigin = typeof origin === 'string' && origin !== 'null' && /^https?:\/\//i.test(origin) ? origin : '';
-  const origins =
-    validOrigin && safeEntries.length > 0
-      ? [{ origin: validOrigin, localStorage: safeEntries }]
-      : [];
+  const origins = validOrigin ? [{ origin: validOrigin, localStorage: safeEntries }] : [];
   return { cookies: safeCookies, origins };
 }
 
@@ -149,16 +146,19 @@ function main() {
 
   const state = buildStorageState({ cookies, origin, localStorageEntries });
   fs.mkdirSync(authDir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(resolvedOut, JSON.stringify(state, null, 2) + '\n', {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
   try {
     fs.chmodSync(authDir, 0o700);
-    fs.chmodSync(resolvedOut, 0o600);
-  } catch {
-    /* ignore chmod no-op on non-POSIX platforms */
-  }
+  } catch {}
+  const tmpOut = `${resolvedOut}.tmp.${process.pid}.${Date.now()}`;
+  fs.writeFileSync(tmpOut, JSON.stringify(state, null, 2) + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+    flag: 'wx',
+  });
+  try {
+    fs.chmodSync(tmpOut, 0o600);
+  } catch {}
+  fs.renameSync(tmpOut, resolvedOut);
   console.log(`Exported Playwright storageState (${cookies.length} cookies, ${localStorageEntries.length} localStorage keys) -> ${out}`);
 }
 

@@ -6785,3 +6785,301 @@ test('security-audit: Zip-Slip tar validation, repo slug hardening, ReDoS guards
   }
 });
 
+test('security-audit-v0.48.18: secret redaction, tar symlink/PAX defense, SSRF/URL parser differentials, seeder codegen, lexical stripComments, ReDoS & AuthTokenBridge', async () => {
+  const {
+    isSensitiveInput,
+    redactInputToBuilderRef,
+    assertValidCdpPort,
+    validateSafeCaptureRequest,
+  } = await import('./explore-session.mjs');
+  const { validateTarBuffer } = await import('./upgrade-framework.mjs');
+  const {
+    isForbiddenIpAddress,
+    assertSafeTargetHttpUrl,
+    assertSafeCloudUrl,
+  } = await import('./report-cloud.mjs');
+  const { validateTapeObject } = await import('./validate-tapes.mjs');
+  const { compileSessionTape } = await import('./compile-tape.mjs');
+  const { stripComments } = await import('./impact-graph.mjs');
+  const { isSafeRegexPattern } = await import('./dotnet-enterprise-analyzer.mjs');
+  const {
+    assertSafePlaywrightLocatorExpr,
+    sanitizeDefectErrorExcerpt,
+  } = await import('./heal-drift.mjs');
+  const {
+    assertSafeLegacyScanRoot,
+    sanitizeSafeAppBaseUrl,
+  } = await import('./legacy-test-migrator.mjs');
+  const { sanitizeReleaseCommitText } = await import('./generate-release-notes.mjs');
+
+  // 1. Live secret redaction ($-anchor fix) + CDP port & sensitive selector blocking
+  const stripeKey = ['sk', 'live', '51NabcDEF1234567890xyzXYZ'].join('_');
+  const ghPat = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+  const jwtVal = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  assert.equal(isSensitiveInput({ name: 'notes' }, stripeKey), true);
+  assert.equal(isSensitiveInput({ name: 'notes' }, ghPat), true);
+  assert.equal(isSensitiveInput({ name: 'notes' }, `Bearer ${jwtVal}`), true);
+  assert.equal(isSensitiveInput({ name: 'cardNumber' }, '4111'), true);
+  const redactedStripe = redactInputToBuilderRef({ name: 'webhookField' }, stripeKey, 'checkout');
+  assert.equal(redactedStripe.redacted, true);
+  assert.equal(assertValidCdpPort('9222'), 9222);
+  assert.throws(() => assertValidCdpPort('ws://evil.example:9222'), /Invalid CDP port/i);
+  assert.throws(() => assertValidCdpPort('80@evil.example:9222'), /Invalid CDP port/i);
+  assert.throws(() => assertValidCdpPort('80'), /Invalid CDP port/i);
+  assert.throws(
+    () => validateSafeCaptureRequest({ varName: 'leak', from: 'text', expr: 'input[type="password"]' }),
+    /sensitive/i
+  );
+
+  // 2. In-memory POSIX/PAX tar header validation blocks symlinks ('2'), hardlinks ('1'), and PAX linkpath
+  const buildTarHeader = ({ name, typeFlag = '0', linkName = '', size = 0 }) => {
+    const buf = Buffer.alloc(512, 0);
+    buf.write(name, 0, Math.min(100, Buffer.byteLength(name)), 'utf8');
+    buf.write(size.toString(8).padStart(11, '0') + '\0', 124, 12, 'ascii');
+    buf[156] = typeFlag.charCodeAt(0);
+    if (linkName) {
+      buf.write(linkName, 157, Math.min(100, Buffer.byteLength(linkName)), 'utf8');
+    }
+    return buf;
+  };
+  const validTar = Buffer.concat([
+    buildTarHeader({ name: 'repo-v1/package.json', typeFlag: '0', size: 2 }),
+    Buffer.concat([Buffer.from('{}'), Buffer.alloc(510, 0)]),
+    Buffer.alloc(1024, 0),
+  ]);
+  assert.deepEqual(validateTarBuffer(validTar), ['repo-v1/package.json']);
+
+  const symlinkTar = Buffer.concat([
+    buildTarHeader({ name: 'repo-v1/scripts/evil.mjs', typeFlag: '2', linkName: '/etc/passwd' }),
+    Buffer.alloc(1024, 0),
+  ]);
+  assert.throws(() => validateTarBuffer(symlinkTar), /Security Error/i);
+
+  const hardlinkTar = Buffer.concat([
+    buildTarHeader({ name: 'repo-v1/scripts/hard.mjs', typeFlag: '1' }),
+    Buffer.alloc(1024, 0),
+  ]);
+  assert.throws(() => validateTarBuffer(hardlinkTar), /Disallowed tar entry type/i);
+
+  const paxRecord = '27 linkpath=/etc/shadow\n';
+  const paxPadded = Buffer.alloc(512, 0);
+  paxPadded.write(paxRecord, 0, 'utf8');
+  const paxTar = Buffer.concat([
+    buildTarHeader({ name: 'PaxHeader/evil', typeFlag: 'x', size: Buffer.byteLength(paxRecord) }),
+    paxPadded,
+    Buffer.alloc(1024, 0),
+  ]);
+  assert.throws(() => validateTarBuffer(paxTar), /PAX linkpath/i);
+
+  // 3. WHATWG URL parser differentials, IPv6 6to4/Teredo/benchmark SSRF & HTTP bearer token protection
+  assert.equal(isForbiddenIpAddress('2002:a9fe:a9fe::1'), true);
+  assert.equal(isForbiddenIpAddress('2001:0000:4136:e378:8000:63bf:3fff:fdd2'), true);
+  assert.equal(isForbiddenIpAddress('198.18.0.1'), true);
+  assert.equal(isForbiddenIpAddress('fec0::1'), true);
+  assert.throws(() => assertSafeTargetHttpUrl('http:/0x7f000001/'), /Security Error/i);
+  assert.throws(() => assertSafeTargetHttpUrl('http:\\\\2130706433/'), /Security Error/i);
+  assert.throws(() => assertSafeTargetHttpUrl('https://admin.localhost/api'), /Security Error/i);
+  assert.throws(() => assertSafeTargetHttpUrl('https://[2002:a9fe:a9fe::1]/'), /Security Error/i);
+  assert.throws(
+    () =>
+      assertSafeCloudUrl('http://localhost:8787/ingest', {
+        CORTEX_CLOUD_TOKEN: 'secret-token',
+      }),
+    /Refusing to transmit CORTEX_CLOUD_TOKEN over unencrypted http/i
+  );
+  assert.ok(
+    assertSafeCloudUrl('http://localhost:8787/ingest', {
+      CORTEX_CLOUD_TOKEN: 'secret-token',
+      CORTEX_ALLOW_INSECURE_LOCAL_CLOUD: '1',
+    })
+  );
+
+  // 4. Tape validator & --emit-seeder template-literal injection blocking
+  const maliciousTape = {
+    schemaVersion: '1.0.0',
+    scenarioId: 'seeder-inj-check',
+    title: 'Seeder Injection Check',
+    charter: 'api-contract',
+    tags: ['@p0'],
+    recordedAt: '2026-11-24T00:00:00.000Z',
+    baseUrl: 'https://example.com',
+    persona: { role: 'standard_user', dataBuilderRef: 'UserBuilder.standardUser' },
+    preconditions: [],
+    semanticSteps: [
+      {
+        stepIndex: 1,
+        intent: 'Click home heading',
+        action: 'click',
+        pageRoute: '/',
+        componentCandidate: 'HomeComponent',
+        locatorContract: { strategy: 'getByRole', role: 'heading', value: 'Home' },
+      },
+    ],
+    networkContracts: [
+      {
+        urlPattern: '/api/items` + process.exit(1) + `',
+        method: 'POST',
+        expectedStatus: 201,
+      },
+    ],
+    expectedStates: [
+      {
+        description: 'Heading visible',
+        assertionType: 'toBeVisible',
+        targetComponent: 'homePage.home',
+        targetProperty: 'homeHeading',
+        expectedValueRef: 'UserBuilder.standardUser().role',
+        locatorContract: { strategy: 'locator', value: '@e1', unknownExtra: true },
+      },
+    ],
+  };
+  const tapeErrors = validateTapeObject(maliciousTape, 'seeder-inj-check.json');
+  assert.ok(Array.isArray(tapeErrors) && tapeErrors.length >= 2);
+  assert.ok(tapeErrors.some((e) => e.includes('urlPattern')));
+  assert.ok(tapeErrors.some((e) => e.includes('ephemeral snapshot ref') || e.includes('Unknown property')));
+
+  // Verify valid --emit-seeder emits JSON-serialized path + same-origin check
+  const tmpSeederDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-seeder-sec-'));
+  try {
+    fs.mkdirSync(path.join(tmpSeederDir, '.exploratory/tapes'), { recursive: true });
+    const safeSeederTapePath = path.join(tmpSeederDir, '.exploratory/tapes/safe-seed.json');
+    fs.writeFileSync(
+      safeSeederTapePath,
+      JSON.stringify({
+        ...maliciousTape,
+        scenarioId: 'safe-seed',
+        networkContracts: [{ urlPattern: '/api/v1/orders', method: 'POST', expectedStatus: 201 }],
+        expectedStates: [
+          {
+            description: 'Heading visible',
+            assertionType: 'toBeVisible',
+            targetComponent: 'homePage.home',
+            targetProperty: 'homeHeading',
+            expectedValueRef: 'UserBuilder.standardUser().role',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const compiled = compileSessionTape({
+      tapeInput: safeSeederTapePath,
+      rootDir: tmpSeederDir,
+      apply: true,
+      skipMap: true,
+      emitSeeder: true,
+    });
+    const seederOp = compiled.operations.find((o) => o.layer === 'seeder');
+    assert.ok(seederOp, 'Expected emitted seeder operation');
+    const seederSrc = fs.readFileSync(path.join(tmpSeederDir, seederOp.file), 'utf8');
+    assert.match(seederSrc, /resolved\.origin !== base\.origin/);
+  } finally {
+    fs.rmSync(tmpSeederDir, { recursive: true, force: true });
+  }
+
+  // 5. Lexical stripComments defeats nested template-literal `${`/*`}` comment smuggling
+  const smuggledCode = "const a = `${`/*`}`;\neval('1+1');\nconst b = `${`*/`}`;\n";
+  const stripped = stripComments(smuggledCode);
+  assert.match(stripped, /eval\('1\+1'\)/, 'Lexical stripComments must preserve code between template literals');
+
+  // 6. ReDoS optional-group/named-backref guards + drift healer defect excerpt redaction
+  assert.equal(isSafeRegexPattern('(?:foo|bar)?'), true);
+  assert.equal(isSafeRegexPattern('((a?))+b'), false);
+  assert.equal(isSafeRegexPattern('(?<dup>[a-z]+)\\k<dup>'), false);
+  assert.throws(
+    () => assertSafePlaywrightLocatorExpr("this.root.getByRole('button', { name: /(a+)+$/ })"),
+    /ReDoS|unsafe/i
+  );
+  const sanitizedExcerpt = sanitizeDefectErrorExcerpt(`{"password": "My$ecretPassword99", "key": "${stripeKey}"}`);
+  assert.ok(!sanitizedExcerpt.includes('My$ecretPassword99'));
+  assert.ok(!sanitizedExcerpt.includes(stripeKey));
+
+  // 7. Legacy scan-root home/sibling isolation & BaseUrl shell-metacharacter sanitization
+  const tmpScanWs = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-scan-iso-'));
+  const tmpScanSibling = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-scan-sib-'));
+  try {
+    assert.throws(() => assertSafeLegacyScanRoot(os.homedir(), tmpScanWs), /Security Error/i);
+    assert.throws(
+      () => assertSafeLegacyScanRoot(tmpScanSibling, tmpScanWs, { allowSiblingDirs: false }),
+      /Security Error/i
+    );
+    assert.equal(
+      sanitizeSafeAppBaseUrl('https://evil.example.com/" && curl x #', 'http://localhost:3000'),
+      'http://localhost:3000'
+    );
+    assert.equal(
+      sanitizeSafeAppBaseUrl('http://169.254.169.254/latest/meta-data/', 'http://localhost:3000'),
+      'http://localhost:3000'
+    );
+  } finally {
+    fs.rmSync(tmpScanWs, { recursive: true, force: true });
+    fs.rmSync(tmpScanSibling, { recursive: true, force: true });
+  }
+
+  // 8. Release notes Markdown link/BiDi neutralization & .git/ output write block
+  const { resolveSafeRepoOutputPath } = await import('./generate-release-notes.mjs');
+  const cleanCommit = sanitizeReleaseCommitText('feat: fix \u202E[spoof](https://evil.example/payload)');
+  assert.ok(!cleanCommit.includes('\u202E'));
+  assert.match(cleanCommit, /\\\[spoof\\\]\(https:\/\/evil\.example\/payload\)/);
+  assert.throws(() => resolveSafeRepoOutputPath('.git/config', '--output'), /Security Error/i);
+
+  // 9. AuthTokenBridge Secure cookie transport guard, IP domain exact match, and JSON localStorage token scoping
+  const nodeMajor = Number(process.versions.node.split('.')[0]);
+  if (nodeMajor >= 22) {
+    const { AuthTokenBridge } = await import('../src/shared/api/auth-token.bridge.ts');
+    const prevCwd = process.cwd();
+    const tmpAuthRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-auth-bridge-'));
+    try {
+      fs.mkdirSync(path.join(tmpAuthRoot, '.auth'), { mode: 0o700, recursive: true });
+      fs.writeFileSync(
+        path.join(tmpAuthRoot, '.auth/standard.json'),
+        JSON.stringify({
+          cookies: [
+            { name: 'sid', value: 'sec-cookie-val', domain: 'app.example.com', secure: true },
+            { name: 'ipcookie', value: 'ip-val', domain: '1.1.1.1', secure: false },
+          ],
+          origins: [
+            {
+              origin: 'https://app.example.com',
+              localStorage: [
+                {
+                  name: 'oidc.auth_token',
+                  value: JSON.stringify({
+                    access_token: 'scoped-access-jwt',
+                    refresh_token: 'DO_NOT_LEAK_REFRESH_TOKEN',
+                  }),
+                },
+              ],
+            },
+          ],
+        }),
+        { mode: 0o600 }
+      );
+      process.chdir(tmpAuthRoot);
+      const httpsHeaders = AuthTokenBridge.extractAuthHeaders('.auth/standard.json', {
+        targetOrigin: 'https://app.example.com',
+      });
+      assert.equal(httpsHeaders.Authorization, 'Bearer scoped-access-jwt');
+      assert.ok(!JSON.stringify(httpsHeaders).includes('DO_NOT_LEAK_REFRESH_TOKEN'));
+      assert.equal(httpsHeaders.Cookie, 'sid=sec-cookie-val');
+
+      const httpCrossOriginHeaders = AuthTokenBridge.extractAuthHeaders('.auth/standard.json', {
+        targetOrigin: 'http://app.example.com',
+        allowCrossOrigin: true,
+      });
+      assert.ok(
+        !String(httpCrossOriginHeaders.Cookie || '').includes('sec-cookie-val'),
+        'Secure cookie must never be downgraded over plaintext HTTP even with allowCrossOrigin: true'
+      );
+
+      const ipSuffixHeaders = AuthTokenBridge.extractAuthHeaders('.auth/standard.json', {
+        targetOrigin: 'https://201.1.1.1',
+      });
+      assert.equal(ipSuffixHeaders.Cookie, undefined, 'IP literals must never suffix-match cookie domains');
+    } finally {
+      process.chdir(prevCwd);
+      fs.rmSync(tmpAuthRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+

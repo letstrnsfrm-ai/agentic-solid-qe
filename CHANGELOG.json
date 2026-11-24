@@ -1,7 +1,19 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.48.17",
+  "latestVersion": "0.48.18",
   "releases": [
+    {
+      "version": "0.48.18",
+      "date": "2026-11-24",
+      "highlights": [
+        "fix(security): fix broken $-anchor in live secret redaction regex, enforce in-memory POSIX/PAX tar symlink/hardlink & gzip-bomb limits, and pin DNS socket IPs against SSRF rebinding",
+        "fix(security): block --emit-seeder template-literal code injection, replace regex stripComments with lexical scanner against nested template-literal comment smuggling, and harden ReDoS/prototype-pollution guards",
+        "fix(security): enforce unconditional Secure cookie transport & scalar OIDC token scoping in AuthTokenBridge, isolate CI release write permissions, and add package.json files allowlist"
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.48.18."
+      ]
+    },
     {
       "version": "0.48.17",
       "date": "2026-11-23",
