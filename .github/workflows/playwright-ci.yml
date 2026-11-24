@@ -70,6 +70,16 @@ jobs:
             exit 1
           fi
           npx --no-install playwright test --project=chromium --only-changed="origin/$GITHUB_BASE_REF" --grep "@smoke|@p0" --pass-with-no-tests
+      - name: Refresh Stakeholder Coverage Map
+        if: always()
+        run: npm run map
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        if: always()
+        with:
+          name: stakeholder-coverage-map-pr
+          path: reports/system-map.html
+          include-hidden-files: false
+          retention-days: 14
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: failure()
         with:
@@ -183,7 +193,7 @@ jobs:
           retention-days: 3
 
   merge-reports:
-    name: Merge Sharded HTML Reports
+    name: Merge Sharded HTML & Stakeholder Coverage Reports
     if: always() && github.event_name != 'pull_request'
     needs: playwright-e2e
     runs-on: ubuntu-latest
@@ -191,6 +201,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
@@ -218,10 +229,44 @@ jobs:
               }
             }
           '
-      - run: npx --no-install playwright merge-reports --reporter=html ./all-blob-reports
+      - run: npx --no-install playwright merge-reports --reporter=html --reporter=./scripts/system-map-reporter.mjs ./all-blob-reports
+      - run: npm run map
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: playwright-report-merged
           path: playwright-report/
           include-hidden-files: false
           retention-days: 3
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: stakeholder-coverage-map
+          path: reports/system-map.html
+          include-hidden-files: false
+          retention-days: 14
+      - name: Stage Stakeholder Map for GitHub Pages
+        if: vars.PUBLISH_STAKEHOLDER_PAGES == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        run: |
+          mkdir -p pages-dist
+          cp reports/system-map.html pages-dist/index.html
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        if: vars.PUBLISH_STAKEHOLDER_PAGES == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        with:
+          path: pages-dist/
+
+  publish-stakeholder-pages:
+    name: Publish Live Stakeholder Coverage Map (GitHub Pages)
+    if: always() && vars.PUBLISH_STAKEHOLDER_PAGES == 'true' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: merge-reports
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+

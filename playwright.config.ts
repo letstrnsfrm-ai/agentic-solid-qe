@@ -26,6 +26,9 @@ function resolveSafeBaseUrl(rawUrl: string | undefined): string {
 }
 
 const hasAuthSetup = fs.existsSync('tests/auth.setup.ts');
+const systemMapReporter: [string][] = fs.existsSync('./scripts/system-map-reporter.mjs')
+  ? [['./scripts/system-map-reporter.mjs']]
+  : [];
 const rawCdpPort = !isCI && /^\d{4,5}$/.test(process.env.EXPLORE_CDP_PORT || '')
   ? Number(process.env.EXPLORE_CDP_PORT)
   : undefined;
@@ -41,8 +44,8 @@ export default defineConfig({
   reporter: process.env.PW_BLOB_REPORT === '1'
     ? [['blob']]
     : isCI
-      ? [['html', { open: 'never' }], ['github'], ['junit', { outputFile: 'test-results/junit.xml' }]]
-      : [['list'], ['html', { open: 'never' }]],
+      ? [['html', { open: 'never' }], ['github'], ['junit', { outputFile: 'test-results/junit.xml' }], ...systemMapReporter]
+      : [['list'], ['html', { open: 'never' }], ...systemMapReporter],
   use: {
     baseURL: resolveSafeBaseUrl(process.env.BASE_URL),
     // Match your app's test-id attribute (e.g. 'data-testid'); unused if you locate by role/label/placeholder.

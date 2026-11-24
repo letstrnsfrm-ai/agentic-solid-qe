@@ -16,7 +16,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDomainGraph, seedShardsFromTapes } from './build-domain-graph.mjs';
-import { buildSystemMap } from './build-system-map.mjs';
 import { isCompactMode } from './lib/cli-output.mjs';
 import {
   FORBIDDEN_IDENTIFIERS,
@@ -2217,14 +2216,7 @@ ${specBody}
       }
     }
     if (!deferGraphRefresh) {
-      buildDomainGraph({ rootDir: ROOT, writeToDisk: true });
-      if (!skipMap && path.resolve(ROOT) === path.resolve(process.cwd())) {
-        try {
-          buildSystemMap({ quiet: true });
-        } catch {
-          /* non-fatal */
-        }
-      }
+      buildDomainGraph({ rootDir: ROOT, writeToDisk: true, skipMap });
     }
   }
 
@@ -2247,15 +2239,7 @@ ${specBody}
 }
 
 export function finalizeBatchDomainRefresh(rootDir = process.cwd(), { skipMap = false } = {}) {
-  const graph = buildDomainGraph({ rootDir, writeToDisk: true });
-  if (!skipMap && path.resolve(rootDir) === path.resolve(process.cwd())) {
-    try {
-      buildSystemMap({ quiet: true });
-    } catch {
-      /* non-fatal */
-    }
-  }
-  return graph;
+  return buildDomainGraph({ rootDir, writeToDisk: true, skipMap });
 }
 
 export function formatCompactCompileReport(report) {
