@@ -105,7 +105,7 @@ function parseShardFile(filePath, squadId = 'global', rootDir = process.cwd()) {
   };
 }
 
-export function buildDomainGraph({ rootDir = process.cwd(), writeToDisk = true } = {}) {
+export function buildDomainGraph({ rootDir = process.cwd(), writeToDisk = true, skipMap = false } = {}) {
   const domainDir = path.join(rootDir, '.agents/domain');
   const graphOut = path.join(domainDir, 'domain-graph.json');
   const domainMemoryPath = path.join(domainDir, 'domain-memory.md');
@@ -209,6 +209,13 @@ export function buildDomainGraph({ rootDir = process.cwd(), writeToDisk = true }
 
   if (writeToDisk && fs.existsSync(domainDir) && !isUnsafeWritePath(graphOut)) {
     fs.writeFileSync(graphOut, JSON.stringify(graph, null, 2) + '\n', 'utf8');
+    if (!skipMap && process.env.ASQE_SKIP_SYSTEM_MAP !== '1') {
+      try {
+        buildSystemMap({ rootDir, quiet: true });
+      } catch {
+        /* non-fatal if reports/ cannot be written */
+      }
+    }
   }
 
   return graph;
@@ -408,14 +415,7 @@ if (isMain) {
       console.log('ℹ️  No new shards needed from Session Tapes.');
     }
   }
-  const graph = buildDomainGraph({ writeToDisk: true });
-  if (!skipMap) {
-    try {
-      buildSystemMap({ quiet: true });
-    } catch {
-      /* non-fatal if reports/ cannot be written */
-    }
-  }
+  const graph = buildDomainGraph({ writeToDisk: true, skipMap });
   console.log(
     `🧠 Compiled Federated Domain Graph -> .agents/domain/domain-graph.json (${graph.summary.totalDomainHubs} domain hub(s), ${graph.summary.totalShards} shard(s), ${Object.keys(graph.routeIndex).length} indexed route(s)).`
   );

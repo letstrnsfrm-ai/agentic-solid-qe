@@ -96,7 +96,7 @@ Usage:
   cortex migrate <legacy-path> [--name <skill-id>] [--squad <squad>] [--apply]
   cortex wave [options]        2,000-test Squad Wave Factory, Wave-0 Seeders/Flows & HTML Parity Dashboard
   cortex graph                 Compile 3-Tier Federated Brain (.agents/domain/domain-graph.json)
-  cortex map [--out <path>]    Generate interactive HTML System & Business Flow Map (reports/system-map.html)
+  cortex map [--serve|--out]   Generate or live-serve Executive Business Coverage & System Map (reports/system-map.html)
   cortex context [options]     Build single-call <=400-token Context Pack (--route/--squad/--tape/--spec/--file)
   cortex impact [options]      Fixture-aware blast-radius & affected-spec analyzer (--file/--base/--specs-only)
   cortex tape <cmd> [args]     Compact Session Tape CLI (list | show | clone | patch) with v1 validation
@@ -822,6 +822,7 @@ function mergeConsumerPackageJson() {
     typecheck: 'tsc --noEmit',
     'domain:graph': 'node scripts/build-domain-graph.mjs',
     map: 'node scripts/build-system-map.mjs',
+    'map:serve': 'node scripts/build-system-map.mjs --serve',
     'compile:tape': 'node scripts/compile-tape.mjs',
     context: 'node scripts/context-pack.mjs',
     tape: 'node scripts/tape-cli.mjs',
@@ -1302,6 +1303,7 @@ const coreEnginePaths = [
   'scripts/tape-cli.mjs',
   'scripts/build-domain-graph.mjs',
   'scripts/build-system-map.mjs',
+  'scripts/system-map-reporter.mjs',
   'scripts/compile-tape.mjs',
   'scripts/explore-session.mjs',
   'scripts/export-auth-state.mjs',

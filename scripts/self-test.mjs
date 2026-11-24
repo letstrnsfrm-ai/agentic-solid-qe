@@ -6785,6 +6785,129 @@ test('security-audit: Zip-Slip tar validation, repo slug hardening, ReDoS guards
   }
 });
 
+test('Stakeholder HTML View & Auto-Refresh: parses multi-test specs + test.step(), separates Business vs Engineering lenses, overlays SystemMapReporter pass/fail, and tracks wave growth', async () => {
+  const { buildDomainGraph } = await import('./build-domain-graph.mjs');
+  const { collectSystemKnowledge } = await import('./build-system-map.mjs');
+  const { default: SystemMapReporter } = await import('./system-map-reporter.mjs');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-stakeholder-map-'));
+  try {
+    const initRes = runNode(
+      SYNC_SCRIPT,
+      ['init', tmpDir, '--url', 'https://billing.example.com', '--name', 'EnterprisePortal'],
+      REPO_ROOT
+    );
+    assert.equal(initRes.status, 0, `init failed: ${initRes.stderr}`);
+
+    // 1. Create two domain shards (Billing + Claims)
+    fs.mkdirSync(path.join(tmpDir, '.agents/domain/shards'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.agents/domain/shards/billing.md'),
+      '# Domain Shard: Billing & Invoices\n- **Owner Squad:** `@org/billing`\n- **Last Verified:** `2026-11-24`\n- **Published Capabilities:** `InvoicePayment`\n- Routes: `/billing`, `/invoices`\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.agents/domain/shards/claims.md'),
+      '# Domain Shard: Claims Adjudication\n- **Owner Squad:** `@org/claims`\n- **Last Verified:** `2026-11-24`\n- **Published Capabilities:** none yet\n- Routes: `/claims`\n',
+      'utf8'
+    );
+
+    // 2. Add an uncompiled Session Tape (Explored-Only) for Claims
+    fs.mkdirSync(path.join(tmpDir, '.exploratory/tapes'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.exploratory/tapes/claims-fnol.json'),
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        scenarioId: 'claims-fnol',
+        title: 'FNOL Claim Submission',
+        charter: 'happy-path-baseline',
+        tags: ['@smoke'],
+        persona: { role: 'adjuster' },
+        semanticSteps: [{ stepIndex: 1, businessStep: 'Open FNOL portal', pageRoute: '/claims', action: 'goto' }],
+        networkContracts: [],
+        expectedStates: [],
+      }),
+      'utf8'
+    );
+
+    // 3. Programmatic buildDomainGraph({ rootDir, writeToDisk: true }) auto-generates reports/system-map.html (Wave 1: 0 automated, 1 explored)
+    buildDomainGraph({ rootDir: tmpDir, writeToDisk: true });
+    const mapPath = path.join(tmpDir, 'reports/system-map.html');
+    assert.ok(fs.existsSync(mapPath), 'Programmatic buildDomainGraph must auto-generate reports/system-map.html');
+
+    // 4. Add a multi-test spec file with plain-English test.step() blocks for Billing (Wave 2: +2 automated scenarios)
+    fs.mkdirSync(path.join(tmpDir, 'tests'), { recursive: true });
+    const specRel = 'tests/billing-ledger.spec.ts';
+    const specAbs = path.join(tmpDir, specRel);
+    fs.writeFileSync(
+      specAbs,
+      `import { test, expect } from '@fixtures/app.fixture';
+test.describe('Billing Ledger Suite', () => {
+  test('Settle primary invoice in full @p0 @smoke', async ({ page }) => {
+    await test.step('Open invoice ledger on /billing', async () => {});
+    await test.step('Post wire payment and verify paid status', async () => {});
+  });
+  test('Reject overpayment exceeding invoice balance @regression', async ({ page }) => {
+    await test.step('Submit overpayment amount on /invoices', async () => {});
+  });
+});
+`,
+      'utf8'
+    );
+
+    // 5. Simulate Playwright execution via SystemMapReporter (1 passed, 1 failed)
+    const reporter = new SystemMapReporter({ rootDir: tmpDir });
+    reporter.onBegin({ rootDir: path.join(tmpDir, 'tests') });
+    reporter.onTestEnd(
+      {
+        title: 'Settle primary invoice in full @p0 @smoke',
+        location: { file: specAbs },
+        outcome: () => 'expected',
+      },
+      {
+        status: 'passed',
+        duration: 420,
+        steps: [
+          { category: 'test.step', title: 'Open invoice ledger on /billing' },
+          { category: 'test.step', title: 'Post wire payment and verify paid status' },
+        ],
+      }
+    );
+    reporter.onTestEnd(
+      {
+        title: 'Reject overpayment exceeding invoice balance @regression',
+        location: { file: specAbs },
+        outcome: () => 'unexpected',
+      },
+      {
+        status: 'failed',
+        duration: 610,
+        steps: [{ category: 'test.step', title: 'Submit overpayment amount on /invoices' }],
+      }
+    );
+    reporter.onEnd({ status: 'failed', duration: 1030 });
+
+    // 6. Verify collected knowledge & refreshed Dual-Persona HTML
+    const model = collectSystemKnowledge(tmpDir);
+    assert.equal(model.executive.automatedScenarios, 2, 'Should parse both test() blocks from spec');
+    assert.equal(model.executive.exploredOnlyScenarios, 1, 'Should track uncompiled tape as explored-only');
+    assert.equal(model.executive.totalBusinessSteps, 3, 'Should count all 3 plain-English test.step() items');
+    assert.equal(model.executive.p0Scenarios, 1, 'Should detect @p0 scenario');
+    assert.equal(model.executive.passedScenarios, 1, 'Should overlay passed status from reporter');
+    assert.equal(model.executive.failedScenarios, 1, 'Should overlay failed status from reporter');
+    assert.equal(model.executive.domainCoveragePct, 50, '1 of 2 shards has automated specs (50%)');
+    assert.ok(model.trend.length >= 2, 'Should record coverage growth across waves');
+
+    const html = fs.readFileSync(mapPath, 'utf8');
+    assert.ok(html.includes('Business View'), 'HTML must render Business Stakeholder lens button');
+    assert.ok(html.includes('Engineering Lens'), 'HTML must render Engineering Lens toggle');
+    assert.ok(html.includes('@media print'), 'HTML must include Print / Executive PDF stylesheet');
+    assert.ok(html.includes('Post wire payment and verify paid status'), 'HTML must include plain-English test.step()');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('security-audit-v0.48.18: secret redaction, tar symlink/PAX defense, SSRF/URL parser differentials, seeder codegen, lexical stripComments, ReDoS & AuthTokenBridge', async () => {
   const {
     isSensitiveInput,

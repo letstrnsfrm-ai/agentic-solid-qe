@@ -1,6 +1,6 @@
 {
   "name": "agentic-solid-qe",
-  "version": "0.48.18",
+  "version": "0.49.0",
   "description": "Zero-API-key agent skill framework bridging Autonomous Exploratory Testing (agent-browser) and SOLID Playwright TypeScript Architecture.",
   "license": "MIT",
   "type": "module",
@@ -48,6 +48,7 @@
     "typecheck": "tsc --noEmit",
     "domain:graph": "node scripts/build-domain-graph.mjs",
     "map": "node scripts/build-system-map.mjs",
+    "map:serve": "node scripts/build-system-map.mjs --serve",
     "compile:tape": "node scripts/compile-tape.mjs",
     "context": "node scripts/context-pack.mjs",
     "impact": "node scripts/impact-graph.mjs",

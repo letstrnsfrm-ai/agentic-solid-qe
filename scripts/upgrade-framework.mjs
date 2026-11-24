@@ -205,6 +205,7 @@ const ALLOWED_UPGRADE_PATCH_TARGETS = new Set([
   'scripts/tape-cli.mjs',
   'scripts/build-domain-graph.mjs',
   'scripts/build-system-map.mjs',
+  'scripts/system-map-reporter.mjs',
   'scripts/compile-tape.mjs',
   'scripts/explore-session.mjs',
   'scripts/export-auth-state.mjs',

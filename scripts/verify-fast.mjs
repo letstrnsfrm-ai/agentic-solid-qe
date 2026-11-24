@@ -14,7 +14,6 @@ import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { buildDomainGraph } from './build-domain-graph.mjs';
-import { buildSystemMap } from './build-system-map.mjs';
 import { resolveLocalBin } from './explore-session.mjs';
 import { analyzeImpact } from './impact-graph.mjs';
 import {
@@ -193,14 +192,7 @@ export async function runFastVerify({
   const domainGraphPromise = Promise.resolve().then(() => {
     const t0 = performance.now();
     try {
-      const graph = buildDomainGraph({ rootDir, writeToDisk: true });
-      if (!skipMap && path.resolve(rootDir) === path.resolve(process.cwd())) {
-        try {
-          buildSystemMap({ quiet: true });
-        } catch {
-          /* non-fatal */
-        }
-      }
+      const graph = buildDomainGraph({ rootDir, writeToDisk: true, skipMap });
       return {
         name: 'domainGraph',
         status: 0,
