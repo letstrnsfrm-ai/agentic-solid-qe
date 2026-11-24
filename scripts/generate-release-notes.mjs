@@ -237,6 +237,13 @@ function statusBadge(status) {
   }
 }
 
+export function sanitizeReleaseCommitText(val) {
+  return String(val ?? '')
+    .replace(/[\x00-\x1f\x7f\u202A-\u202E\u2066-\u2069\r\n]+/g, ' ')
+    .replace(/([|`<>\[\]])/g, '\\$1')
+    .trim();
+}
+
 function generateMarkdown({
   repoSlug,
   previousTag,
@@ -247,8 +254,11 @@ function generateMarkdown({
   compareBaseRef,
 }) {
   const headlineCommit = commits[0];
-  const releaseTitle = headlineCommit
-    ? `${nextTag} — ${headlineCommit.subject}`
+  const cleanHeadline = headlineCommit
+    ? String(headlineCommit.subject || '').replace(/[\x00-\x1f\x7f\u202A-\u202E\u2066-\u2069\r\n]+/g, ' ').trim()
+    : '';
+  const releaseTitle = cleanHeadline
+    ? `${nextTag} — ${cleanHeadline}`
     : `${nextTag}`;
 
   const sections = [];
@@ -295,12 +305,14 @@ function generateMarkdown({
     if (matching.length === 0) continue;
     sections.push(group.title);
     sections.push('');
+    const escapeMdInline = sanitizeReleaseCommitText;
     for (const commit of matching) {
-      const scopePrefix = commit.scope ? `**${commit.scope}:** ` : '';
+      const scopePrefix = commit.scope ? `**${escapeMdInline(commit.scope)}:** ` : '';
       const commitUrl = `https://github.com/${repoSlug}/commit/${commit.hash}`;
-      const authorSuffix = commit.author ? ` by **${commit.author}**` : '';
+      const safeAuthor = commit.author ? escapeMdInline(commit.author).replace(/@/g, '@\u200B') : '';
+      const authorSuffix = safeAuthor ? ` by **${safeAuthor}**` : '';
       sections.push(
-        `- ${scopePrefix}${commit.description} ([\`${commit.shortHash}\`](${commitUrl}))${authorSuffix}`
+        `- ${scopePrefix}${escapeMdInline(commit.description)} ([\`${commit.shortHash}\`](${commitUrl}))${authorSuffix}`
       );
     }
     sections.push('');
@@ -334,6 +346,11 @@ function generateMarkdown({
     },
   ];
 
+  const sanitizePathCode = (p) =>
+    String(p ?? '')
+      .replace(/[\u202A-\u202E\u2066-\u2069\r\n`|<>]/g, '')
+      .trim();
+
   if (diff.files.length > 0) {
     sections.push('### 📦 Repository Impact Breakdown');
     sections.push('');
@@ -347,7 +364,7 @@ function generateMarkdown({
       const deleted = areaFiles.reduce((sum, f) => sum + f.deleted, 0);
       const samplePaths = areaFiles
         .slice(0, 3)
-        .map((f) => `\`${f.path}\``)
+        .map((f) => `\`${sanitizePathCode(f.path)}\``)
         .join(', ');
       const extraCount = areaFiles.length > 3 ? ` _(+${areaFiles.length - 3} more)_` : '';
       sections.push(
@@ -363,7 +380,7 @@ function generateMarkdown({
     sections.push('| :--- | :--- | :---: |');
     for (const file of diff.files) {
       sections.push(
-        `| ${statusBadge(file.status)} | \`${file.path}\` | \`+${file.added}\` / \`-${file.deleted}\` |`
+        `| ${statusBadge(file.status)} | \`${sanitizePathCode(file.path)}\` | \`+${file.added}\` / \`-${file.deleted}\` |`
       );
     }
     sections.push('');
@@ -376,8 +393,8 @@ function generateMarkdown({
   sections.push('');
   sections.push('```bash');
   sections.push('npm run upgrade:skills');
-  sections.push('# or directly via npx (pinned to this release tag):');
-  sections.push(`npx --yes github:${repoSlug}#${nextTag} sync`);
+  sections.push('# or pin to this release tag explicitly:');
+  sections.push(`npx cortex upgrade --to ${nextTag}`);
   sections.push('```');
   sections.push('');
 
@@ -408,11 +425,14 @@ function assertValidSha(sha, sourceLabel) {
 export function resolveSafeRepoOutputPath(targetPath, flagName, rootDir = ROOT) {
   const resolvedRoot = path.resolve(rootDir);
   const resolved = path.resolve(resolvedRoot, targetPath);
-  const relToRoot = path.relative(resolvedRoot, resolved);
+  const relToRoot = path.relative(resolvedRoot, resolved).replace(/\\/g, '/');
   if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
     throw new Error(
       `Invalid ${flagName} path '${targetPath}'. Output path must reside within the repository root.`
     );
+  }
+  if (relToRoot === '.git' || relToRoot.startsWith('.git/')) {
+    throw new Error(`Security Error: Refusing to write ${flagName} inside '.git/'.`);
   }
   let cur = resolved;
   while (cur !== resolvedRoot) {
@@ -456,7 +476,7 @@ export function syncReleaseManifests(rootDir, { version, date = null, highlights
   const isoDate = date || new Date().toISOString().slice(0, 10);
   const updatedFiles = [];
 
-  const pkgPath = path.join(rootDir, 'package.json');
+  const pkgPath = resolveSafeRepoOutputPath('package.json', 'package.json', rootDir);
   if (fs.existsSync(pkgPath)) {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     if (pkg.version !== cleanVersion) {
@@ -466,7 +486,7 @@ export function syncReleaseManifests(rootDir, { version, date = null, highlights
     }
   }
 
-  const lockPath = path.join(rootDir, 'package-lock.json');
+  const lockPath = resolveSafeRepoOutputPath('package-lock.json', 'package-lock.json', rootDir);
   if (fs.existsSync(lockPath)) {
     const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
     let lockChanged = false;
@@ -484,7 +504,7 @@ export function syncReleaseManifests(rootDir, { version, date = null, highlights
     }
   }
 
-  const changelogPath = path.join(rootDir, 'CHANGELOG.json');
+  const changelogPath = resolveSafeRepoOutputPath('CHANGELOG.json', 'CHANGELOG.json', rootDir);
   if (fs.existsSync(changelogPath)) {
     const changelog = JSON.parse(fs.readFileSync(changelogPath, 'utf8'));
     let changelogChanged = false;
@@ -497,7 +517,7 @@ export function syncReleaseManifests(rootDir, { version, date = null, highlights
     }
     if (changelog.releases[0]?.version !== cleanVersion) {
       const cleanHighlights = (highlights || [])
-        .map((h) => String(h || '').trim())
+        .map((h) => String(h || '').replace(/[\u202A-\u202E\u2066-\u2069\r\n]/g, ' ').trim())
         .filter(Boolean)
         .slice(0, 5);
       changelog.releases.unshift({

@@ -502,10 +502,22 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         checkUnknownKeys(nc, VALID_NETWORK_KEYS, `[${file} networkContracts]`, errors);
         if (typeof nc.urlPattern !== 'string' || !nc.urlPattern.trim()) {
           errors.push(`[${file}] networkContracts entry missing required 'urlPattern'.`);
-        } else if (hasQuerySecretParam(nc.urlPattern)) {
-          errors.push(
-            `[${file}] networkContracts.urlPattern '${nc.urlPattern}' contains a secret query parameter (?api_key=, ?token=, ?password=, etc.).`
-          );
+        } else {
+          const urlPat = nc.urlPattern;
+          if (
+            /[`\\]|(?:\$\{)|[\x00-\x20\x7f]|(?:^|\/)\.\.(?:\/|$)/.test(urlPat) ||
+            (!urlPat.startsWith('/') && !urlPat.startsWith('**/') && !urlPat.startsWith('*/') && !/^https?:\/\//i.test(urlPat)) ||
+            urlPat.startsWith('//') ||
+            (/^https?:\/\//i.test(urlPat) && !isValidHttpUrl(urlPat))
+          ) {
+            errors.push(
+              `[${file}] Unsafe networkContracts.urlPattern '${urlPat}'. Must be a safe root-relative/glob API path or valid http(s):// URL without backticks, template expressions, or traversal.`
+            );
+          } else if (hasQuerySecretParam(urlPat)) {
+            errors.push(
+              `[${file}] networkContracts.urlPattern '${urlPat}' contains a secret query parameter (?api_key=, ?token=, ?password=, etc.).`
+            );
+          }
         }
         if (nc.clientCandidate !== undefined && !isSafeClassName(nc.clientCandidate)) {
           errors.push(`[${file}] Invalid networkContracts.clientCandidate '${nc.clientCandidate}'.`);
@@ -518,6 +530,37 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         }
         if (typeof nc.expectedStatus !== 'number' || !Number.isInteger(nc.expectedStatus) || nc.expectedStatus < 100 || nc.expectedStatus > 599) {
           errors.push(`[${file}] Invalid networkContracts.expectedStatus '${nc.expectedStatus}'.`);
+        }
+      }
+    }
+  }
+
+  if (tape.datasets !== undefined) {
+    if (!Array.isArray(tape.datasets)) {
+      errors.push(`[${file}] datasets must be an array.`);
+    } else {
+      const validDatasetKeys = new Set(['name', 'values']);
+      for (const ds of tape.datasets) {
+        if (!ds || typeof ds !== 'object' || Array.isArray(ds)) {
+          errors.push(`[${file}] datasets entry must be a non-null object.`);
+          continue;
+        }
+        checkUnknownKeys(ds, validDatasetKeys, `[${file} datasets]`, errors);
+        if (typeof ds.name !== 'string' || !ds.name.trim() || ds.name.length > 120) {
+          errors.push(`[${file}] datasets.name must be a non-empty string <= 120 chars.`);
+        }
+        if (!ds.values || typeof ds.values !== 'object' || Array.isArray(ds.values)) {
+          errors.push(`[${file}] datasets.values must be a non-null object.`);
+        } else {
+          for (const key of Object.getOwnPropertyNames(ds.values)) {
+            if (FORBIDDEN_IDENTIFIERS.has(key) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+              errors.push(`[${file}] Unsafe datasets.values key '${key}'.`);
+            }
+            const val = ds.values[key];
+            if (typeof val !== 'string' && typeof val !== 'number' && typeof val !== 'boolean') {
+              errors.push(`[${file}] datasets.values['${key}'] must be a primitive string, number, or boolean.`);
+            }
+          }
         }
       }
     }
@@ -539,6 +582,15 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
     );
   }
 
+  const validExpectedLocatorStrategies = new Set([
+    'getByRole',
+    'getByLabel',
+    'getByPlaceholder',
+    'getByText',
+    'getByTestId',
+    'locator',
+  ]);
+
   if (!Array.isArray(tape.expectedStates) || tape.expectedStates.length === 0) {
     errors.push(`[${file}] expectedStates must be a non-empty array.`);
   } else {
@@ -556,6 +608,59 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
       }
       if (!isSafeMemberRef(state.targetProperty)) {
         errors.push(`[${file}] Invalid expectedStates.targetProperty '${state.targetProperty}'.`);
+      }
+      if (state.locatorContract !== undefined) {
+        if (!state.locatorContract || typeof state.locatorContract !== 'object' || Array.isArray(state.locatorContract)) {
+          errors.push(`[${file}] expectedStates.locatorContract must be a non-null object.`);
+        } else {
+          checkUnknownKeys(
+            state.locatorContract,
+            VALID_LOCATOR_KEYS,
+            `[${file} expectedStates.locatorContract]`,
+            errors
+          );
+          if (!validExpectedLocatorStrategies.has(state.locatorContract.strategy)) {
+            errors.push(
+              `[${file}] Invalid expectedStates.locatorContract.strategy '${state.locatorContract.strategy}'.`
+            );
+          }
+          if (typeof state.locatorContract.value !== 'string') {
+            errors.push(`[${file}] expectedStates.locatorContract.value must be a string.`);
+          } else if (/^@?e\d+$/.test(state.locatorContract.value)) {
+            errors.push(
+              `[${file}] Ephemeral CLI ref '${state.locatorContract.value}' leaked into expectedStates.locatorContract.value!`
+            );
+          }
+          if (
+            state.locatorContract.nth !== undefined &&
+            (!Number.isInteger(state.locatorContract.nth) || state.locatorContract.nth < 0)
+          ) {
+            errors.push(`[${file}] expectedStates.locatorContract.nth must be a non-negative integer.`);
+          }
+          if (state.locatorContract.parentScope !== undefined) {
+            const ps = state.locatorContract.parentScope;
+            if (!ps || typeof ps !== 'object' || Array.isArray(ps)) {
+              errors.push(`[${file}] expectedStates.locatorContract.parentScope must be an object.`);
+            } else {
+              checkUnknownKeys(
+                ps,
+                VALID_PARENT_SCOPE_KEYS,
+                `[${file} expectedStates.locatorContract.parentScope]`,
+                errors
+              );
+              const validParentStrategies = new Set(['getByRole', 'getByLabel', 'getByTestId', 'locator']);
+              if (!ps.strategy || !validParentStrategies.has(ps.strategy)) {
+                errors.push(`[${file}] Invalid expectedStates parentScope.strategy '${ps.strategy}'.`);
+              }
+              if (typeof ps.value !== 'string' || !ps.value.trim()) {
+                errors.push(`[${file}] expectedStates parentScope.value must be a non-empty string.`);
+              }
+              if (ps.filterTextRef !== undefined && !isSafeMemberRef(ps.filterTextRef)) {
+                errors.push(`[${file}] Invalid expectedStates parentScope.filterTextRef '${ps.filterTextRef}'.`);
+              }
+            }
+          }
+        }
       }
       if (state.actor !== undefined) {
         if (

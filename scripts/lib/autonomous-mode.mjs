@@ -134,11 +134,26 @@ export function loadAutonomousSession(rootDir = process.cwd()) {
   }
 }
 
+function sanitizeLedgerInline(val, maxLen = 300) {
+  return String(val ?? '')
+    .replace(/[\u202A-\u202E\u2066-\u2069\x00-\x1F\x7F]/g, ' ')
+    .replace(/`/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+}
+
 export function saveAutonomousSession(rootDir = process.cwd(), session) {
   const sessionPath = resolveSafeInRoot(rootDir, AUTONOMOUS_SESSION_REL_PATH);
   fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
   session.updatedAt = new Date().toISOString();
-  fs.writeFileSync(sessionPath, JSON.stringify(session, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(sessionPath, JSON.stringify(session, null, 2) + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  try {
+    fs.chmodSync(sessionPath, 0o600);
+  } catch {}
   return sessionPath;
 }
 
@@ -147,7 +162,13 @@ function appendLedgerMarkdown(rootDir, block) {
   fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
   const existing = fs.existsSync(ledgerPath) ? fs.readFileSync(ledgerPath, 'utf8') : '';
   const sep = existing && !existing.endsWith('\n\n') ? (existing.endsWith('\n') ? '\n' : '\n\n') : '';
-  fs.writeFileSync(ledgerPath, existing + sep + block.trimEnd() + '\n', 'utf8');
+  fs.writeFileSync(ledgerPath, existing + sep + block.trimEnd() + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  try {
+    fs.chmodSync(ledgerPath, 0o600);
+  } catch {}
   return ledgerPath;
 }
 
@@ -187,6 +208,7 @@ export function startAutonomousSession(
   const isoNow = new Date(nowMs).toISOString();
   const shortId = crypto.randomBytes(3).toString('hex');
   const sessionId = `auto-${isoNow.slice(0, 10).replace(/-/g, '')}-${shortId}`;
+  const safeGoal = sanitizeLedgerInline(goal, 240) || 'Achieve verified SOLID automation coverage';
 
   const session = {
     schemaVersion: 1,
@@ -200,7 +222,7 @@ export function startAutonomousSession(
     checkinCount: 0,
     cycleCount: 0,
     objectives: {
-      goal: String(goal || '').trim() || 'Achieve verified SOLID automation coverage',
+      goal: safeGoal,
       focus: normalizedFocus,
       routes: normalizedRoutes,
       squad: squad || null,
@@ -217,7 +239,7 @@ export function startAutonomousSession(
       maxConsecutiveShardFailures: DEFAULT_MAX_CONSECUTIVE_SHARD_FAILURES,
       workspaceOnly: true,
     },
-    failureCounts: {},
+    failureCounts: Object.create(null),
     quarantined: [],
     decisions: [],
     lastFingerprint: null,
@@ -236,15 +258,18 @@ export function startAutonomousSession(
     ``,
     `- **Session ID:** \`${session.sessionId}\``,
     `- **Started:** \`${isoNow}\``,
-    `- **Objective:** ${session.objectives.goal}`,
+    `- **Objective:** ${safeGoal}`,
     `- **Focus:** \`${session.objectives.focus}\` | **Check-In Interval:** \`${session.schedule.intervalLabel}\` (soft pause)`,
-    `- **Scope Routes:** ${normalizedRoutes.length > 0 ? normalizedRoutes.map((r) => `\`${r}\``).join(', ') : '*(all discovered shards)*'}`,
+    `- **Scope Routes:** ${normalizedRoutes.length > 0 ? normalizedRoutes.map((r) => `\`${sanitizeLedgerInline(r, 120)}\``).join(', ') : '*(all discovered shards)*'}`,
     `- **Guardrails:** workspace-only (no \`git push\`/PR), max ${session.guardrails.maxConsecutiveShardFailures} consecutive failures/shard -> quarantine, max ${session.schedule.maxCycles} cycles${maxRuntimeMs ? `, max runtime ${formatDurationHuman(maxRuntimeMs)}` : ''}`,
     ``,
     `---`,
     ``,
   ].join('\n');
-  fs.writeFileSync(ledgerPath, header, 'utf8');
+  fs.writeFileSync(ledgerPath, header, { encoding: 'utf8', mode: 0o600 });
+  try {
+    fs.chmodSync(ledgerPath, 0o600);
+  } catch {}
 
   return { session, sessionPath, ledgerPath };
 }
@@ -341,15 +366,17 @@ export function recordAutonomousDecision(rootDir, session, entry, { nowMs = Date
   const decision = {
     cycle: entry.cycle ?? session.cycleCount,
     at: new Date(nowMs).toISOString(),
-    gateId: entry.gateId || 'autonomous-step',
-    skill: entry.skill || 'agentic-solid-qe',
-    action: entry.action || 'auto-decided',
-    chosenOptionId: entry.chosenOptionId || '',
-    chosenLabel: entry.chosenLabel || '',
-    command: entry.command || '',
-    rationale: entry.rationale || '',
-    alternatives: Array.isArray(entry.alternatives) ? entry.alternatives : [],
-    outcome: entry.outcome || 'recorded',
+    gateId: sanitizeLedgerInline(entry.gateId || 'autonomous-step', 80),
+    skill: sanitizeLedgerInline(entry.skill || 'agentic-solid-qe', 80),
+    action: sanitizeLedgerInline(entry.action || 'auto-decided', 80),
+    chosenOptionId: sanitizeLedgerInline(entry.chosenOptionId || '', 80),
+    chosenLabel: sanitizeLedgerInline(entry.chosenLabel || '', 240),
+    command: sanitizeLedgerInline(entry.command || '', 240),
+    rationale: sanitizeLedgerInline(entry.rationale || '', 300),
+    alternatives: Array.isArray(entry.alternatives)
+      ? entry.alternatives.map((a) => sanitizeLedgerInline(a, 160))
+      : [],
+    outcome: sanitizeLedgerInline(entry.outcome || 'recorded', 120),
   };
   session.decisions.push(decision);
   saveAutonomousSession(rootDir, session);
@@ -380,15 +407,18 @@ export function quarantineAutonomousItem(
   session,
   { key, reason, category = 'repeated-failure', defectFile = null, nowMs = Date.now() }
 ) {
-  const normKey = String(key || '').trim().toLowerCase();
+  const normKey = sanitizeLedgerInline(String(key || '').trim().toLowerCase(), 140);
   if (!normKey) throw new Error('Quarantine key is required.');
+  const safeReason = sanitizeLedgerInline(reason || 'Quarantined during autonomous execution', 240);
+  const safeCategory = sanitizeLedgerInline(category, 80);
+  const safeDefect = defectFile ? sanitizeLedgerInline(defectFile, 160) : null;
   const existing = session.quarantined.find((q) => q.key === normKey);
   if (!existing) {
     session.quarantined.push({
       key: normKey,
-      reason: String(reason || 'Quarantined during autonomous execution'),
-      category,
-      ...(defectFile ? { defectFile } : {}),
+      reason: safeReason,
+      category: safeCategory,
+      ...(safeDefect ? { defectFile: safeDefect } : {}),
       at: new Date(nowMs).toISOString(),
     });
   }
@@ -396,8 +426,8 @@ export function quarantineAutonomousItem(
   appendLedgerMarkdown(
     rootDir,
     [
-      `> ⚠️ **Quarantined \`${normKey}\`** (\`${category}\`)${defectFile ? ` — see \`${defectFile}\`` : ''}`,
-      `> Reason: ${reason}`,
+      `> ⚠️ **Quarantined \`${normKey}\`** (\`${safeCategory}\`)${safeDefect ? ` — see \`${safeDefect}\`` : ''}`,
+      `> Reason: ${safeReason}`,
     ].join('\n')
   );
   return session;

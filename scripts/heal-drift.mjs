@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isSafeRegexPattern } from './dotnet-enterprise-analyzer.mjs';
 import { isCompactMode } from './lib/cli-output.mjs';
 import { getFileImpact } from './impact-graph.mjs';
 import { runFastVerify } from './verify-fast.mjs';
@@ -185,6 +186,7 @@ export function assertSafePlaywrightLocatorExpr(rawExpr) {
   const parseRegexLiteral = () => {
     if (stripped[pos] !== '/') fail('expected regex literal');
     pos++;
+    const bodyStart = pos;
     let inCharClass = false;
     let bodyLen = 0;
     while (pos < stripped.length) {
@@ -199,6 +201,10 @@ export function assertSafePlaywrightLocatorExpr(rawExpr) {
       else if (ch === ']') inCharClass = false;
       else if (ch === '/' && !inCharClass) {
         if (bodyLen === 0) fail('empty regex literal');
+        const regexBody = stripped.slice(bodyStart, pos - 1);
+        if (!isSafeRegexPattern(regexBody)) {
+          fail('unsafe ReDoS regex pattern');
+        }
         while (pos < stripped.length && /[gimsuy]/.test(stripped[pos])) pos++;
         return;
       }
@@ -347,6 +353,7 @@ export function sanitizeDefectErrorExcerpt(rawText) {
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, '[REDACTED_GITHUB_TOKEN]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[REDACTED_GITHUB_PAT]')
     .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_API_KEY]')
+    .replace(/\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{8,}\b/g, '[REDACTED_STRIPE_KEY]')
     .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]')
     .replace(/\bAIza[0-9A-Za-z_-]{35}\b/g, '[REDACTED_GCP_KEY]')
     .replace(/\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g, '[REDACTED_SLACK_TOKEN]')
@@ -358,8 +365,8 @@ export function sanitizeDefectErrorExcerpt(rawText) {
       '$1[REDACTED_CREDENTIALS]@'
     )
     .replace(
-      /\b(password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token)\s*([:=])\s*(['"`])([^'"`\n]{4,})\3/gi,
-      '$1$2$3[REDACTED]$3'
+      /(['"`]?)\b(password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token)\b\1\s*([:=])\s*(['"`])([^'"`\n]{4,})\4/gi,
+      '$1$2$1$3$4[REDACTED]$4'
     );
 }
 
@@ -910,6 +917,10 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
     const defectRel = `defects/DEFECT-${ts}-${slug}.md`;
     const defectFull = assertNoSymlinkEscape(projectRoot, path.join(projectRoot, defectRel), 'defect report');
     const safeExcerpt = sanitizeDefectErrorExcerpt(errorText.slice(0, 1200));
+    const safeSpecLabel = String(specPath || 'unknown').replace(/[\r\n`<>]/g, ' ').trim();
+    const backtickRuns = safeExcerpt.match(/`+/g) || [];
+    const maxTicks = backtickRuns.reduce((m, r) => Math.max(m, r.length), 0);
+    const fence = '`'.repeat(Math.max(4, maxTicks + 1));
     fs.mkdirSync(path.dirname(defectFull), { recursive: true });
     fs.writeFileSync(
       defectFull,
@@ -918,13 +929,13 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
         ``,
         `- **Detected By:** \`npx cortex heal\``,
         `- **Root Cause Category:** Case ${rootCause.caseId} (${rootCause.category})`,
-        `- **Spec:** \`${specPath || 'unknown'}\``,
-        `- **Summary:** ${rootCause.summary}`,
+        `- **Spec:** \`${safeSpecLabel}\``,
+        `- **Summary:** ${String(rootCause.summary || '').replace(/[\r\n]/g, ' ')}`,
         ``,
         `## Error Excerpt`,
-        `\`\`\``,
+        fence,
         safeExcerpt,
-        `\`\`\``,
+        fence,
         ``,
         `## Guardrail Note`,
         `Strict \`expect()\` assertions in the spec were preserved (never weakened).`,
@@ -1022,8 +1033,8 @@ export async function healDriftWithGuardrail(projectRoot, options = {}) {
   const backupFiles = new Map();
   const snapshotIfExists = (relPath) => {
     if (!relPath) return;
-    const abs = path.resolve(projectRoot, relPath);
-    if (isWithinDir(abs, projectRoot) && fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+    const abs = assertNoSymlinkEscape(projectRoot, path.resolve(projectRoot, relPath), 'rollback snapshot');
+    if (fs.existsSync(abs) && fs.lstatSync(abs).isFile()) {
       backupFiles.set(abs, fs.readFileSync(abs, 'utf8'));
     }
   };
@@ -1066,6 +1077,7 @@ export async function healDriftWithGuardrail(projectRoot, options = {}) {
 
   if (!verifyRes?.ok) {
     for (const [absPath, originalContent] of backupFiles.entries()) {
+      assertNoSymlinkEscape(projectRoot, absPath, 'rollback target');
       fs.writeFileSync(absPath, originalContent, 'utf8');
     }
     return {

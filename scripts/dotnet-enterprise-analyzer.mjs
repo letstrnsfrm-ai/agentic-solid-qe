@@ -25,16 +25,31 @@ function toPascalCase(raw) {
     .join('') || 'Shared';
 }
 
+const MAX_SCAN_FILE_BYTES = 1024 * 1024;
+
 function walkFilesByExt(dir, exts, out = []) {
   if (!fs.existsSync(dir)) return out;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
     if (entry.isSymbolicLink()) continue;
     if (['node_modules', '.git', 'bin', 'obj', 'TestResults', 'packages', '.vs'].includes(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       walkFilesByExt(full, exts, out);
     } else if (exts.some((ext) => entry.name.toLowerCase().endsWith(ext))) {
-      out.push(full);
+      try {
+        const st = fs.lstatSync(full);
+        if (st.isFile() && st.size <= MAX_SCAN_FILE_BYTES) {
+          out.push(full);
+        }
+      } catch {
+        /* ignore unreadable */
+      }
     }
   }
   return out;
@@ -237,7 +252,7 @@ export function parseSpecFlowBindings(csFiles, scanRoot) {
     const relPath = path.relative(scanRoot, file).replace(/\\/g, '/');
 
     for (const m of content.matchAll(
-      /((?:\[(?:Given|When|Then|StepDefinition|Scope)\s*(?:\((?:@?"[^"]*"|[^)])*\))?\]\s*)+)\b(?:public|private|internal)\s+(?:async\s+)?(?:Task|void)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g
+      /((?:\[(?:Given|When|Then|StepDefinition|Scope)\s*(?:\((?:@?"(?:"")*[^"]*"|[^"@)])*\))?\]\s*)+)\b(?:public|private|internal)\s+(?:async\s+)?(?:Task|void)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g
     )) {
       const attrBlock = m[1];
       const methodName = m[2];
@@ -267,8 +282,9 @@ export function parseSpecFlowBindings(csFiles, scanRoot) {
 
 export function isSafeRegexPattern(pattern) {
   if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > 200) return false;
-  // Reject backreferences (\1..\9) and excessive repetition counts (>100)
-  if (/\\[1-9]/.test(pattern)) return false;
+  // Reject numbered/named backreferences (\1..\9, \k<name>) and excessive repetition counts (>100)
+  if (/\\[1-9]|\\k</.test(pattern)) return false;
+  if ((pattern.match(/\.\*|\.\+/g) || []).length > 3) return false;
   for (const m of pattern.matchAll(/\{(\d+)(?:,(\d*))?\}/g)) {
     const min = Number(m[1]);
     const max = m[2] ? Number(m[2]) : min;
@@ -297,6 +313,18 @@ export function isSafeRegexPattern(pattern) {
     }
     if (ch === '(') {
       stack.push({ hasQuantifier: false, hasAlternation: false });
+      if (pattern[i + 1] === '?') {
+        const g2 = pattern[i + 2] || '';
+        if (g2 === ':' || g2 === '=' || g2 === '!') {
+          i += 2;
+        } else if (g2 === '<' && (pattern[i + 3] === '=' || pattern[i + 3] === '!')) {
+          i += 3;
+        } else if (g2 === '<') {
+          const closeGt = pattern.indexOf('>', i + 3);
+          if (closeGt === -1) return false;
+          i = closeGt;
+        }
+      }
       prevWasQuantifier = false;
       continue;
     }
@@ -308,12 +336,24 @@ export function isSafeRegexPattern(pattern) {
     if (ch === ')') {
       const group = stack.pop();
       const next = pattern[i + 1] || '';
-      const isQuantified = next === '+' || next === '*' || next === '{';
-      if (group && isQuantified && (group.hasQuantifier || group.hasAlternation)) {
+      let isRepeated = next === '+' || next === '*';
+      if (next === '{') {
+        const braceMatch = pattern.slice(i + 1).match(/^\{(\d+)(?:,(\d*))?\}/);
+        const maxRep = braceMatch
+          ? braceMatch[2] === ''
+            ? Infinity
+            : braceMatch[2] !== undefined
+              ? Number(braceMatch[2])
+              : Number(braceMatch[1])
+          : 2;
+        if (maxRep > 1) isRepeated = true;
+      }
+      const hasAnyOuterQuantifier = isRepeated || next === '?' || next === '{';
+      if (group && isRepeated && (group.hasQuantifier || group.hasAlternation)) {
         return false;
       }
       if (stack.length > 0 && group) {
-        if (group.hasQuantifier || isQuantified) stack[stack.length - 1].hasQuantifier = true;
+        if (group.hasQuantifier || hasAnyOuterQuantifier) stack[stack.length - 1].hasQuantifier = true;
         if (group.hasAlternation) stack[stack.length - 1].hasAlternation = true;
       }
       prevWasQuantifier = false;
@@ -326,8 +366,13 @@ export function isSafeRegexPattern(pattern) {
       continue;
     }
     if (ch === '?') {
-      // Allow lazy modifier (? after +/*/}/?) once, but mark group quantified if standalone
-      prevWasQuantifier = false;
+      // Allow lazy modifier (? after +/*/}/?) once, otherwise mark group quantified for standalone optional ?
+      if (!prevWasQuantifier) {
+        if (stack.length > 0) stack[stack.length - 1].hasQuantifier = true;
+        prevWasQuantifier = true;
+      } else {
+        prevWasQuantifier = false;
+      }
       continue;
     }
     prevWasQuantifier = false;

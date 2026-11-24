@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -18,7 +19,8 @@ const DEFAULT_REPO_SLUG = 'letstrnsfrm-ai/agentic-solid-qe';
 const SAFE_REPO_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const SAFE_SQUAD_NAME_RE = /^[a-z0-9][a-z0-9-]*$/i;
 const SEMVER_TAG_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
-const MAX_TARBALL_BYTES = 50 * 1024 * 1024; // 50 MB download cap
+const MAX_TARBALL_BYTES = 50 * 1024 * 1024; // 50 MB compressed download cap
+const MAX_TARBALL_UNCOMPRESSED_BYTES = 150 * 1024 * 1024; // 150 MB uncompressed cap (anti-gzip-bomb)
 const ALLOWED_TARBALL_HOSTS = new Set(['codeload.github.com', 'objects.githubusercontent.com']);
 
 export function isEnterpriseOfflineMode(env = process.env) {
@@ -382,6 +384,9 @@ function runApplyPatches(targetRoot, { dryRun = false, force = false } = {}) {
           );
           fs.mkdirSync(path.dirname(backupPath), { recursive: true, mode: 0o700 });
           fs.copyFileSync(p.targetPath, backupPath);
+          try {
+            fs.chmodSync(backupPath, 0o600);
+          } catch {}
         }
         fs.mkdirSync(path.dirname(p.targetPath), { recursive: true });
         fs.copyFileSync(p.patchPath, p.targetPath);
@@ -415,19 +420,188 @@ export function buildReleaseTarballUrl(repoSlug, targetTag) {
 
 export function validateTarArchiveEntries(entries = []) {
   for (const rawEntry of entries) {
-    const entry = String(rawEntry || '').trim();
-    if (!entry) continue;
+    const entry = String(rawEntry ?? '');
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
     if (
       entry.includes('\0') ||
-      entry.startsWith('/') ||
-      entry.startsWith('\\') ||
-      /^[A-Za-z]:/.test(entry) ||
-      /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(entry)
+      /[\r\n]/.test(entry) ||
+      trimmed.startsWith('/') ||
+      trimmed.startsWith('\\') ||
+      trimmed.startsWith('-') ||
+      /^[A-Za-z]:/.test(trimmed) ||
+      /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(trimmed)
     ) {
-      throw new Error(`Security Error: Unsafe archive entry '${entry}' detected (Zip-Slip protection).`);
+      throw new Error(`Security Error: Unsafe archive entry '${trimmed}' detected (Zip-Slip protection).`);
     }
   }
   return true;
+}
+
+function readNullTerminatedAscii(buf, start, length) {
+  const slice = buf.subarray(start, start + length);
+  const nulIdx = slice.indexOf(0);
+  return (nulIdx === -1 ? slice : slice.subarray(0, nulIdx)).toString('utf8');
+}
+
+function parseTarOctalOrBase256Size(buf, start, length) {
+  if ((buf[start] & 0x80) !== 0) {
+    let val = 0n;
+    for (let i = 1; i < length; i++) {
+      val = (val << 8n) | BigInt(buf[start + i]);
+    }
+    if (val < 0n || val > BigInt(MAX_TARBALL_UNCOMPRESSED_BYTES)) {
+      throw new Error('Security Error: Unsafe archive member size in binary tar header.');
+    }
+    return Number(val);
+  }
+  const raw = readNullTerminatedAscii(buf, start, length).trim();
+  if (!raw) return 0;
+  if (!/^[0-7]+$/.test(raw)) {
+    throw new Error(`Security Error: Malformed octal size '${raw}' in tar header.`);
+  }
+  const parsed = parseInt(raw, 8);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > MAX_TARBALL_UNCOMPRESSED_BYTES) {
+    throw new Error('Security Error: Tar member exceeds uncompressed size safety limit.');
+  }
+  return parsed;
+}
+
+/**
+ * Inspects uncompressed POSIX USTAR / PAX / GNU tar headers directly in memory.
+ * Rejects symlinks ('2'), hardlinks ('1'), character/block devices ('3'/'4'), FIFOs ('6'),
+ * non-empty linkname fields, PAX linkpath overrides, and Zip-Slip path traversal entries.
+ */
+export function validateTarBuffer(tarBuf) {
+  if (!Buffer.isBuffer(tarBuf)) {
+    throw new Error('Security Error: Expected tar Buffer.');
+  }
+  if (tarBuf.byteLength > MAX_TARBALL_UNCOMPRESSED_BYTES) {
+    throw new Error(`Security Error: Uncompressed archive exceeds ${MAX_TARBALL_UNCOMPRESSED_BYTES}-byte safety limit.`);
+  }
+  const entries = [];
+  let offset = 0;
+  let paxSizeOverride = null;
+  while (offset + 512 <= tarBuf.byteLength) {
+    const header = tarBuf.subarray(offset, offset + 512);
+    let allZero = true;
+    for (let i = 0; i < 512; i++) {
+      if (header[i] !== 0) {
+        allZero = false;
+        break;
+      }
+    }
+    if (allZero) {
+      offset += 512;
+      continue;
+    }
+    const name = readNullTerminatedAscii(header, 0, 100);
+    const prefix = readNullTerminatedAscii(header, 345, 155);
+    const fullName = prefix ? `${prefix}/${name}` : name;
+    const typeFlagByte = header[156];
+    const typeFlag = typeFlagByte === 0 ? '0' : String.fromCharCode(typeFlagByte);
+    const linkName = readNullTerminatedAscii(header, 157, 100);
+    const headerSize = parseTarOctalOrBase256Size(header, 124, 12);
+    const memberSize = paxSizeOverride !== null ? paxSizeOverride : headerSize;
+    paxSizeOverride = null;
+
+    if (linkName) {
+      throw new Error(
+        `Security Error: Symbolic or hard link target '${linkName}' in archive entry '${fullName}' is forbidden.`
+      );
+    }
+    // Allowed tar typeflags: '0' (file), '5' (directory), 'x'/'g' (PAX header), 'L' (GNU longname)
+    if (typeFlag !== '0' && typeFlag !== '5' && typeFlag !== 'x' && typeFlag !== 'g' && typeFlag !== 'L') {
+      throw new Error(
+        `Security Error: Disallowed tar entry type '${typeFlag}' for '${fullName}' (symlinks, hardlinks, and special files are forbidden).`
+      );
+    }
+
+    const dataStart = offset + 512;
+    const dataEnd = dataStart + memberSize;
+    if (dataEnd > tarBuf.byteLength) {
+      throw new Error('Security Error: Truncated or malformed tar archive stream.');
+    }
+
+    if (typeFlag === 'x' || typeFlag === 'g') {
+      const paxText = tarBuf.subarray(dataStart, dataEnd).toString('utf8');
+      for (const line of paxText.split('\n')) {
+        if (!line) continue;
+        const eqIdx = line.indexOf('=');
+        const spIdx = line.indexOf(' ');
+        if (spIdx === -1 || eqIdx === -1 || eqIdx < spIdx) continue;
+        const key = line.slice(spIdx + 1, eqIdx);
+        const val = line.slice(eqIdx + 1);
+        if (key === 'linkpath' && val) {
+          throw new Error(`Security Error: PAX linkpath '${val}' is forbidden in release tarball.`);
+        }
+        if (key === 'path') {
+          validateTarArchiveEntries([val]);
+          entries.push(val);
+        }
+        if (key === 'size' && /^\d+$/.test(val)) {
+          const pSize = Number(val);
+          if (!Number.isSafeInteger(pSize) || pSize > MAX_TARBALL_UNCOMPRESSED_BYTES) {
+            throw new Error('Security Error: PAX size exceeds uncompressed safety limit.');
+          }
+          paxSizeOverride = pSize;
+        }
+      }
+    } else if (typeFlag === 'L') {
+      const longName = readNullTerminatedAscii(tarBuf, dataStart, memberSize);
+      validateTarArchiveEntries([longName]);
+      entries.push(longName);
+    } else if (fullName && fullName !== 'pax_global_header') {
+      validateTarArchiveEntries([fullName]);
+      entries.push(fullName);
+    }
+
+    const paddedBlocks = Math.ceil(memberSize / 512) * 512;
+    offset = dataStart + paddedBlocks;
+  }
+  return entries;
+}
+
+function assertExtractedTreeSafe(rootDir) {
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    const entries = fs.readdirSync(cur, { withFileTypes: true });
+    for (const d of entries) {
+      const full = path.join(cur, d.name);
+      const st = fs.lstatSync(full);
+      if (st.isSymbolicLink()) {
+        throw new Error(`Security Error: Extracted release archive contains symbolic link '${d.name}'.`);
+      }
+      if (st.isDirectory()) {
+        stack.push(full);
+      } else if (st.isFile()) {
+        if (process.platform !== 'win32' && st.nlink > 1) {
+          throw new Error(`Security Error: Extracted release archive contains hardlink '${d.name}'.`);
+        }
+      } else {
+        throw new Error(`Security Error: Extracted release archive contains special non-file entry '${d.name}'.`);
+      }
+    }
+  }
+}
+
+function resolveSafeNpxCliJs() {
+  const candidates = [];
+  if (process.env.npm_execpath) {
+    candidates.push(path.join(path.dirname(process.env.npm_execpath), 'npx-cli.js'));
+  }
+  const nodeDir = path.dirname(process.execPath);
+  candidates.push(
+    path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+    path.join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js')
+  );
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c) && !fs.lstatSync(c).isSymbolicLink()) return c;
+    } catch {}
+  }
+  return null;
 }
 
 export async function runTarballOrCloneSync({
@@ -440,9 +614,12 @@ export async function runTarballOrCloneSync({
 } = {}) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-upgrade-'));
   try {
+    fs.chmodSync(tmpDir, 0o700);
+  } catch {}
+  try {
     let extractedDir = null;
     const tarballUrl = buildReleaseTarballUrl(repoSlug, targetTag);
-    const tarballPath = path.join(tmpDir, 'release.tar.gz');
+    const uncompressedTarPath = path.join(tmpDir, 'release.tar');
     try {
       const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
       let fetchUrl = tarballUrl;
@@ -475,30 +652,39 @@ export async function runTarballOrCloneSync({
         if (buf.byteLength > MAX_TARBALL_BYTES) {
           throw new Error(`Security Error: Release tarball exceeds ${MAX_TARBALL_BYTES}-byte safety limit.`);
         }
-        fs.writeFileSync(tarballPath, buf, { mode: 0o600 });
-        const listRes = spawnSync('tar', ['-tzf', tarballPath], {
-          stdio: 'pipe',
-          encoding: 'utf8',
-          maxBuffer: 10 * 1024 * 1024,
-        });
-        if (listRes.status === 0) {
-          const entries = String(listRes.stdout || '').split(/\r?\n/).filter(Boolean);
-          validateTarArchiveEntries(entries);
-          const extractDir = path.join(tmpDir, 'extracted');
-          fs.mkdirSync(extractDir, { recursive: true, mode: 0o700 });
-          const tarRes = spawnSync('tar', ['-xzf', tarballPath, '-C', extractDir, '--no-same-owner', '--no-same-permissions'], {
+        let tarBuf;
+        try {
+          tarBuf = zlib.gunzipSync(buf, { maxOutputLength: MAX_TARBALL_UNCOMPRESSED_BYTES });
+        } catch (zErr) {
+          if (zErr?.code === 'ERR_BUFFER_TOO_LARGE') {
+            throw new Error(
+              `Security Error: Uncompressed release tarball exceeds ${MAX_TARBALL_UNCOMPRESSED_BYTES}-byte decompression bomb limit.`
+            );
+          }
+          throw zErr;
+        }
+        validateTarBuffer(tarBuf);
+        fs.writeFileSync(uncompressedTarPath, tarBuf, { mode: 0o600 });
+        const extractDir = path.join(tmpDir, 'extracted');
+        fs.mkdirSync(extractDir, { recursive: true, mode: 0o700 });
+        const tarRes = spawnSync(
+          'tar',
+          ['-xf', uncompressedTarPath, '-C', extractDir, '--no-same-owner', '--no-same-permissions'],
+          {
             stdio: 'pipe',
             encoding: 'utf8',
-          });
-          if (tarRes.status === 0) {
-            const topEntries = fs
-              .readdirSync(extractDir, { withFileTypes: true })
-              .filter((d) => !d.isSymbolicLink() && d.isDirectory());
-            if (topEntries.length > 0) {
-              const candidateDir = path.join(extractDir, topEntries[0].name);
-              assertSafePatchDestination(extractDir, candidateDir, 'extracted release directory');
-              extractedDir = candidateDir;
-            }
+            shell: false,
+          }
+        );
+        if (tarRes.status === 0) {
+          assertExtractedTreeSafe(extractDir);
+          const topEntries = fs
+            .readdirSync(extractDir, { withFileTypes: true })
+            .filter((d) => !d.isSymbolicLink() && d.isDirectory());
+          if (topEntries.length > 0) {
+            const candidateDir = path.join(extractDir, topEntries[0].name);
+            assertSafePatchDestination(extractDir, candidateDir, 'extracted release directory');
+            extractedDir = candidateDir;
           }
         }
       }
@@ -513,12 +699,24 @@ export async function runTarballOrCloneSync({
       const cloneDir = path.join(tmpDir, 'repo');
       const cloneRes = spawnSync(
         'git',
-        ['clone', '--branch', targetTag, '--depth', '1', '--', `https://github.com/${repoSlug}.git`, cloneDir],
+        [
+          '-c',
+          'core.symlinks=false',
+          'clone',
+          '--branch',
+          targetTag,
+          '--depth',
+          '1',
+          '--',
+          `https://github.com/${repoSlug}.git`,
+          cloneDir,
+        ],
         { stdio: 'inherit', shell: false }
       );
       if (cloneRes.status !== 0) {
         return cloneRes.status ?? 1;
       }
+      assertExtractedTreeSafe(cloneDir);
       extractedDir = cloneDir;
     }
 
@@ -619,7 +817,7 @@ Options:
     targetTag = (await fetchLatestReleaseTag(repoSlug)) || '';
     if (!targetTag) {
       console.error(
-        `❌ Could not resolve latest release tag from GitHub (offline or rate-limited). Pass '--to <tag>' explicitly or run 'npx --yes github:${repoSlug}#v0.47.1 sync'.`
+        `❌ Could not resolve latest release tag from GitHub (offline or rate-limited). Pass '--to <tag>' explicitly or run 'npx cortex upgrade --to v0.48.18'.`
       );
       process.exit(1);
     }
@@ -634,7 +832,7 @@ Options:
   if (checkOnly) {
     if (cmp > 0) {
       console.log(`\n✨ Update available: ${current.version} -> ${targetVer}`);
-      console.log(`   Run: npx --yes github:${repoSlug}#${targetTag} sync ${targetDir === '.' ? '' : targetDir}`.trim());
+      console.log(`   Run: npx cortex upgrade --to ${targetTag} ${targetDir === '.' ? '' : targetDir}`.trim());
     } else {
       console.log(`\n✅ Already up to date (${current.version}).`);
     }
@@ -646,31 +844,39 @@ Options:
   if (force) syncFlags.push('--force');
   if (squadName) syncFlags.push('--squad', squadName);
 
-  if (/[&|<>^%!"'`()\t\r\n;$]/.test(targetRoot)) {
+  if (/[&|<>^%!"'`()\t\r\n;$]/.test(targetRoot) || path.basename(targetRoot).startsWith('-')) {
     console.error(
-      `❌ Security Error: Target directory '${targetRoot}' contains disallowed shell metacharacters.`
+      `❌ Security Error: Target directory '${targetRoot}' contains disallowed shell/flag metacharacters.`
     );
     process.exit(1);
   }
 
+  const npxCliJs = resolveSafeNpxCliJs();
+  // Never spawn npx.cmd with shell: true on Windows (CVE-2024-24576 / argument-splitting injection);
+  // when npx-cli.js cannot be resolved directly on Windows, use verified HTTPS tarball/clone sync directly.
+  if (!npxCliJs && process.platform === 'win32') {
+    const fallbackStatus = await runTarballOrCloneSync({
+      repoSlug,
+      targetTag,
+      targetRoot,
+      dryRun,
+      force,
+      squadName,
+    });
+    process.exit(fallbackStatus);
+  }
+
   console.log(`\n⚡ Running: npx ${syncFlags.join(' ')}\n`);
-  const npxCliCandidate = path.join(
-    path.dirname(process.execPath),
-    'node_modules',
-    'npm',
-    'bin',
-    'npx-cli.js'
-  );
-  const res = fs.existsSync(npxCliCandidate)
-    ? spawnSync(process.execPath, [npxCliCandidate, ...syncFlags], {
+  const res = npxCliJs
+    ? spawnSync(process.execPath, [npxCliJs, ...syncFlags], {
         stdio: 'pipe',
         encoding: 'utf8',
         shell: false,
       })
-    : spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', syncFlags, {
+    : spawnSync('npx', syncFlags, {
         stdio: 'pipe',
         encoding: 'utf8',
-        shell: process.platform === 'win32',
+        shell: false,
       });
   if (res.stdout) process.stdout.write(res.stdout);
   if (res.status !== 0 && isEallowgitError(`${res.stderr || ''}\n${res.stdout || ''}`)) {

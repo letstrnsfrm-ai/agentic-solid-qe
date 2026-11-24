@@ -101,9 +101,9 @@ function assertSafeJsIdentifier(name, label = 'identifier') {
 
 function sanitizeCodeComment(rawText) {
   return String(rawText ?? '')
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/\*\//g, '* /')
     .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
+    .replace(/[\r\n\u2028\u2029]+/g, ' ')
+    .replace(/\*\//g, '* /')
     .trim();
 }
 
@@ -217,7 +217,12 @@ function parseBuilderRef(refStr) {
  * Builds a Playwright locator expression string from a Session Tape locatorContract.
  */
 function escapeRegexLiteral(str) {
-  return String(str).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  return String(str)
+    .replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 export function buildLocatorExpression(locatorContract, rootExpr = 'this.root') {
@@ -553,6 +558,20 @@ export function compileSessionTape({
     tapePath = uncompiled || allTapeFiles[0];
   }
 
+  let curTapeCheck = tapePath;
+  while (curTapeCheck !== ROOT) {
+    if (fs.lstatSync(curTapeCheck).isSymbolicLink()) {
+      throw new Error(`Security Error: Refusing to compile symbolic link Session Tape path: ${rel(curTapeCheck)}`);
+    }
+    const parent = path.dirname(curTapeCheck);
+    if (parent === curTapeCheck) break;
+    curTapeCheck = parent;
+  }
+  const realRoot = fs.realpathSync(ROOT);
+  const realTape = fs.realpathSync(tapePath);
+  if (!isWithinDir(realTape, realRoot)) {
+    throw new Error(`Security Error: Session Tape realpath escapes workspace root: ${rel(tapePath)}`);
+  }
   const tapeStat = fs.lstatSync(tapePath);
   if (tapeStat.isSymbolicLink() || !tapeStat.isFile() || tapeStat.size > MAX_SCAN_FILE_BYTES) {
     throw new Error(`Security Error: Refusing to compile symbolic link or oversized Session Tape: ${rel(tapePath)}`);
@@ -710,7 +729,7 @@ export function compileSessionTape({
         });
       }
     } else {
-      const kebabStem = toKebabCase(stripClassSuffix(builderClass, ['Builder']));
+      const kebabStem = toKebabCase(stripClassSuffix(builderClass, ['Builder'])) || 'default';
       const targetRel = `${baseSrcDir}/data/${kebabStem}.builder.ts`;
       const importAlias = toImportAlias(targetRel);
       builderImports.set(builderClass, importAlias);
@@ -808,7 +827,7 @@ ${methodsCode}
         addedMembers: [],
       });
     } else {
-      const kebabStem = toKebabCase(stripClassSuffix(clientClass, ['ApiClient', 'Client']));
+      const kebabStem = toKebabCase(stripClassSuffix(clientClass, ['ApiClient', 'Client'])) || 'default';
       const targetRel = `${baseSrcDir}/api/${kebabStem}.client.ts`;
       const importAlias = toImportAlias(targetRel);
       apiClientImports.set(clientClass, { importAlias, fixtureProp });
@@ -1005,7 +1024,7 @@ export class ${clientClass} implements ApiClientContract {
         isWizardStep,
       });
     } else {
-      const kebabStem = toKebabCase(stem);
+      const kebabStem = toKebabCase(stem) || 'default';
       const subFolder = isWizardStep ? 'steps' : 'components';
       const fileSuffix = isWizardStep ? '.step.ts' : '.component.ts';
       const targetRel = `${baseSrcDir}/${subFolder}/${kebabStem}${fileSuffix}`;
@@ -1169,7 +1188,7 @@ ${propInits ? propInits + '\n' : ''}${extraInits ? extraInits + '\n' : ''}  }
         addedMembers: [],
       });
     } else {
-      const kebabStem = toKebabCase(stripClassSuffix(pageClassName, ['Page']));
+      const kebabStem = toKebabCase(stripClassSuffix(pageClassName, ['Page'])) || 'default';
       const targetRel = `${baseSrcDir}/pages/${kebabStem}.page.ts`;
       const importAlias = toImportAlias(targetRel);
       pageFixtureDescriptors.set(fixtureProp, {
@@ -1180,7 +1199,7 @@ ${propInits ? propInits + '\n' : ''}${extraInits ? extraInits + '\n' : ''}  }
       });
 
       const compImports = [...subComponents.values()]
-        .map((cd) => `import { ${cd.className} } from '${cd.importAlias}';`)
+        .map((cd) => `import { ${cd.className} } from ${JSON.stringify(cd.importAlias)};`)
         .join('\n');
       const compProps = [...subComponents.entries()]
         .map(([prop, cd]) => `  readonly ${prop}: ${cd.className};`)
@@ -1420,14 +1439,17 @@ export class ${flowClass} implements FlowContract<void, Record<string, string>> 
     if (mutatingContracts.length > 0) {
       const primary = mutatingContracts[0];
       const httpMethod = String(primary.method || 'POST').toLowerCase();
-      const seederStem = toPascalCase(scenarioId);
+      if (!new Set(['post', 'put', 'patch']).has(httpMethod)) {
+        throw new Error(`Security Error: Disallowed seeder HTTP method '${primary.method}'.`);
+      }
+      const seederStem = toPascalCase(scenarioId) || 'Default';
       const seederClass = seederStem.endsWith('Seeder') ? seederStem : `${seederStem}Seeder`;
-      const seederRel = `${baseSrcDir}/seeders/${toKebabCase(scenarioId)}-seeder.ts`;
-      const endpointPath = String(primary.urlPattern || '/api/v1/seed');
+      const seederRel = `${baseSrcDir}/seeders/${toKebabCase(scenarioId) || 'default'}-seeder.ts`;
+      const endpointPath = String(primary.urlPattern || '/api/v1/seed').trim();
+      if (/[`\\]|(?:\$\{)|[\x00-\x20\x7f]/.test(endpointPath)) {
+        throw new Error(`Security Error: Unsafe seeder urlPattern '${endpointPath}'.`);
+      }
       const fallbackBaseUrl = String(tape.apiBaseUrl || tape.baseUrl || '');
-      const urlLine = /^https?:\/\//i.test(endpointPath)
-        ? `    const url = ${JSON.stringify(endpointPath)};`
-        : `    const url = \`\${this.baseUrl.replace(/\\/$/, '')}${endpointPath}\`;`;
       const seederCode = `import type { APIRequestContext } from '@playwright/test';
 import type { StateSeederContract } from '@contracts/state-seeder.contract';
 
@@ -1438,10 +1460,15 @@ export class ${seederClass} implements StateSeederContract<Record<string, unknow
   ) {}
 
   async seed(payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-${urlLine}
+    const base = new URL(this.baseUrl);
+    const resolved = new URL(${JSON.stringify(endpointPath)}, base);
+    if (resolved.origin !== base.origin) {
+      throw new Error(\`Security Error: Cross-origin seeder endpoint '\${resolved.origin}' is blocked (expected '\${base.origin}').\`);
+    }
+    const url = resolved.toString();
     const res = await this.request.${httpMethod}(url, { data: payload });
     if (!res.ok()) {
-      throw new Error(\`${seederClass} failed (\${res.status()}): \${await res.text()}\`);
+      throw new Error(${JSON.stringify(seederClass)} + \` failed (\${res.status()}): \${await res.text()}\`);
     }
     return (await res.json().catch(() => ({}))) as Record<string, unknown>;
   }

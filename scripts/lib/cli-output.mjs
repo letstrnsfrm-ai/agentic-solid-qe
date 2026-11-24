@@ -12,7 +12,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const ANSI_ESCAPE_RE = /\x1B(?:\][^\x07\x1B]*(?:\x07|\x1B\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
+const ANSI_ESCAPE_RE =
+  /(?:\x1B(?:\][^\x07\x1B]*(?:\x07|\x1B\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])|\x9B[0-?]*[ -/]*[@-~]|\x9D[^\x07\x9C]*(?:\x07|\x9C))/g;
+const TERMINAL_SPOOF_RE = /[\u202A-\u202E\u2066-\u2069\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g;
+const MAX_MARKDOWN_BYTES = 1024 * 1024;
 
 export const TOKEN_BUDGETS = Object.freeze({
   agentsMd: 600,
@@ -78,7 +81,7 @@ export function computeTokenFootprint(rootDir = process.cwd()) {
     }
     try {
       const st = fs.lstatSync(full);
-      if (st.isSymbolicLink() || !st.isFile()) return 0;
+      if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_MARKDOWN_BYTES) return 0;
       return estimateTokens(fs.readFileSync(full, 'utf8'));
     } catch {
       return 0;
@@ -103,6 +106,13 @@ export function computeTokenFootprint(rootDir = process.cwd()) {
   for (const file of mdFiles) {
     const rel = path.relative(rootDir, file).replace(/\\/g, '/');
     const base = path.basename(file);
+    let st;
+    try {
+      st = fs.lstatSync(file);
+    } catch {
+      continue;
+    }
+    if (!st.isFile() || st.size > MAX_MARKDOWN_BYTES) continue;
     const tok = estimateTokens(fs.readFileSync(file, 'utf8'));
     if (base === 'SKILL.md') {
       skillCount++;
@@ -134,7 +144,11 @@ export function computeTokenFootprint(rootDir = process.cwd()) {
 }
 
 export function stripAnsi(text = '') {
-  return String(text || '').replace(ANSI_ESCAPE_RE, '');
+  return String(text || '')
+    .replace(ANSI_ESCAPE_RE, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '')
+    .replace(TERMINAL_SPOOF_RE, '');
 }
 
 /**

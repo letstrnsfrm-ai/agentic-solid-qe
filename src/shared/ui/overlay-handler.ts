@@ -7,7 +7,7 @@ import type { Page } from '@playwright/test';
  */
 export async function registerOverlayHandlers(page: Page): Promise<void> {
   const cookieAcceptButton = page
-    .getByRole('dialog')
+    .getByRole('dialog', { name: /cookie|privacy|consent|gdpr/i })
     .getByRole('button', { name: /accept( all)?( cookies)?|allow all|agree/i });
 
   await page.addLocatorHandler(cookieAcceptButton, async (locator) => {

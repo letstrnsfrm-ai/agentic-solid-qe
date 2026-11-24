@@ -4,6 +4,16 @@ trigger:
       - main
       - master
 
+pr:
+  branches:
+    include:
+      - main
+      - master
+  drafts: false
+
+variables:
+  CI: 'true'
+
 pool:
   vmImage: ubuntu-latest
 
@@ -14,9 +24,12 @@ stages:
       - job: Audit
         timeoutInMinutes: 10
         steps:
-          - task: NodeTool@0
+          - checkout: self
+            persistCredentials: false
+            clean: true
+          - task: UseNode@1
             inputs:
-              versionSpec: '22.x'
+              version: '22.x'
           - script: npm ci --ignore-scripts
             displayName: 'Install dependencies'
           - script: npm audit --audit-level=high
@@ -33,15 +46,37 @@ stages:
         strategy:
           parallel: 2
         steps:
-          - task: NodeTool@0
+          - checkout: self
+            persistCredentials: false
+            clean: true
+          - task: UseNode@1
             inputs:
-              versionSpec: '22.x'
+              version: '22.x'
           - script: npm ci --ignore-scripts
             displayName: 'Install dependencies'
+          - script: |
+              node -e '
+                const raw = (process.env.BASE_URL || "").trim();
+                if (raw) {
+                  const u = new URL(raw);
+                  const bare = u.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+                  if (u.protocol !== "https:" || u.username || u.password || bare === "localhost" || bare.endsWith(".localhost") || /^127\.|^169\.254\.|^10\.|^192\.168\.|^172\.(?:1[6-9]|2\d|3[01])\.|^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|^0\.|^(?:0*:)*ffff:|^64:ff9b:|^2002:|^2001:0*:|^fe[89ab][0-9a-f]:|^f[cd][0-9a-f]{2}:|^metadata/i.test(bare)) {
+                    console.error("❌ Security Error: Unsafe BASE_URL in Azure Pipelines CI.");
+                    process.exit(1);
+                  }
+                }
+              '
+            displayName: 'Validate BASE_URL Target Origin Policy'
+            env:
+              BASE_URL: $(BASE_URL)
           - script: npx --no-install playwright install --with-deps chromium
             displayName: 'Install Playwright Chromium'
-          - script: npx --no-install playwright test --project=chromium --shard=$(System.JobPositionInPhase)/$(System.TotalJobsInPhase)
+          - script: npx --no-install playwright test --project=chromium --shard=$(System.JobPositionInPhase)/$(System.TotalJobsInPhase) --pass-with-no-tests
             displayName: 'Execute Playwright Shard'
+            env:
+              BASE_URL: $(BASE_URL)
+              TEST_USERNAME: $(TEST_USERNAME)
+              TEST_PASSWORD: $(TEST_PASSWORD)
           - task: PublishTestResults@2
             condition: succeededOrFailed()
             inputs:

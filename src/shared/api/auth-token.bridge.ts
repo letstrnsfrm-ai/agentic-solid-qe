@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 
 export interface StorageStateCookie {
@@ -25,7 +26,7 @@ export interface StorageStateFile {
 const SAFE_STORAGE_STATE_PATH_REGEX = /^\.auth\/[a-zA-Z0-9_-]+\.json$/;
 const MAX_STORAGE_STATE_BYTES = 1024 * 1024; // 1 MB cap
 // eslint-disable-next-line no-control-regex
-const CONTROL_CHAR_REGEX = /[\r\n\x00-\x1f\x7f]/g;
+const NON_VISIBLE_ASCII_REGEX = /[^\x20-\x7e]/g;
 const SAFE_COOKIE_NAME_REGEX = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 const FORBIDDEN_METADATA_HOSTS = new Set([
@@ -35,6 +36,7 @@ const FORBIDDEN_METADATA_HOSTS = new Set([
   '169.254.170.2',
   '100.100.100.200',
   '[fd00:ec2::254]',
+  'fd00:ec2::254',
   'metadata.google.internal',
   'metadata.azure.com',
   'metadata',
@@ -49,13 +51,20 @@ function decodeHexIpv4Mapped(bare: string): string | null {
   return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
 }
 
-function isForbiddenTargetUrl(parsed: URL): boolean {
+export function isForbiddenTargetUrl(parsed: URL, rawUrl?: string): boolean {
+  if (rawUrl !== undefined) {
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x1f\x7f\\]/.test(rawUrl) || /^https?:\/(?!\/)/i.test(rawUrl.trim())) {
+      return true;
+    }
+  }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true;
   if (parsed.username || parsed.password) return true;
   const hostLower = parsed.hostname.toLowerCase();
   const bare = hostLower.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   const isLocal = bare === 'localhost' || bare === '127.0.0.1' || bare === '::1';
   if (isLocal) return false;
+  if (bare.endsWith('.localhost')) return true;
   const mappedV4 = decodeHexIpv4Mapped(bare);
   const checkHost = mappedV4 || bare;
   if (
@@ -65,15 +74,23 @@ function isForbiddenTargetUrl(parsed: URL): boolean {
     /^169\.254\./.test(checkHost) ||
     /^127\./.test(checkHost) ||
     /^0\./.test(checkHost) ||
+    /^192\.0\.0\./.test(checkHost) ||
+    /^198\.1[89]\./.test(checkHost) ||
     /^(?:22[4-9]|2[34]\d|25[0-5])\./.test(checkHost) ||
     bare === '::' ||
     bare === '0:0:0:0:0:0:0:0' ||
     bare === '0:0:0:0:0:0:0:1' ||
     /^64:ff9b:/i.test(bare) ||
+    /^2002:/i.test(bare) ||
+    /^2001:0*:/i.test(bare) ||
+    /^2001:db8:/i.test(bare) ||
+    /^100::/i.test(bare) ||
+    /^fec0:/i.test(bare) ||
     /^fe[89ab][0-9a-f]:/i.test(bare) ||
     /^ff[0-9a-f]{2}:/i.test(bare) ||
-    /^fd00:ec2::/i.test(bare) ||
+    /^fd00:0*ec2:/i.test(bare) ||
     /^(?:0*:)*ffff:0:/i.test(bare) ||
+    /^::[0-9a-f]{1,4}$/i.test(bare) ||
     /^::[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i.test(bare)
   ) {
     return true;
@@ -95,7 +112,30 @@ function isForbiddenTargetUrl(parsed: URL): boolean {
 }
 
 function sanitizeHeaderValue(raw: string): string {
-  return raw.replace(CONTROL_CHAR_REGEX, '').trim();
+  return raw.replace(NON_VISIBLE_ASCII_REGEX, '').trim();
+}
+
+function extractScalarBearerToken(rawValue: string): string {
+  const trimmed = String(rawValue || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const record = parsed as Record<string, unknown>;
+        for (const safeField of ['access_token', 'accessToken', 'id_token', 'idToken', 'jwt', 'auth_token', 'token']) {
+          const val = record[safeField];
+          if (typeof val === 'string' && val.trim().length > 0) {
+            return sanitizeHeaderValue(val);
+          }
+        }
+      }
+    } catch {
+      /* ignore malformed JSON */
+    }
+    return '';
+  }
+  return sanitizeHeaderValue(trimmed.replace(/^"|"$/g, ''));
 }
 
 function matchesCookieDomain(
@@ -103,15 +143,26 @@ function matchesCookieDomain(
   targetHost: string | undefined,
   fallbackOriginHost?: string
 ): boolean {
-  if (!targetHost) return true;
+  if (!targetHost) return false;
   const effectiveDomain = cookieDomain || fallbackOriginHost;
   if (!effectiveDomain) return false;
-  const normalizedTarget = targetHost.toLowerCase();
-  const normalizedCookie = effectiveDomain.toLowerCase().replace(/^\.+/, '');
-  return (
-    normalizedTarget === normalizedCookie ||
-    normalizedTarget.endsWith(`.${normalizedCookie}`)
-  );
+  const normalizedTarget = targetHost.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  const normalizedCookie = effectiveDomain.toLowerCase().replace(/^\[|\]$/g, '').replace(/^\.+/, '').replace(/\.+$/, '');
+  if (!normalizedTarget || !normalizedCookie) return false;
+  if (normalizedTarget === normalizedCookie) return true;
+  // RFC 6265: never suffix-match IPv4/IPv6 literals or single-label domains
+  if (net.isIP(normalizedTarget) !== 0 || net.isIP(normalizedCookie) !== 0) {
+    return false;
+  }
+  if (!normalizedCookie.includes('.')) {
+    return false;
+  }
+  return normalizedTarget.endsWith(`.${normalizedCookie}`);
+}
+
+function isLocalhostLoopback(hostname: string): boolean {
+  const bare = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return bare === 'localhost' || bare === '127.0.0.1' || bare === '::1';
 }
 
 /**
@@ -203,7 +254,7 @@ export class AuthTokenBridge {
 
   /**
    * Extracts a Bearer token from localStorage or cookies in `.auth/<persona>.json`,
-   * scoping to `targetOrigin` (or the primary origin) and filtering out expired/cross-domain cookies.
+   * scoping to `targetOrigin` (or the primary origin / `BASE_URL`) and filtering out expired/cross-domain cookies.
    */
   static extractAuthHeaders(
     storageStatePath: string,
@@ -229,11 +280,11 @@ export class AuthTokenBridge {
     }
 
     let targetOriginUrl: URL | null = null;
-    const candidateOrigin = options?.targetOrigin ?? state.origins?.[0]?.origin;
-    if (candidateOrigin !== undefined) {
+    const candidateOrigin = options?.targetOrigin ?? state.origins?.[0]?.origin ?? process.env.BASE_URL;
+    if (candidateOrigin !== undefined && candidateOrigin !== '') {
       try {
         targetOriginUrl = new URL(candidateOrigin);
-        if (isForbiddenTargetUrl(targetOriginUrl)) {
+        if (isForbiddenTargetUrl(targetOriginUrl, candidateOrigin)) {
           return {};
         }
       } catch {
@@ -260,7 +311,7 @@ export class AuthTokenBridge {
       }
       for (const item of originEntry.localStorage ?? []) {
         if (keyRegex.test(item.name) && item.value) {
-          const cleanToken = sanitizeHeaderValue(item.value.replace(/^"|"$/g, ''));
+          const cleanToken = extractScalarBearerToken(item.value);
           if (cleanToken) {
             headers['Authorization'] = cleanToken.startsWith('Bearer ')
               ? cleanToken
@@ -282,11 +333,23 @@ export class AuthTokenBridge {
       if (options?.cookieNames?.length && !options.cookieNames.includes(c.name)) {
         return false;
       }
-      if (!options?.allowCrossOrigin && targetOriginUrl) {
-        if (c.secure && targetOriginUrl.protocol === 'http:' && targetOriginUrl.hostname !== 'localhost') {
+      // Enforce Secure cookie transport security unconditionally (even when allowCrossOrigin is set)
+      if (c.secure) {
+        if (!targetOriginUrl) return false;
+        if (targetOriginUrl.protocol !== 'https:' && !isLocalhostLoopback(targetOriginUrl.hostname)) {
           return false;
         }
-        if (!matchesCookieDomain(c.domain, targetOriginUrl.hostname, primaryOriginHost)) {
+      }
+      if (!options?.allowCrossOrigin) {
+        if (targetOriginUrl) {
+          if (!matchesCookieDomain(c.domain, targetOriginUrl.hostname, primaryOriginHost)) {
+            return false;
+          }
+        } else if (primaryOriginHost) {
+          if (!matchesCookieDomain(c.domain, primaryOriginHost, primaryOriginHost)) {
+            return false;
+          }
+        } else if (!options?.cookieNames?.length) {
           return false;
         }
       }

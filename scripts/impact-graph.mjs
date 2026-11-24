@@ -53,11 +53,167 @@ function readTextSafe(filePath) {
   }
 }
 
-function stripComments(code) {
-  return String(code || '').replace(
-    /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|\/\*[\s\S]*?\*\/|\/\/.*$/gm,
-    (m) => (m.startsWith('/') ? '' : m)
-  );
+export function stripComments(code) {
+  const src = String(code || '');
+  let out = '';
+  let i = 0;
+  const templateBraceStack = [];
+  let canStartRegex = true;
+
+  const readTemplateContent = () => {
+    while (i < src.length) {
+      const ch = src[i];
+      if (ch === '\\') {
+        out += ch + (src[i + 1] || '');
+        i += 2;
+        continue;
+      }
+      if (ch === '`') {
+        out += '`';
+        i++;
+        canStartRegex = false;
+        return;
+      }
+      if (ch === '$' && src[i + 1] === '{') {
+        out += '${';
+        i += 2;
+        templateBraceStack.push(0);
+        canStartRegex = true;
+        return;
+      }
+      out += ch;
+      i++;
+    }
+  };
+
+  while (i < src.length) {
+    const ch = src[i];
+    const next = src[i + 1];
+
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < src.length && src[i] !== '\n' && src[i] !== '\r' && src[i] !== '\u2028' && src[i] !== '\u2029') {
+        i++;
+      }
+      continue;
+    }
+
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) {
+        if (src[i] === '\n') out += '\n';
+        i++;
+      }
+      if (i < src.length) i += 2;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      out += ch;
+      i++;
+      while (i < src.length) {
+        const sc = src[i];
+        out += sc;
+        i++;
+        if (sc === '\\' && i < src.length) {
+          out += src[i];
+          i++;
+          continue;
+        }
+        if (sc === quote || sc === '\n' || sc === '\r') break;
+      }
+      canStartRegex = false;
+      continue;
+    }
+
+    if (ch === '`') {
+      out += '`';
+      i++;
+      readTemplateContent();
+      continue;
+    }
+
+    if (ch === '/' && canStartRegex && next !== '/' && next !== '*') {
+      let j = i + 1;
+      let inCharClass = false;
+      let validRegex = false;
+      while (j < src.length) {
+        const rc = src[j];
+        if (rc === '\n' || rc === '\r' || rc === '\u2028' || rc === '\u2029') break;
+        if (rc === '\\') {
+          j += 2;
+          continue;
+        }
+        if (rc === '[') inCharClass = true;
+        else if (rc === ']') inCharClass = false;
+        else if (rc === '/' && !inCharClass) {
+          validRegex = true;
+          j++;
+          while (j < src.length && /[gimsuyv]/.test(src[j])) j++;
+          break;
+        }
+        j++;
+      }
+      if (validRegex) {
+        out += src.slice(i, j);
+        i = j;
+        canStartRegex = false;
+        continue;
+      }
+    }
+
+    if (ch === '{') {
+      if (templateBraceStack.length > 0) {
+        templateBraceStack[templateBraceStack.length - 1]++;
+      }
+      out += ch;
+      i++;
+      canStartRegex = true;
+      continue;
+    }
+
+    if (ch === '}') {
+      if (templateBraceStack.length > 0) {
+        if (templateBraceStack[templateBraceStack.length - 1] === 0) {
+          templateBraceStack.pop();
+          out += '}';
+          i++;
+          readTemplateContent();
+          continue;
+        }
+        templateBraceStack[templateBraceStack.length - 1]--;
+      }
+      out += ch;
+      i++;
+      canStartRegex = false;
+      continue;
+    }
+
+    if (/[A-Za-z_$]/.test(ch)) {
+      let start = i;
+      i++;
+      while (i < src.length && /[A-Za-z0-9_$]/.test(src[i])) i++;
+      const word = src.slice(start, i);
+      out += word;
+      canStartRegex = /^(?:return|typeof|void|case|throw|delete|in|of|instanceof|new|await|yield)$/.test(word);
+      continue;
+    }
+
+    if (/\d/.test(ch)) {
+      out += ch;
+      i++;
+      canStartRegex = false;
+      continue;
+    }
+
+    if (!/\s/.test(ch)) {
+      canStartRegex = ch !== ')' && ch !== ']';
+    }
+    out += ch;
+    i++;
+  }
+  return out;
 }
 
 function walkTsFiles(dir) {
@@ -453,7 +609,7 @@ function parseFixtureFile(relPath, codeNoComments, imports) {
 export function extractSpecUsedFixtures(codeNoComments) {
   const used = new Set();
   const fnRe =
-    /\b(?:test(?:\.(?:only|skip|fixme|fail|beforeEach|afterEach|beforeAll|afterAll))?)\s*\([\s\S]*?async\s*\(\s*\{([^}]*)\}/g;
+    /\b(?:test(?:\.(?:only|skip|fixme|fail|beforeEach|afterEach|beforeAll|afterAll))?)\s*\([^;{]{0,600}?async\s*\(\s*\{([^}]{0,500})\}/g;
   for (const m of codeNoComments.matchAll(fnRe)) {
     const destructured = m[1];
     for (const part of destructured.split(',')) {
@@ -694,7 +850,7 @@ export function buildImpactGraph(rootDir = process.cwd()) {
   }
 
   // Build node summaries for all non-spec source/helper/fixture files (src/ and tests/)
-  const nodes = {};
+  const nodes = Object.create(null);
   for (const absFile of allFiles) {
     const relPath = normalizeRel(resolvedRoot, absFile);
     if (specMeta.has(relPath)) continue;
@@ -736,7 +892,7 @@ export function buildImpactGraph(rootDir = process.cwd()) {
     };
   }
 
-  const specs = {};
+  const specs = Object.create(null);
   for (const [specRel, meta] of specMeta.entries()) {
     specs[specRel] = {
       file: specRel,
@@ -795,7 +951,7 @@ export function getFileImpact(rootDir, targetFileRel, { graph = null, sharedThre
     .replace(/\\/g, '/')
     .replace(/^\.\//, '');
 
-  if (resolvedGraph.nodes[norm]) {
+  if (Object.hasOwn(resolvedGraph.nodes, norm)) {
     const node = resolvedGraph.nodes[norm];
     const nonRootSquads = node.affectedSquads.filter((s) => s !== 'root');
     const isShared =
@@ -805,7 +961,7 @@ export function getFileImpact(rootDir, targetFileRel, { graph = null, sharedThre
     return { ...node, isShared };
   }
 
-  if (resolvedGraph.specs[norm]) {
+  if (Object.hasOwn(resolvedGraph.specs, norm)) {
     return {
       file: norm,
       squad: resolvedGraph.specs[norm].squad,

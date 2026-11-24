@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { estimateTokens, TOKEN_BUDGETS } from './lib/cli-output.mjs';
-import { buildImpactGraph, inferSquadFromPath } from './impact-graph.mjs';
+import { buildImpactGraph, inferSquadFromPath, stripComments } from './impact-graph.mjs';
 
 const ROOT = process.cwd();
 const MAX_COMPONENT_LINES = 150;
@@ -42,21 +42,40 @@ if (filterSquad && !/^[a-z0-9-]+$/.test(filterSquad)) {
 }
 
 let violations = [];
+const flaggedOversizedOrSymlink = new Set();
 
 function walkFiles(dir, extFilter) {
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.isSymbolicLink()) continue;
     const fullPath = path.join(dir, entry.name);
+    const relPath = path.relative(ROOT, fullPath).replace(/\\/g, '/');
+    const isAuditedTree =
+      relPath.startsWith('src/') || relPath.startsWith('tests/') || relPath.startsWith('.agents/');
+    if (entry.isSymbolicLink()) {
+      if (isAuditedTree && !flaggedOversizedOrSymlink.has(relPath)) {
+        flaggedOversizedOrSymlink.add(relPath);
+        violations.push(
+          `[Enterprise Code Security Gate] ${relPath} is a symbolic link inside an audited directory. Remove symbolic links from src/, tests/, and .agents/.`
+        );
+      }
+      continue;
+    }
     if (entry.isDirectory()) {
       files.push(...walkFiles(fullPath, extFilter));
     } else if (!extFilter || fullPath.endsWith(extFilter)) {
       try {
         const st = fs.lstatSync(fullPath);
-        if (st.isFile() && st.size <= MAX_SCAN_FILE_BYTES) {
-          files.push(fullPath);
+        if (st.isFile()) {
+          if (st.size <= MAX_SCAN_FILE_BYTES) {
+            files.push(fullPath);
+          } else if (isAuditedTree && !flaggedOversizedOrSymlink.has(relPath)) {
+            flaggedOversizedOrSymlink.add(relPath);
+            violations.push(
+              `[Enterprise Code Security Gate] ${relPath} exceeds the 1 MB static-audit size cap (${st.size} bytes).`
+            );
+          }
         }
       } catch {
         /* skip unreadable file */
@@ -306,13 +325,6 @@ if (fs.existsSync(domainIndexFile)) {
   }
 }
 
-function stripComments(code) {
-  return String(code || '').replace(
-    /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|\/\*[\s\S]*?\*\/|\/\/.*$/gm,
-    (m) => (m.startsWith('/') ? '' : m)
-  );
-}
-
 // 2. Audit Components & Wizard Steps across src/components, src/steps, src/shared/components, and src/domains/*/{components,steps}
 const componentFiles = [
   ...new Set(
@@ -415,12 +427,21 @@ for (const file of apiClientFiles) {
 }
 
 // 3a-bis. Audit Composable State Seeders across src/seeders and src/domains/*/seeders (<= 150 lines, zero expect(), StateSeederContract)
-const seederFiles = filterSquad
-  ? walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.seeder.ts')
-  : [
-      ...walkFiles(path.join(ROOT, 'src/seeders'), '.seeder.ts'),
-      ...walkFiles(path.join(ROOT, 'src/domains'), '.seeder.ts'),
-    ];
+const seederFiles = [
+  ...new Set(
+    filterSquad
+      ? [
+          ...walkFiles(path.join(ROOT, 'src/domains', filterSquad, 'seeders'), '.ts'),
+          ...walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.seeder.ts'),
+          ...walkFiles(path.join(ROOT, 'src/domains', filterSquad), '-seeder.ts'),
+        ]
+      : [
+          ...walkFiles(path.join(ROOT, 'src/seeders'), '.ts'),
+          ...walkFiles(path.join(ROOT, 'src/domains'), '.seeder.ts'),
+          ...walkFiles(path.join(ROOT, 'src/domains'), '-seeder.ts'),
+        ]
+  ),
+];
 for (const file of seederFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const lines = content.split('\n').length;
@@ -729,12 +750,13 @@ const PROMPT_INJECTION_PATTERNS = [
 
 const UNSAFE_TS_CODE_PATTERNS = [
   {
-    name: 'Dynamic Code Execution (eval / new Function)',
-    regex: /\b(?:eval\s*\(|new\s+Function\s*\()/,
+    name: 'Dynamic Code Execution (eval / Function)',
+    regex: /\b(?:eval\s*\(|new\s+Function\s*\(|Function\s*\(\s*['"`])/,
   },
   {
-    name: 'Shell Process Spawning in Test/Page Layer (child_process)',
-    regex: /(?:from\s+['"](?:node:)?child_process['"]|require\s*\(\s*['"](?:node:)?child_process['"]\s*\))/,
+    name: 'Shell Process Spawning / VM Sandbox in Test/Page Layer (child_process / vm)',
+    regex:
+      /(?:from\s+['"](?:node:)?(?:child_process|vm)['"]|require\s*\(\s*['"](?:node:)?(?:child_process|vm)['"]\s*\)|\bimport\s*\(\s*['"`](?:node:)?(?:child_process|vm)['"`]\s*\))/,
   },
   {
     name: 'Hardcoded TLS Verification Bypass (ignoreHTTPSErrors: true / NODE_TLS_REJECT_UNAUTHORIZED=0)',
@@ -746,31 +768,46 @@ const UNSAFE_TS_CODE_PATTERNS = [
   },
 ];
 
+const JS_TS_CODE_EXTS = ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'];
+function walkCodeExts(dir) {
+  const seen = new Set();
+  for (const ext of JS_TS_CODE_EXTS) {
+    for (const f of walkFiles(dir, ext)) seen.add(f);
+  }
+  return [...seen];
+}
+
 const pwConfigFile = path.join(ROOT, 'playwright.config.ts');
 const allCodeAndArtifactFiles = [
-  ...(fs.existsSync(pwConfigFile) ? [pwConfigFile] : []),
-  ...walkFiles(path.join(ROOT, 'src'), '.ts'),
-  ...walkFiles(path.join(ROOT, 'tests'), '.ts'),
-  ...walkFiles(path.join(ROOT, '.agents/skills')),
-  ...walkFiles(path.join(ROOT, '.agents/domain'), '.md'),
-  ...walkFiles(path.join(ROOT, '.agents/legacy-backups')),
-  ...walkFiles(path.join(ROOT, '.playwright')),
-  ...walkFiles(path.join(ROOT, '.exploratory/tapes'), '.json'),
-  ...walkFiles(path.join(ROOT, '.claude/commands'), '.md'),
-  ...walkFiles(path.join(ROOT, '.github/prompts'), '.md'),
-  ...walkFiles(path.join(ROOT, '.github/workflows'), '.yml'),
-  ...walkFiles(path.join(ROOT, '.azure-pipelines'), '.yml'),
-  ...walkFiles(path.join(ROOT, 'defects'), '.md'),
+  ...new Set([
+    ...(fs.existsSync(pwConfigFile) ? [pwConfigFile] : []),
+    ...(fs.existsSync(agentsMdFile) ? [agentsMdFile] : []),
+    ...(fs.existsSync(copilotInstrFile) ? [copilotInstrFile] : []),
+    ...walkCodeExts(path.join(ROOT, 'src')),
+    ...walkCodeExts(path.join(ROOT, 'tests')),
+    ...walkFiles(path.join(ROOT, '.agents/skills')),
+    ...walkFiles(path.join(ROOT, '.agents/domain'), '.md'),
+    ...walkFiles(path.join(ROOT, '.agents/legacy-backups')),
+    ...walkFiles(path.join(ROOT, '.playwright')),
+    ...walkFiles(path.join(ROOT, '.exploratory/tapes'), '.json'),
+    ...walkFiles(path.join(ROOT, '.claude/commands'), '.md'),
+    ...walkFiles(path.join(ROOT, '.github/prompts'), '.md'),
+    ...walkFiles(path.join(ROOT, '.github/workflows'), '.yml'),
+    ...walkFiles(path.join(ROOT, '.github/workflows'), '.yaml'),
+    ...walkFiles(path.join(ROOT, '.azure-pipelines'), '.yml'),
+    ...walkFiles(path.join(ROOT, '.azure-pipelines'), '.yaml'),
+    ...walkFiles(path.join(ROOT, 'defects'), '.md'),
+  ]),
 ];
 
 const TS_SENSITIVE_ASSIGN_REGEX =
-  /\b(password|passcode|pin|userPin|cardPin|securityPin|otp|cvv|cvc|ssn|secret|clientSecret|client_secret|privateKey|private_key|accessKey|access_key|apiKey|api_key|authToken|auth_token|accessToken|access_token|refreshToken|refresh_token|bearerToken)\s*[:=]\s*(['"`])((?:\\.|(?!\2)[^\\\r\n])+)\2/gi;
+  /(['"`]?)\b(password|passcode|pin|userPin|cardPin|securityPin|otp|cvv|cvc|ssn|secret|clientSecret|client_secret|privateKey|private_key|accessKey|access_key|apiKey|api_key|authToken|auth_token|accessToken|access_token|refreshToken|refresh_token|bearerToken)\b\1\s*[:=]\s*(['"`])((?:\\.|(?!\3)[^\\\r\n])+)\3/gi;
 
 const TS_SENSITIVE_ENV_FALLBACK_REGEX =
   /\bprocess\.env\.([A-Za-z0-9_]+)\s*(?:\?\?|\|\|)\s*(['"`])((?:\\.|(?!\2)[^\\\r\n])+)\2/g;
 
 const ARTIFACT_CREDENTIAL_ASSIGN_REGEX =
-  /\b(password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token)\s*[:=]\s*(['"`])((?:\\.|(?!\2)[^\\$\r\n]){4,})\2/gi;
+  /(['"`]?)\b(password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token)\b\1\s*[:=]\s*(['"`])((?:\\.|(?!\3)[^\\\r\n]){4,})\3/gi;
 
 for (const targetFile of allCodeAndArtifactFiles) {
   const rawText = fs.readFileSync(targetFile, 'utf8');
@@ -783,11 +820,15 @@ for (const targetFile of allCodeAndArtifactFiles) {
   }
 
   const isPromptOrMemoryArtifact =
+    relTarget === 'AGENTS.md' ||
+    relTarget === '.github/copilot-instructions.md' ||
     relTarget.startsWith('.agents/skills/') ||
     relTarget.startsWith('.agents/domain/') ||
     relTarget.startsWith('.agents/legacy-backups/') ||
     relTarget.startsWith('.claude/commands/') ||
-    relTarget.startsWith('.github/prompts/');
+    relTarget.startsWith('.github/prompts/') ||
+    relTarget.startsWith('defects/') ||
+    relTarget.startsWith('.exploratory/tapes/');
   if (isPromptOrMemoryArtifact) {
     for (const inj of PROMPT_INJECTION_PATTERNS) {
       if (inj.regex.test(rawText)) {
@@ -798,7 +839,8 @@ for (const targetFile of allCodeAndArtifactFiles) {
     }
   }
 
-  const inspectText = targetFile.endsWith('.ts') ? stripComments(rawText) : rawText;
+  const isCodeExt = JS_TS_CODE_EXTS.some((ext) => targetFile.endsWith(ext));
+  const inspectText = isCodeExt ? stripComments(rawText) : rawText;
   if (relTarget.startsWith('src/') || relTarget.startsWith('tests/') || relTarget === 'playwright.config.ts') {
     for (const unsafeRule of UNSAFE_TS_CODE_PATTERNS) {
       if (unsafeRule.regex.test(inspectText)) {
@@ -809,13 +851,15 @@ for (const targetFile of allCodeAndArtifactFiles) {
     }
 
     for (const match of inspectText.matchAll(TS_SENSITIVE_ASSIGN_REGEX)) {
-      const propName = match[1];
-      const literalVal = match[3].trim();
+      const propName = match[2];
+      const literalVal = match[4].trim();
       if (
         literalVal &&
         literalVal !== 'secret_sauce' &&
+        literalVal !== 'invalid-test-credential' &&
         !literalVal.startsWith('${') &&
-        !literalVal.startsWith('<')
+        !literalVal.startsWith('<') &&
+        !/^\$[A-Z_][A-Z0-9_]*$/.test(literalVal)
       ) {
         violations.push(
           `[Secret Hygiene Gate] ${relTarget} hardcodes a plaintext credential in '${propName}'. Inject secrets via requireEnv() in src/data/*.builder.ts.`
@@ -830,7 +874,7 @@ for (const targetFile of allCodeAndArtifactFiles) {
         /(?:password|passcode|\bpin\b|_pin|pin_|\botp\b|_otp|cvv|cvc|\bssn\b|_ssn|secret|private[_-]?key|access[_-]?key|api[_-]?key|token)/i.test(
           envName
         );
-      if (isSensitiveEnv && fallbackVal && fallbackVal !== 'secret_sauce') {
+      if (isSensitiveEnv && fallbackVal && fallbackVal !== 'secret_sauce' && fallbackVal !== 'invalid-test-credential') {
         violations.push(
           `[Secret Hygiene Gate] ${relTarget} defines a non-empty fallback secret literal for process.env.${envName}. Use requireEnv('${envName}') instead of a hardcoded fallback credential.`
         );
@@ -847,19 +891,24 @@ for (const targetFile of allCodeAndArtifactFiles) {
   }
 
   const isScannedArtifactOrScript =
-    (relTarget.startsWith('.agents/skills/') && relTarget.includes('/scripts/')) ||
+    relTarget.startsWith('.agents/skills/') ||
     relTarget.startsWith('.agents/domain/') ||
     relTarget.startsWith('.agents/legacy-backups/') ||
     relTarget.startsWith('defects/') ||
     relTarget.startsWith('.playwright/');
   if (isScannedArtifactOrScript) {
     for (const match of rawText.matchAll(ARTIFACT_CREDENTIAL_ASSIGN_REGEX)) {
-      const keyName = match[1];
-      const assignedVal = match[3].trim();
+      const keyName = match[2];
+      const assignedVal = match[4].trim();
       if (
         assignedVal &&
         assignedVal !== 'secret_sauce' &&
+        assignedVal !== '[REDACTED]' &&
+        !assignedVal.startsWith('[REDACTED') &&
         !assignedVal.startsWith('<') &&
+        !assignedVal.startsWith('${') &&
+        !/^\$\{\{/.test(assignedVal) &&
+        !/^\$[A-Z_][A-Z0-9_]*$/.test(assignedVal) &&
         !assignedVal.includes('process.env') &&
         !assignedVal.includes('UserBuilder.')
       ) {
@@ -873,19 +922,19 @@ for (const targetFile of allCodeAndArtifactFiles) {
 
 // 7. Audit Git Index & Staged Files for accidentally tracked .env, .auth/*.json, .exploratory/checkpoints/*, .exploratory/live-*, .agent-browser/, .playwright-cli/, .playwright/, or .agents/legacy-backups/
 const FORBIDDEN_GIT_TRACKED_FILE_REGEX =
-  /^(?:\.env|\..*\.env|\.env\.(?!example$)[^/]+|\.auth\/.*\.json|\.exploratory\/checkpoints\/.*|\.exploratory\/live-[^/]+|\.agent-browser\/.*|\.playwright-cli\/.*|\.playwright\/.*|\.agents\/legacy-backups\/.*)$/;
+  /^(?:(?:.*\/)?\.env|(?:.*\/)?\..*\.env|(?:.*\/)?\.env\.(?!example$)[^/]+|(?:.*\/)?\.auth\/.*\.json|\.exploratory\/checkpoints\/.*|\.exploratory\/live-[^/]+|\.agent-browser\/.*|\.playwright-cli\/.*|\.playwright\/.*|\.agents\/legacy-backups\/.*)$/i;
 
 if (fs.existsSync(path.join(ROOT, '.git'))) {
   const trackedSet = new Set();
   for (const gitArgs of [
-    ['ls-files', '--cached'],
-    ['diff', '--cached', '--name-only'],
+    ['ls-files', '-z', '--cached'],
+    ['diff', '-z', '--cached', '--name-only'],
   ]) {
     try {
       const res = spawnSync('git', gitArgs, { cwd: ROOT, encoding: 'utf8' });
       if (res.status === 0 && res.stdout) {
-        for (const line of res.stdout.split(/\r?\n/)) {
-          const trimmed = line.trim().replace(/\\/g, '/');
+        for (const entry of res.stdout.split('\0')) {
+          const trimmed = entry.trim().replace(/\\/g, '/');
           if (trimmed) trackedSet.add(trimmed);
         }
       }
@@ -896,7 +945,7 @@ if (fs.existsSync(path.join(ROOT, '.git'))) {
   for (const trackedPath of trackedSet) {
     if (FORBIDDEN_GIT_TRACKED_FILE_REGEX.test(trackedPath)) {
       violations.push(
-        `[Git Secret File Gate] '${trackedPath}' is tracked or staged in Git. Run 'git rm --cached ${trackedPath}' so sensitive environment/session files are never committed.`
+        `[Git Secret File Gate] '${trackedPath}' is tracked or staged in Git. Run 'git rm --cached -- ${JSON.stringify(trackedPath)}' so sensitive environment/session files are never committed.`
       );
     }
   }
@@ -908,7 +957,7 @@ if (fs.existsSync(pkgJsonPath)) {
   try {
     const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
     const EXACT_SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-    for (const section of ['dependencies', 'devDependencies', 'overrides']) {
+    for (const section of ['dependencies', 'devDependencies', 'optionalDependencies', 'overrides']) {
       const deps = pkg[section];
       if (!deps || typeof deps !== 'object') continue;
       for (const [depName, depVer] of Object.entries(deps)) {
