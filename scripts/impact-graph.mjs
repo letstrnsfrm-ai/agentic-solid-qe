@@ -608,8 +608,12 @@ function parseFixtureFile(relPath, codeNoComments, imports) {
  */
 export function extractSpecUsedFixtures(codeNoComments) {
   const used = new Set();
+  // NB: the span between `test(` and `async ({ ... })` is matched as plain
+  // characters or whole string literals, so `{...}` / `;` inside a test
+  // title (e.g. 'Verify GET /orders/{id} returns 200') cannot break the
+  // match and trigger the all-fixtures fallback in buildImpactGraph (#64).
   const fnRe =
-    /\b(?:test(?:\.(?:only|skip|fixme|fail|beforeEach|afterEach|beforeAll|afterAll))?)\s*\([^;{]{0,600}?async\s*\(\s*\{([^}]{0,500})\}/g;
+    /\b(?:test(?:\.(?:only|skip|fixme|fail|beforeEach|afterEach|beforeAll|afterAll))?)\s*\((?:[^;{'\"`]|'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"|`(?:[^`\\]|\\.)*`){0,600}?async\s*\(\s*\{([^}]{0,500})\}/g;
   for (const m of codeNoComments.matchAll(fnRe)) {
     const destructured = m[1];
     for (const part of destructured.split(',')) {
