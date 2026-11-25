@@ -6933,7 +6933,6 @@ test('security-audit-v0.48.18: secret redaction, tar symlink/PAX defense, SSRF/U
     assertSafeLegacyScanRoot,
     sanitizeSafeAppBaseUrl,
   } = await import('./legacy-test-migrator.mjs');
-  const { sanitizeReleaseCommitText } = await import('./generate-release-notes.mjs');
 
   // 1. Live secret redaction ($-anchor fix) + CDP port & sensitive selector blocking
   const stripeKey = ['sk', 'live', '51NabcDEF1234567890xyzXYZ'].join('_');
@@ -7139,11 +7138,18 @@ test('security-audit-v0.48.18: secret redaction, tar symlink/PAX defense, SSRF/U
   }
 
   // 8. Release notes Markdown link/BiDi neutralization & .git/ output write block
-  const { resolveSafeRepoOutputPath } = await import('./generate-release-notes.mjs');
-  const cleanCommit = sanitizeReleaseCommitText('feat: fix \u202E[spoof](https://evil.example/payload)');
-  assert.ok(!cleanCommit.includes('\u202E'));
-  assert.match(cleanCommit, /\\\[spoof\\\]\(https:\/\/evil\.example\/payload\)/);
-  assert.throws(() => resolveSafeRepoOutputPath('.git/config', '--output'), /Security Error/i);
+  // Guarded by HAS_RELEASE_NOTES_SCRIPT (#65): generate-release-notes.mjs is
+  // framework-repo-only and is not synced to adopter repos, so importing it
+  // unconditionally breaks `cortex verify --with-engine` there.
+  if (HAS_RELEASE_NOTES_SCRIPT) {
+    const { sanitizeReleaseCommitText, resolveSafeRepoOutputPath } = await import(
+      './generate-release-notes.mjs'
+    );
+    const cleanCommit = sanitizeReleaseCommitText('feat: fix \u202E[spoof](https://evil.example/payload)');
+    assert.ok(!cleanCommit.includes('\u202E'));
+    assert.match(cleanCommit, /\\\[spoof\\\]\(https:\/\/evil\.example\/payload\)/);
+    assert.throws(() => resolveSafeRepoOutputPath('.git/config', '--output'), /Security Error/i);
+  }
 
   // 9. AuthTokenBridge Secure cookie transport guard, IP domain exact match, and JSON localStorage token scoping
   const nodeMajor = Number(process.versions.node.split('.')[0]);
