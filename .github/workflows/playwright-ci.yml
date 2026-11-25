@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       grep_tags:
-        description: 'Optional Playwright @tag regex filter (e.g. @p0, @motor-b2c, @api-contract)'
+        description: 'Optional Playwright @tag regex filter (e.g. @p0, @nfr, @a11y, @perf, @security, @api-contract)'
         required: false
         default: ''
         type: string

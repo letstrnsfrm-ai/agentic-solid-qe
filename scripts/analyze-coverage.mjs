@@ -514,6 +514,22 @@ if (fs.existsSync(migrationManifestPath) && !fs.lstatSync(migrationManifestPath)
   }
 }
 
+const scopedSpecFileSet = new Set(scopedSpecs.map((s) => s.file));
+const scopedRawSpecs = specsWithContent.filter((s) => scopedSpecFileSet.has(s.file));
+const countNfrTag = (re) => scopedRawSpecs.filter((s) => re.test(s.rawContent)).length;
+const nfrCoverage = {
+  a11ySpecs: countNfrTag(/@a11y\b|toPassAxeAudit|a11yCollector|toMatchAriaSnapshot/),
+  perfSpecs: countNfrTag(/@perf\b|toMeetPerformanceBudget|perfCollector/),
+  securitySpecs: countNfrTag(/@security\b|toMeetSecurityHygiene|securityCollector/),
+  visualSpecs: countNfrTag(/@visual\b|toHaveScreenshot/),
+  totalNfrSpecs: countNfrTag(
+    /@(?:nfr|a11y|perf|security|visual)\b|a11yCollector|perfCollector|securityCollector|toHaveScreenshot|toMatchAriaSnapshot/
+  ),
+  nfrTapes: scopedTapes.filter((t) =>
+    ['accessibility', 'visual-regression', 'performance-budget', 'security-hygiene'].includes(t.charter)
+  ).length,
+};
+
 const isCompact = !forceFull && (forceSummary || scopedSpecs.length + scopedTapes.length > 25);
 
 const report = isCompact
@@ -538,6 +554,7 @@ const report = isCompact
         recordedTapes: scopedTapes.length,
         uncompiledTapes: scopedUncompiled.length,
         automatedSpecs: scopedSpecs.length,
+        nfrSpecs: nfrCoverage.totalNfrSpecs,
         components: components.length,
         pages: pages.length,
         wizardSteps: wizardSteps.length,
@@ -546,6 +563,7 @@ const report = isCompact
         pendingUpgradePatches: pendingUpgradePatches.length,
         handoffRecommendations: scopedHandoffRecommendations.length,
       },
+      nfrCoverage,
       topUncoveredShards: scopedUncovered.slice(0, 10),
       topUncompiledTapes: scopedUncompiled.slice(0, 10),
       topStaleShards: scopedStale.slice(0, 10),
@@ -573,6 +591,7 @@ const report = isCompact
         routeIndex: domainGraph.routeIndex,
         staleShards: scopedStale,
       },
+      nfrCoverage,
       domainShards: scopedShards,
       uncoveredShards: scopedUncovered,
       recordedSessionTapes: scopedTapes,

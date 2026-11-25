@@ -8,7 +8,7 @@ description: Curates regression execution tags (@p0, @smoke, @regression), harde
 ## 1. Zero-Prompt Auto-Start: Suite & Tag Readiness Audit
 When invoked as `/04-ci-pipeline`, immediately execute:
 1. Run `npm run coverage:gaps -- --summary` (or `--squad <squad>`) and inspect `tests/*.spec.ts` and `.exploratory/tapes/*.json`.
-2. Verify every automated spec includes priority and suite tags (`@p0`, `@smoke`, `@regression`) matching its Session Tape risk tier.
+2. Verify every automated spec includes priority/suite tags (`@p0`, `@smoke`, `@regression`, or dedicated NFR tags `@a11y`, `@perf`, `@security`, `@nfr` run via `npm run test:nfr`).
 
 ## 2. Deployed Environment & Config Hardening (`references/ci-templates.md`)
 1. Audit `playwright.config.ts` to ensure:

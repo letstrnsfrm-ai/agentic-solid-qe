@@ -4,15 +4,19 @@ import { InventoryPage } from '@pages/inventory.page';
 import { CheckoutPage } from '@pages/checkout.page';
 import { registerOverlayHandlers } from '@shared/ui/overlay-handler';
 import { holdForExplore } from '@shared/ui/explore-handshake';
+import { AccessibilityCollector, PerformanceCollector, SecurityHygieneCollector } from '@shared/nfr';
 
 /**
  * Segregated Fixture Contract (OCP & ISP).
- * Specs inject only the Page or Component objects they need for a given scenario.
+ * Specs inject only the Page, Component, or NFR Collector objects they need for a given scenario.
  */
 export interface AppFixtures {
   loginPage: LoginPage;
   inventoryPage: InventoryPage;
   checkoutPage: CheckoutPage;
+  a11yCollector: AccessibilityCollector;
+  perfCollector: PerformanceCollector;
+  securityCollector: SecurityHygieneCollector;
   explorePause: void;
 }
 
@@ -29,6 +33,15 @@ export const test = base.extend<AppFixtures>({
   },
   checkoutPage: async ({ page }, use) => {
     await use(new CheckoutPage(page));
+  },
+  a11yCollector: async ({}, use) => {
+    await use(new AccessibilityCollector());
+  },
+  perfCollector: async ({}, use) => {
+    await use(new PerformanceCollector());
+  },
+  securityCollector: async ({}, use) => {
+    await use(new SecurityHygieneCollector());
   },
   explorePause: [
     async ({ page, context }, use, testInfo) => {

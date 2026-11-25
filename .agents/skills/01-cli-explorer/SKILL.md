@@ -22,6 +22,7 @@ description: Autonomous feature discovery, multi-page/multi-portal exploration, 
 ## 4. Lazy References (Read ONLY When Needed)
 - `references/charters.md` — Charters & multi-oracle checks.
 - `references/charter-resume-and-codegen.md` — Resume, codegen & `resumesFrom`.
-- `references/charter-complex-ui-and-a11y.md` — Wizards, APIs, portals, overlays, a11y/visual.
+- `references/charter-complex-ui-and-a11y.md` — Wizards, APIs, portals, overlays, iframes.
+- `references/charter-nfr.md` — NFR charters (`@a11y`, `@perf`, `@security`, `@visual`).
 - `references/charter-debrief-and-tapes.md` — Debrief Matrix & `cortex tape`.
 - `references/defect-template.md` — Defect template.
