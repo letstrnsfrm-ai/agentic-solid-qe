@@ -108,6 +108,17 @@ function runAgentBrowser(session, cmdArgs) {
   return (res.stdout || '').trim();
 }
 
+// agent-browser output is semi-untrusted (a page can influence localStorage
+// contents, and a failed run can return a non-JSON error message), so a
+// malformed payload must fail with a clean error, not a raw SyntaxError.
+function parseAgentBrowserJson(raw, label) {
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Failed to parse agent-browser ${label} output as JSON: ${err.message}`);
+  }
+}
+
 export function buildStorageState({ cookies = [], origin = '', localStorageEntries = [] } = {}) {
   const safeCookies = Array.isArray(cookies) ? cookies : [];
   const safeEntries = Array.isArray(localStorageEntries) ? localStorageEntries : [];
@@ -129,7 +140,7 @@ function main() {
   const { authDir, resolvedOut } = assertSafeAuthOutputPath(out, root);
 
   const cookiesRaw = runAgentBrowser(safeSession, ['cookies', 'get', '--json']);
-  const parsedCookies = cookiesRaw ? JSON.parse(cookiesRaw) : [];
+  const parsedCookies = cookiesRaw ? parseAgentBrowserJson(cookiesRaw, 'cookies') : [];
   const cookies = Array.isArray(parsedCookies)
     ? parsedCookies
     : Array.isArray(parsedCookies?.cookies)
@@ -141,7 +152,7 @@ function main() {
     'eval',
     '() => Object.entries(localStorage).map(([name, value]) => ({ name, value }))',
   ]);
-  const parsedLs = lsRaw ? JSON.parse(lsRaw) : [];
+  const parsedLs = lsRaw ? parseAgentBrowserJson(lsRaw, 'localStorage') : [];
   const localStorageEntries = Array.isArray(parsedLs) ? parsedLs : [];
 
   const state = buildStorageState({ cookies, origin, localStorageEntries });

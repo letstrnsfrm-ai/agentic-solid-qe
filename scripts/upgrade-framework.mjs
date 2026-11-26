@@ -40,7 +40,102 @@ export function resolveUpgradeRepoSlug(env = process.env) {
       `Security Error: Invalid CORTEX_UPGRADE_REPO '${custom}'. Must match 'owner/repo' ([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+).`
     );
   }
+  // A custom repo redirects the upgrade to code from an arbitrary owner.
+  // Only honour it when the operator explicitly opts in; otherwise the
+  // upgrade always comes from the official repository.
+  const optIn = String(env.CORTEX_UPGRADE_ALLOW_CUSTOM_REPO || '').trim().toLowerCase();
+  if (optIn !== '1' && optIn !== 'true') {
+    throw new Error(
+      `Security Error: CORTEX_UPGRADE_REPO '${custom}' is not the official repository '${DEFAULT_REPO_SLUG}'. ` +
+        `Set CORTEX_UPGRADE_ALLOW_CUSTOM_REPO=1 to explicitly opt in to upgrading from a custom repository.`
+    );
+  }
   return custom;
+}
+
+/**
+ * Resolves a release tag to the full commit SHA it points at, via
+ * `git ls-remote --tags`. Prefers the peeled `^{}` ref (annotated tags point
+ * at a tag object, not the commit); for lightweight tags the tag ref itself
+ * is the commit. Throws a Security Error when the tag cannot be resolved —
+ * an upgrade must never execute code it cannot pin to a commit.
+ */
+export function resolveTagCommitSha(repoSlug, targetTag) {
+  const slug = String(repoSlug || '').trim();
+  const tag = String(targetTag || '').trim();
+  if (!SAFE_REPO_SLUG_RE.test(slug) || !tag || tag.includes('..') || /[\s'"]/.test(tag)) {
+    throw new Error(`Security Error: Cannot resolve commit for tag '${tag}' in '${slug}'.`);
+  }
+  const url = `https://github.com/${slug}.git`;
+  let res;
+  try {
+    res = spawnSync('git', ['ls-remote', '--tags', url], { encoding: 'utf8', timeout: 15000 });
+  } catch (err) {
+    throw new Error(`Security Error: Failed to resolve tag '${tag}' for '${slug}': ${err?.message || err}.`);
+  }
+  if (res.status !== 0 || !res.stdout) {
+    throw new Error(
+      `Security Error: Failed to resolve tag '${tag}' for '${slug}': ${String(res.stderr || res.error || 'git ls-remote failed').trim()}.`
+    );
+  }
+  const wanted = `refs/tags/${tag}`;
+  let fallback = null;
+  for (const line of String(res.stdout).split('\n')) {
+    const [sha, ref] = line.split('\t');
+    if (!sha || !ref) continue;
+    if (ref === `${wanted}^{}` && /^[0-9a-f]{40}$/i.test(sha)) return sha.toLowerCase();
+    if (ref === wanted && /^[0-9a-f]{40}$/i.test(sha)) fallback = sha.toLowerCase();
+  }
+  if (fallback) return fallback;
+  throw new Error(`Security Error: Tag '${tag}' was not found in '${slug}'. Refusing to upgrade from an unverifiable tag.`);
+}
+
+/**
+ * Reads the commit SHA embedded in a GitHub codeload tarball's pax global
+ * header (`comment=<sha>`). Returns the lowercase 40-hex SHA, or null when
+ * the tarball carries no verifiable commit id. Runs after validateTarBuffer,
+ * so header sizes are already known to be well-formed.
+ */
+export function extractTarballCommitSha(tarBuf) {
+  if (!Buffer.isBuffer(tarBuf)) return null;
+  let offset = 0;
+  while (offset + 512 <= tarBuf.byteLength) {
+    const header = tarBuf.subarray(offset, offset + 512);
+    let allZero = true;
+    for (let i = 0; i < 512; i++) {
+      if (header[i] !== 0) {
+        allZero = false;
+        break;
+      }
+    }
+    if (allZero) {
+      offset += 512;
+      continue;
+    }
+    const typeFlagByte = header[156];
+    const typeFlag = typeFlagByte === 0 ? '0' : String.fromCharCode(typeFlagByte);
+    let headerSize;
+    try {
+      headerSize = parseTarOctalOrBase256Size(header, 124, 12);
+    } catch {
+      return null;
+    }
+    const dataStart = offset + 512;
+    if (typeFlag === 'g') {
+      const paxText = tarBuf.subarray(dataStart, dataStart + headerSize).toString('utf8');
+      for (const line of paxText.split('\n')) {
+        const spIdx = line.indexOf(' ');
+        const eqIdx = line.indexOf('=', spIdx + 1);
+        if (spIdx === -1 || eqIdx === -1) continue;
+        if (line.slice(spIdx + 1, eqIdx) === 'comment') {
+          const val = line.slice(eqIdx + 1).trim();
+          if (/^[0-9a-f]{40}$/i.test(val)) return val.toLowerCase();
+        }
+      }
+    }
+    offset = dataStart + Math.ceil(headerSize / 512) * 512;
+  }
+  return null;
 }
 
 export function assertSafeSquadName(squadName) {
@@ -225,6 +320,17 @@ const ALLOWED_UPGRADE_PATCH_TARGETS = new Set([
   'scripts/self-test.mjs',
 ]);
 
+// Framework scripts that execute the upgrade/sync itself. A local patch must
+// never overwrite these, even with --force: a planted patch would persist
+// into every later upgrade/sync. They are only updated by a verified release
+// (tarball/clone/npx pinned to a commit SHA).
+const PROTECTED_PATCH_TARGETS = new Set([
+  'scripts/sync-skills.mjs',
+  'scripts/upgrade-framework.mjs',
+  'scripts/orchestrate.mjs',
+  'scripts/self-test.mjs',
+]);
+
 function assertSafePatchDestination(targetRoot, targetPath, label = 'patch target') {
   const resolvedRoot = path.resolve(targetRoot);
   const resolvedTarget = path.resolve(targetPath);
@@ -354,6 +460,17 @@ function runApplyPatches(targetRoot, { dryRun = false, force = false } = {}) {
   let remaining = 0;
   for (const p of patches) {
     assertSafePatchDestination(targetRoot, p.targetPath, p.targetRel);
+    // A patch must never overwrite the CLI/upgrade scripts themselves, even
+    // with --force — a planted patch would persist into every later
+    // upgrade/sync. Those files are only updated by a verified release.
+    // The patch is kept for manual review; it is not deleted.
+    if (PROTECTED_PATCH_TARGETS.has(p.targetRel)) {
+      remaining++;
+      console.log(
+        `🛑 Refused to apply patch to protected framework script ${p.targetRel}: upgrade the CLI via a verified release instead (patch kept at ${p.patchRel} for manual review).`
+      );
+      continue;
+    }
     if (p.targetRel === 'playwright.config.ts' && fs.existsSync(p.targetPath) && !force) {
       const current = fs.readFileSync(p.targetPath, 'utf8');
       const { changed, content } = injectBlobReporterInPlaywrightConfig(current);
@@ -612,7 +729,11 @@ export async function runTarballOrCloneSync({
   dryRun = false,
   force = false,
   squadName = '',
+  expectedSha = '',
 } = {}) {
+  // Pin the release to a commit before executing anything from it. Callers
+  // that already resolved the tag (main()) pass it in; otherwise resolve here.
+  const verifiedSha = String(expectedSha || '').trim().toLowerCase() || resolveTagCommitSha(repoSlug, targetTag);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-upgrade-'));
   try {
     fs.chmodSync(tmpDir, 0o700);
@@ -665,6 +786,15 @@ export async function runTarballOrCloneSync({
           throw zErr;
         }
         validateTarBuffer(tarBuf);
+        // Verify the payload before executing anything from it: the tarball
+        // must carry the commit the tag resolves to. A missing or mismatched
+        // id is refused — the verified shallow clone below is the fallback.
+        const tarSha = extractTarballCommitSha(tarBuf);
+        if (tarSha !== verifiedSha) {
+          console.warn(
+            `⚠️  Release tarball for '${targetTag}' did not carry the expected commit ${verifiedSha}; falling back to a verified shallow clone.`
+          );
+        } else {
         fs.writeFileSync(uncompressedTarPath, tarBuf, { mode: 0o600 });
         const extractDir = path.join(tmpDir, 'extracted');
         fs.mkdirSync(extractDir, { recursive: true, mode: 0o700 });
@@ -687,6 +817,7 @@ export async function runTarballOrCloneSync({
             assertSafePatchDestination(extractDir, candidateDir, 'extracted release directory');
             extractedDir = candidateDir;
           }
+        }
         }
       }
     } catch (err) {
@@ -716,6 +847,18 @@ export async function runTarballOrCloneSync({
       );
       if (cloneRes.status !== 0) {
         return cloneRes.status ?? 1;
+      }
+      // Verify the clone is the commit the tag resolves to before executing
+      // anything from it (a moved tag would otherwise land here unverified).
+      const headRes = spawnSync('git', ['-C', cloneDir, 'rev-parse', 'HEAD'], {
+        encoding: 'utf8',
+        shell: false,
+      });
+      const clonedSha = String(headRes.stdout || '').trim().toLowerCase();
+      if (headRes.status !== 0 || clonedSha !== verifiedSha) {
+        throw new Error(
+          `Security Error: Cloned release '${targetTag}' resolved to commit '${clonedSha || 'unknown'}', not the expected ${verifiedSha}. Refusing to execute it.`
+        );
       }
       assertExtractedTreeSafe(cloneDir);
       extractedDir = cloneDir;
@@ -840,7 +983,14 @@ Options:
     process.exit(0);
   }
 
-  const syncFlags = ['--yes', `github:${repoSlug}#${targetTag}`, 'sync', targetRoot];
+  // Pin the release to the commit the tag resolves to BEFORE executing
+  // anything: a tag can be moved after it is read, so the npx spec uses the
+  // full commit SHA instead of the tag. The tarball/clone fallback below is
+  // verified against the same SHA.
+  const expectedSha = resolveTagCommitSha(repoSlug, targetTag);
+  console.log(`\n🔒 Target release: ${targetTag} (commit ${expectedSha})\n`);
+
+  const syncFlags = ['--yes', `github:${repoSlug}#${expectedSha}`, 'sync', targetRoot];
   if (dryRun) syncFlags.push('--dry-run');
   if (force) syncFlags.push('--force');
   if (squadName) syncFlags.push('--squad', squadName);
@@ -863,6 +1013,7 @@ Options:
       dryRun,
       force,
       squadName,
+      expectedSha,
     });
     process.exit(fallbackStatus);
   }
@@ -891,6 +1042,7 @@ Options:
       dryRun,
       force,
       squadName,
+      expectedSha,
     });
     process.exit(fallbackStatus);
   }

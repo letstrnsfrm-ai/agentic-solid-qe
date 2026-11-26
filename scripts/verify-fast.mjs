@@ -73,9 +73,23 @@ export function sanitizeSpecList(specs = [], rootDir = process.cwd()) {
   return [...new Set(clean)];
 }
 
-function spawnAsync(command, args, { cwd, env = process.env, inherit = false } = {}) {
+// A hung child (tsc, Playwright, self-test) must not hang `verify` forever.
+// Default 15 minutes per child, overridable per call or via
+// CORTEX_VERIFY_TIMEOUT_MS. On timeout the child is terminated and the step
+// fails with a clear message instead of hanging the run.
+const DEFAULT_SPAWN_TIMEOUT_MS = 15 * 60 * 1000;
+
+function resolveSpawnTimeoutMs(explicit) {
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const envRaw = Number(process.env.CORTEX_VERIFY_TIMEOUT_MS);
+  if (Number.isFinite(envRaw) && envRaw > 0) return envRaw;
+  return DEFAULT_SPAWN_TIMEOUT_MS;
+}
+
+function spawnAsync(command, args, { cwd, env = process.env, inherit = false, timeoutMs } = {}) {
   return new Promise((resolve) => {
     const t0 = performance.now();
+    const limit = resolveSpawnTimeoutMs(timeoutMs);
     const child = spawn(command, args, {
       cwd,
       env,
@@ -91,7 +105,32 @@ function spawnAsync(command, args, { cwd, env = process.env, inherit = false } =
         stderr += chunk.toString('utf8');
       });
     }
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill('SIGTERM');
+      } catch {}
+      const forceTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {}
+      }, 5000);
+      if (forceTimer.unref) forceTimer.unref();
+      resolve({
+        status: 1,
+        stdout,
+        stderr: `${stderr}\n[verify] Timed out after ${limit}ms: ${command} ${args.join(' ')}`.trim(),
+        durationMs: Math.round(performance.now() - t0),
+        timedOut: true,
+      });
+    }, limit);
+    if (timer.unref) timer.unref();
     child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       resolve({
         status: 1,
         stdout,
@@ -100,6 +139,9 @@ function spawnAsync(command, args, { cwd, env = process.env, inherit = false } =
       });
     });
     child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       resolve({
         status: code ?? 1,
         stdout,

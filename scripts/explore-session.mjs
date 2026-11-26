@@ -1116,7 +1116,7 @@ Options:
 Subcommands:
   start       Reach Point A and attach agent-browser (headless by default; compact DSL output, --json opt-in):
                 --from-spec <tests/foo.spec.ts> [--grep "<title>"] [--until-step "<step>"] [--headed]
-                --from-seed <src/...|scripts/...> --url <url> [--auth <.auth/p.json>]
+                --from-seed <src/seeders/*.seeder.mjs|scripts/seed-*.mjs> --url <url> [--auth <.auth/p.json>]
                 --checkpoint <name> | --url <url> [--scope main] [--scenario <id>] [--actor <id>] [--json]
   act         Execute 1 action or inline assert, record to draft tape, return pruned -i delta:
                 cortex explore act <click|fill|select|check|press|goto|assert> [args...] [--step "<business>"] [--scope main] [--json]
@@ -1280,6 +1280,20 @@ async function cmdStart(args) {
       checkpointPath,
     };
   } else if (fromSeed) {
+    // --from-seed executes a file as a Node script, so only the documented
+    // seeder locations may run: generated seeders under src/seeders/ and
+    // hand-written seed scripts under scripts/seed-*.mjs. Anything else
+    // (an arbitrary repo file, a page object, a fixture) is refused — an
+    // agent following instructions in an untrusted repo must not be talked
+    // into executing it. Traversal/symlink confinement still applies.
+    const seedRel = String(fromSeed).replace(/\\/g, '/');
+    const isGeneratedSeeder = /^src\/seeders\/[A-Za-z0-9_.-]+\.seeder\.(?:mjs|js|ts)$/.test(seedRel);
+    const isSeedScript = /^scripts\/seed-[A-Za-z0-9_.-]+\.m?js$/.test(seedRel);
+    if (!isGeneratedSeeder && !isSeedScript) {
+      throw new Error(
+        `Security Error: --from-seed must point to a seeder under src/seeders/*.seeder.(mjs|js|ts) or a seed script under scripts/seed-*.mjs (got '${fromSeed}').`
+      );
+    }
     const allowed = fromSeed.startsWith('src/') ? 'src/' : 'scripts/';
     const safeSeed = resolveConfinedPath(ROOT, fromSeed, allowed, '--from-seed');
     const seedRes = spawnSync(process.execPath, [safeSeed.absPath], { cwd: ROOT, encoding: 'utf8' });

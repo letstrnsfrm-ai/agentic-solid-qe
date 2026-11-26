@@ -5,19 +5,26 @@ export interface UserPersona {
   readonly expectedErrorBanner?: string;
 }
 
-const SAUCEDEMO_DEMO_SECRET = process.env.SAUCEDEMO_PASSWORD ?? 'secret_sauce';
-const DEFAULT_SECRET = process.env.TEST_PASSWORD || SAUCEDEMO_DEMO_SECRET;
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}. Set it in .env or CI secrets.`);
+  }
+  return value;
+}
 
 /**
  * Typed Data Builder (DIP) centralizing persona credentials and expected validation messages.
  * Specs must reference UserBuilder methods rather than hardcoding magic strings.
+ * Passwords are never hardcoded here: they come from TEST_PASSWORD (see .env.example),
+ * the same requireEnv() pattern generated builders use.
  */
 export class UserBuilder {
   static standardUser(): UserPersona {
     return {
       role: 'standard',
       username: process.env.TEST_USERNAME || 'standard_user',
-      password: DEFAULT_SECRET,
+      password: requireEnv('TEST_PASSWORD'),
     };
   }
 
@@ -25,7 +32,7 @@ export class UserBuilder {
     return {
       role: 'locked_out',
       username: 'locked_out_user',
-      password: DEFAULT_SECRET,
+      password: requireEnv('TEST_PASSWORD'),
       expectedErrorBanner: 'Epic sadface: Sorry, this user has been locked out.',
     };
   }
@@ -34,7 +41,7 @@ export class UserBuilder {
     return {
       role: 'problem',
       username: 'problem_user',
-      password: DEFAULT_SECRET,
+      password: requireEnv('TEST_PASSWORD'),
     };
   }
 
@@ -42,7 +49,7 @@ export class UserBuilder {
     return {
       role: 'performance_glitch',
       username: 'performance_glitch_user',
-      password: DEFAULT_SECRET,
+      password: requireEnv('TEST_PASSWORD'),
     };
   }
 

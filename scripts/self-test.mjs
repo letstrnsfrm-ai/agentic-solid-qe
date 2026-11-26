@@ -2741,6 +2741,14 @@ test('27. build-system-map generates interactive HTML, auto-refreshes on domain:
     assert.ok(html.includes('MapApp'), 'HTML should include app name');
     assert.ok(html.includes('/api/quote'), 'HTML should include discovered API endpoint');
     assert.ok(!html.includes('</script><script>alert(1)</script>'), 'Unescaped </script> must not appear in embedded JSON');
+    // A <script> in a test title must appear only in its escaped form: as
+    // \u003c inside the embedded MODEL JSON, and never as a raw tag outside it
+    // (the client-side esc() renders it as &lt;script&gt; at display time).
+    const modelLine = html.split('\n').find((l) => l.startsWith('const MODEL = ')) || '';
+    assert.ok(modelLine.includes('\\u003cscript\\u003e'), 'MODEL must carry the title with < escaped as \\u003c');
+    const htmlOutsideModel = html.replace(modelLine, '');
+    assert.ok(!htmlOutsideModel.includes('alert(1)'), 'no trace of the script payload outside MODEL');
+    assert.ok(!htmlOutsideModel.includes('</script><script>'), 'no raw script tag from a title outside MODEL');
 
     // 2. --out custom path inside workspace works
     const customRel = path.join('reports', 'custom-map.html');
@@ -2910,7 +2918,13 @@ test('Enterprise Security Hardening: heal-drift locator allowlist, DEFECT redact
     assert.equal(isEnterpriseOfflineMode({ CORTEX_OFFLINE: '1' }), true);
     assert.equal(isEnterpriseOfflineMode({ CORTEX_NO_NETWORK: 'true' }), true);
     assert.equal(isEnterpriseOfflineMode({}), false);
-    assert.equal(resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'my-org/internal-qe' }), 'my-org/internal-qe');
+    // A custom repo is honoured only with the explicit opt-in (H2); without
+    // it the upgrade always comes from the official repository.
+    assert.equal(
+      resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'my-org/internal-qe', CORTEX_UPGRADE_ALLOW_CUSTOM_REPO: '1' }),
+      'my-org/internal-qe'
+    );
+    assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'my-org/internal-qe' }), /explicitly opt in/);
     assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: '../evil/repo' }), /Security Error/);
     assert.equal(assertSafeSquadName('motor-b2c'), 'motor-b2c');
     assert.throws(() => assertSafeSquadName('motor & calc.exe'), /Security Error/);
@@ -6742,8 +6756,12 @@ test('security-audit: Zip-Slip tar validation, repo slug hardening, ReDoS guards
   assert.throws(() => validateTarArchiveEntries(['C:\\Windows\\win.ini']), /Zip-Slip/);
   assert.throws(() => validateTarArchiveEntries(['repo-v1/file\0.txt']), /Zip-Slip/);
 
-  // 2. Repo slug rejects leading hyphen/dot
-  assert.equal(resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'acme/agentic-solid-qe' }), 'acme/agentic-solid-qe');
+  // 2. Repo slug rejects leading hyphen/dot; a custom repo needs the explicit opt-in (H2)
+  assert.equal(
+    resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'acme/agentic-solid-qe', CORTEX_UPGRADE_ALLOW_CUSTOM_REPO: '1' }),
+    'acme/agentic-solid-qe'
+  );
+  assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'acme/agentic-solid-qe' }), /explicitly opt in/);
   assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: '-evil/repo' }), /Security Error/);
   assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'owner/-evil' }), /Security Error/);
 
@@ -7147,7 +7165,23 @@ test('security-audit-v0.48.18: secret redaction, tar symlink/PAX defense, SSRF/U
     );
     const cleanCommit = sanitizeReleaseCommitText('feat: fix \u202E[spoof](https://evil.example/payload)');
     assert.ok(!cleanCommit.includes('\u202E'));
-    assert.match(cleanCommit, /\\\[spoof\\\]\(https:\/\/evil\.example\/payload\)/);
+    assert.match(cleanCommit, /\\\[spoof\\\]\\\(https:\/\/evil\.example\/payload\\\)/);
+    // Backslash-prefixed payloads (H1): the backslash must be escaped FIRST,
+    // so `\[spoof\](url)` cannot collapse back into a live link.
+    const backslashLink = sanitizeReleaseCommitText('\\[spoof\\](https://evil.example)');
+    assert.ok(!backslashLink.includes('](https://'), 'backslash-prefixed link must not survive as a link');
+    assert.ok(backslashLink.includes('\\\\\\[spoof'), 'backslash must be doubled before the bracket escape');
+    const imagePayload = sanitizeReleaseCommitText('![x](https://evil.example/p.png)');
+    assert.ok(!imagePayload.includes('![x]('), 'image payload must not survive as an image');
+    assert.ok(!imagePayload.includes('](https://'), 'image payload must not survive as a link');
+    const backslashImage = sanitizeReleaseCommitText('\\\\![x](https://evil.example/p.png)');
+    assert.ok(!backslashImage.includes('![x]('), 'backslash-prefixed image must not survive as an image');
+    const htmlPayload = sanitizeReleaseCommitText('<a href="https://evil.example">x</a>');
+    assert.ok(!/(?<!\\)<a[\s>]/.test(htmlPayload), 'raw HTML link must be escaped');
+    // @mentions and emphasis are neutralised (L1).
+    const mentionPayload = sanitizeReleaseCommitText('fix: @ceo please approve **URGENT**');
+    assert.ok(!mentionPayload.includes('@ceo'), '@mention must be neutralised');
+    assert.ok(!mentionPayload.includes('**URGENT**'), 'emphasis must be escaped');
     assert.throws(() => resolveSafeRepoOutputPath('.git/config', '--output'), /Security Error/i);
   }
 

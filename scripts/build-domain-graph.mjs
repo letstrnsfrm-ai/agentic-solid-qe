@@ -204,6 +204,16 @@ export function buildDomainGraph({ rootDir = process.cwd(), writeToDisk = true, 
       if (parent === cur) break;
       cur = parent;
     }
+    // Realpath check: the lstat walk covers existing components, but a
+    // symlinked workspace root is only visible after resolution.
+    try {
+      const realRoot = fs.realpathSync(resolvedRoot);
+      let nearest = resolvedTarget;
+      while (!fs.existsSync(nearest) && nearest !== resolvedRoot) nearest = path.dirname(nearest);
+      if (!isWithinDir(fs.realpathSync(nearest), realRoot)) return true;
+    } catch {
+      // Unresolvable path — the lstat walk above already ran.
+    }
     return false;
   };
 
@@ -240,6 +250,16 @@ export function seedShardsFromTapes({ rootDir = process.cwd() } = {}) {
       const parent = path.dirname(cur);
       if (parent === cur) break;
       cur = parent;
+    }
+    // Realpath check: the lstat walk covers existing components, but a
+    // symlinked workspace root is only visible after resolution.
+    try {
+      const realRoot = fs.realpathSync(resolvedRoot);
+      let nearest = resolvedTarget;
+      while (!fs.existsSync(nearest) && nearest !== resolvedRoot) nearest = path.dirname(nearest);
+      if (!isWithinDir(fs.realpathSync(nearest), realRoot)) return true;
+    } catch {
+      // Unresolvable path — the lstat walk above already ran.
     }
     return false;
   };

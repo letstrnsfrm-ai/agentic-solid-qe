@@ -321,13 +321,63 @@ export function resolveTsImport(fromFileAbs, specifier, rootDir, pathAliases) {
  * Extracts import statements and their imported local identifiers.
  * Returns array of { specifier, resolvedRel, symbols: string[] }.
  */
+// Max statement window scanned for one import/export. Real import statements
+// are far shorter; the bound keeps pathological inputs linear. The old
+// `importRe` lazy clause backtracked quadratically on repeated `import {`
+// fragments with no `from` (45 KB: ~170 ms, 180 KB: ~2.8 s, 450 KB: ~16 s).
+const MAX_IMPORT_STATEMENT_CHARS = 2000;
+const IMPORT_KEYWORD_RE = /\b(?:import|export)\b/g;
+
+/**
+ * Parses one static import/export-from statement. `windowText` starts just
+ * after the `import`/`export` keyword and ends at the next `;`, the next
+ * import/export keyword, or the statement cap. Returns { clause, specifier }
+ * or null when the statement is not a static import/export-from (dynamic
+ * import(), import.meta, plain exports, or a clause containing a string
+ * literal — the same cases the old regex skipped). Uses only indexOf and
+ * end-anchored checks, so it runs in linear time with no backtracking.
+ */
+function parseStaticImportStatement(windowText) {
+  let rest = windowText.replace(/^\s+/, '');
+  if (rest.startsWith('type')) {
+    const after = rest.slice(4);
+    if (after === '' || /^[\s]/.test(after)) rest = after.replace(/^\s+/, '');
+  }
+  // Dynamic import() and import.meta are not static imports.
+  if (rest.startsWith('(') || rest.startsWith('.')) return null;
+  const quoteIdx = rest.search(/['"]/);
+  if (quoteIdx === -1) return null;
+  const quote = rest[quoteIdx];
+  const endIdx = rest.indexOf(quote, quoteIdx + 1);
+  if (endIdx === -1) return null;
+  const specifier = rest.slice(quoteIdx + 1, endIdx);
+  if (!specifier || /[\r\n]/.test(specifier)) return null;
+  const beforeTrim = rest.slice(0, quoteIdx).trim();
+  if (beforeTrim === '') return { clause: '', specifier }; // side-effect import
+  if (!/\bfrom\s*$/.test(beforeTrim)) return null;
+  return { clause: beforeTrim.replace(/\bfrom\s*$/, '').trim(), specifier };
+}
+
 export function parseImports(fileAbs, codeNoComments, rootDir, pathAliases) {
   const results = [];
-  const importRe =
-    /(?:\bimport\s+(?:type\s+)?(?:([^;'"]+?)\s+from\s+)?|\bexport\s+(?:type\s+)?(\*(?:\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*)?|\{[^};]*\})\s+from\s+)['"]([^'"]+)['"]/g;
-  for (const m of codeNoComments.matchAll(importRe)) {
-    const clause = (m[1] || m[2] || '').trim();
-    const specifier = m[3];
+  const src = String(codeNoComments || '');
+  const keywordPositions = [...src.matchAll(IMPORT_KEYWORD_RE)].map((m) => ({
+    start: m.index,
+    end: m.index + m[0].length,
+  }));
+  for (let k = 0; k < keywordPositions.length; k++) {
+    const { end: kwEnd } = keywordPositions[k];
+    const nextKeywordAt = k + 1 < keywordPositions.length ? keywordPositions[k + 1].start : src.length;
+    let semiAt = src.indexOf(';', kwEnd);
+    if (semiAt === -1 || semiAt > kwEnd + MAX_IMPORT_STATEMENT_CHARS) {
+      semiAt = kwEnd + MAX_IMPORT_STATEMENT_CHARS;
+    }
+    const windowEnd = Math.min(semiAt, nextKeywordAt, src.length);
+    if (windowEnd <= kwEnd) continue;
+    const parsed = parseStaticImportStatement(src.slice(kwEnd, windowEnd));
+    if (!parsed) continue;
+    const clause = parsed.clause;
+    const specifier = parsed.specifier;
     const resolvedRel = resolveTsImport(fileAbs, specifier, rootDir, pathAliases);
     if (!resolvedRel) continue;
 
