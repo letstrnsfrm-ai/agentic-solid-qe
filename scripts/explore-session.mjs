@@ -145,6 +145,27 @@ export function resolveConfinedPath(rootDir, relPath, allowedPrefix, label = 'pa
   return { absPath: resolved, relPath: normalized };
 }
 
+/**
+ * Validates a --from-seed path against the documented seeder locations and
+ * returns the normalized relative path plus the confinement prefix it must
+ * stay under. The prefix is derived from the NORMALIZED path: a Windows-style
+ * `src\seeders\foo.seeder.mjs` passes the allowlist regex (which runs on the
+ * normalized form), but `startsWith('src/')` on the raw value is false, so
+ * deriving the prefix from the raw value confined it to 'scripts/' and
+ * resolveConfinedPath rejected it.
+ */
+export function resolveFromSeedTarget(fromSeed) {
+  const seedRel = String(fromSeed).replace(/\\/g, '/');
+  const isGeneratedSeeder = /^src\/seeders\/[A-Za-z0-9_.-]+\.seeder\.(?:mjs|js|ts)$/.test(seedRel);
+  const isSeedScript = /^scripts\/seed-[A-Za-z0-9_.-]+\.m?js$/.test(seedRel);
+  if (!isGeneratedSeeder && !isSeedScript) {
+    throw new Error(
+      `Security Error: --from-seed must point to a seeder under src/seeders/*.seeder.(mjs|js|ts) or a seed script under scripts/seed-*.mjs (got '${fromSeed}').`
+    );
+  }
+  return { seedRel, allowed: seedRel.startsWith('src/') ? 'src/' : 'scripts/' };
+}
+
 export function findFreePort(host = '127.0.0.1') {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -1286,15 +1307,7 @@ async function cmdStart(args) {
     // (an arbitrary repo file, a page object, a fixture) is refused — an
     // agent following instructions in an untrusted repo must not be talked
     // into executing it. Traversal/symlink confinement still applies.
-    const seedRel = String(fromSeed).replace(/\\/g, '/');
-    const isGeneratedSeeder = /^src\/seeders\/[A-Za-z0-9_.-]+\.seeder\.(?:mjs|js|ts)$/.test(seedRel);
-    const isSeedScript = /^scripts\/seed-[A-Za-z0-9_.-]+\.m?js$/.test(seedRel);
-    if (!isGeneratedSeeder && !isSeedScript) {
-      throw new Error(
-        `Security Error: --from-seed must point to a seeder under src/seeders/*.seeder.(mjs|js|ts) or a seed script under scripts/seed-*.mjs (got '${fromSeed}').`
-      );
-    }
-    const allowed = fromSeed.startsWith('src/') ? 'src/' : 'scripts/';
+    const { allowed } = resolveFromSeedTarget(fromSeed);
     const safeSeed = resolveConfinedPath(ROOT, fromSeed, allowed, '--from-seed');
     const seedRes = spawnSync(process.execPath, [safeSeed.absPath], { cwd: ROOT, encoding: 'utf8' });
     if (seedRes.status !== 0) {

@@ -93,7 +93,10 @@ const DESTRUCTIVE_FLAG_ALLOWLIST = {
   heal: new Set(['--apply', '--force-shared']),
   migrate: new Set(['--apply']),
   upgrade: new Set(['--force', '--apply-patches']),
-  orchestrate: new Set(['--reset']),
+  // '--force-shared' is a documented orchestrate/heal consent flag: it only
+  // permits mutating a shared module alongside --apply and changes nothing
+  // on its own, so forwarding it to orchestrate is safe.
+  orchestrate: new Set(['--reset', '--force-shared']),
   status: new Set(['--reset']),
 };
 

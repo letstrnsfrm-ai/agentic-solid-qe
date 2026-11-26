@@ -814,7 +814,7 @@ const UNSAFE_SPEC_PATTERNS = [
   {
     name: 'Direct Network Access in Spec (fetch / axios / node:http(s) — use src/api/* via page.request instead)',
     regex:
-      /(?:\bfetch\s*\(|\baxios\s*(?:\(|\.)|(?:from\s+['"](?:axios|node:https?|https?)['"]|require\s*\(\s*['"](?:axios|node:https?|https?)['"]\s*\)))/,
+      /(?:(?<![.\w$])fetch|\b(?:globalThis|window|self)\.fetch)\s*\(|\baxios\s*(?:\(|\.)|(?:from\s+['"](?:axios|node:https?|https?)['"]|require\s*\(\s*['"](?:axios|node:https?|https?)['"]\s*\))/,
   },
 ];
 

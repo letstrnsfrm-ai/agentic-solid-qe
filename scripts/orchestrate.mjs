@@ -2238,7 +2238,11 @@ Usage:
   ]);
   const DESTRUCTIVE_FLAG_ALLOWLIST = {
     compile: new Set(['--apply', '--force-spec']),
-    heal: new Set(['--apply', '--force-shared']),
+    // NOTE: '--apply' is deliberately NOT allowed for heal — the
+    // --heal-action apply branch adds it itself, and a user-supplied
+    // '--apply' forwarded here would override '--dry-run' in heal-drift
+    // (args.includes('--apply')) and mutate during a dry run.
+    heal: new Set(['--force-shared']),
     migrate: new Set(['--apply']),
     upgrade: new Set(['--force', '--apply-patches']),
     orchestrate: new Set(['--reset']),

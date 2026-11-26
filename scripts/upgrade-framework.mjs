@@ -40,6 +40,9 @@ export function resolveUpgradeRepoSlug(env = process.env) {
       `Security Error: Invalid CORTEX_UPGRADE_REPO '${custom}'. Must match 'owner/repo' ([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+).`
     );
   }
+  // An explicitly configured default repo IS the official repository — it
+  // needs no custom-repo opt-in.
+  if (custom.toLowerCase() === DEFAULT_REPO_SLUG.toLowerCase()) return DEFAULT_REPO_SLUG;
   // A custom repo redirects the upgrade to code from an arbitrary owner.
   // Only honour it when the operator explicitly opts in; otherwise the
   // upgrade always comes from the official repository.

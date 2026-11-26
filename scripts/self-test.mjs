@@ -3651,7 +3651,7 @@ test('35. Autonomous resilient cortex wave --run micro-batch execution & orchest
 });
 
 test('36. Security Audit Remediation: blocks manifest deletion traversal, code injection (seeder/heal/wave0), unallowlisted patches, SSRF/IPv6, CLI injection, and ReDoS', async () => {
-  const { buildSeederCodeFromTape, validateExploreActionTuple, assertSafeExploreUrl, resolveConfinedPath } =
+  const { buildSeederCodeFromTape, validateExploreActionTuple, assertSafeExploreUrl, resolveConfinedPath, resolveFromSeedTarget } =
     await import('./explore-session.mjs');
   const { assertSafePlaywrightLocatorExpr } = await import('./heal-drift.mjs');
   const { scaffoldWave0Prereq, runClosedLoopLiveVerifyAndHeal } = await import('./migration-wave-factory.mjs');
@@ -3710,6 +3710,23 @@ test('36. Security Audit Remediation: blocks manifest deletion traversal, code i
     fs.mkdirSync(path.join(tmpRoot, 'scripts'), { recursive: true });
     fs.symlinkSync(outsideFile, path.join(tmpRoot, 'scripts', 'evil-seed.mjs'));
     assert.throws(() => resolveConfinedPath(tmpRoot, 'scripts/evil-seed.mjs', 'scripts/', '--from-seed'));
+
+    // Windows-style --from-seed path (PR #71 review): the confinement prefix
+    // must come from the NORMALIZED path, or src\seeders\... is confined to
+    // 'scripts/' and rejected even though it passes the allowlist regex.
+    assert.deepEqual(resolveFromSeedTarget('src\\seeders\\orders.seeder.mjs'), {
+      seedRel: 'src/seeders/orders.seeder.mjs',
+      allowed: 'src/',
+    });
+    assert.deepEqual(resolveFromSeedTarget('src/seeders/orders.seeder.mjs'), {
+      seedRel: 'src/seeders/orders.seeder.mjs',
+      allowed: 'src/',
+    });
+    assert.deepEqual(resolveFromSeedTarget('scripts\\seed-demo.mjs'), {
+      seedRel: 'scripts/seed-demo.mjs',
+      allowed: 'scripts/',
+    });
+    assert.throws(() => resolveFromSeedTarget('src/pages/login.page.ts'), /--from-seed must point/);
 
     // 3. heal-drift.mjs: strict Playwright locator grammar rejects JS expressions inside args
     assert.equal(
@@ -4339,6 +4356,123 @@ export class InvoicePage {
     const crossSquadAudit = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
     assert.notEqual(crossSquadAudit.status, 0, 'Expected audit-solid to fail on cross-squad import');
     assert.match(crossSquadAudit.stdout + crossSquadAudit.stderr, /Cross-Squad Boundary/);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('PR #71 review: destructive-flag filter — orchestrate dry-run cannot smuggle --apply, sync-skills forwards --force-shared to orchestrate', async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-m5-filter-'));
+  try {
+    const syncRes = runNode(path.join(REPO_ROOT, 'scripts/sync-skills.mjs'), ['init', tmpRoot, '--demo'], REPO_ROOT);
+    assert.equal(syncRes.status, 0, syncRes.stderr);
+
+    // Shared header component consumed by 3 specs (same drift fixture as the
+    // 3-Layer test): snapshot offers "Checkout Now" for "Old Checkout".
+    fs.mkdirSync(path.join(tmpRoot, 'src/shared/components'), { recursive: true });
+    const sharedNavPath = path.join(tmpRoot, 'src/shared/components/global-nav.component.ts');
+    const origSharedNav = `import type { Locator, Page } from '@playwright/test';
+import type { IdentifiableComponent } from '@contracts/component.contract';
+
+export class GlobalNavComponent implements IdentifiableComponent {
+  readonly root: Locator;
+  readonly checkoutBtn: Locator;
+
+  constructor(page: Page) {
+    this.root = page.locator('nav');
+    this.checkoutBtn = this.root.getByRole('button', { name: 'Old Checkout' });
+  }
+}
+`;
+    fs.writeFileSync(sharedNavPath, origSharedNav, 'utf8');
+    for (const [name, tag] of [
+      ['nav-smoke.spec.ts', '@smoke'],
+      ['nav-reg-a.spec.ts', '@regression'],
+      ['nav-reg-b.spec.ts', '@regression'],
+    ]) {
+      fs.writeFileSync(
+        path.join(tmpRoot, 'tests', name),
+        `import { test, expect } from '@fixtures/app.fixture';
+import { UserBuilder } from '@data/user.builder';
+import { GlobalNavComponent } from '@shared/components/global-nav.component';
+
+test('nav check ${tag}', async ({ page }) => {
+  await test.step('Verify nav', async () => {
+    const nav = new GlobalNavComponent(page);
+    expect(UserBuilder.standardUser().username).toBeTruthy();
+    await expect(nav.checkoutBtn).toBeVisible();
+  });
+});
+`,
+        'utf8'
+      );
+    }
+    const snapDir = path.join(tmpRoot, '.agent-browser');
+    fs.mkdirSync(snapDir, { recursive: true });
+    fs.writeFileSync(path.join(snapDir, 'page-heal.yml'), `- button "Checkout Now" [ref=e5]\n`, 'utf8');
+    const errMsg = `TimeoutError: locator.click: Timeout 5000ms exceeded.\nCall log:\n  - waiting for getByRole('button', { name: 'Old Checkout' })`;
+    const healArgs = ['--spec', 'tests/nav-smoke.spec.ts', '--error', errMsg, '--json'];
+
+    // 5b: --force-shared must survive the sync-skills -> orchestrate boundary
+    // so a shared-module heal can proceed (without it the heal is blocked).
+    const sharedRes = runNode(
+      path.join(REPO_ROOT, 'scripts/sync-skills.mjs'),
+      ['orchestrate', '--heal-action', 'apply', '--force-shared', ...healArgs],
+      tmpRoot
+    );
+    assert.equal(sharedRes.status, 0, `heal via sync-skills delegate failed: ${sharedRes.stderr}\n${sharedRes.stdout}`);
+    assert.match(sharedRes.stdout, /"status":\s*"healed"/, 'Expected shared heal to succeed once --force-shared is forwarded');
+    assert.match(fs.readFileSync(sharedNavPath, 'utf8'), /Checkout Now/);
+    fs.writeFileSync(sharedNavPath, origSharedNav, 'utf8');
+
+    // 5a: a user-supplied --apply must NOT leak through the orchestrate heal
+    // boundary — dry-run stays a dry run (status 'diagnosed', file untouched).
+    const dryRes = runNode(
+      path.join(REPO_ROOT, 'scripts/orchestrate.mjs'),
+      ['--heal-action', 'dry-run', '--apply', ...healArgs],
+      tmpRoot
+    );
+    assert.equal(dryRes.status, 0, `dry-run heal failed: ${dryRes.stderr}\n${dryRes.stdout}`);
+    assert.match(dryRes.stdout, /"status":\s*"diagnosed"/, 'Dry run must report diagnosed, not heal or block');
+    assert.equal(fs.readFileSync(sharedNavPath, 'utf8'), origSharedNav, 'Dry run must not mutate the shared component');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('PR #71 review: audit-solid fetch() pattern ignores object-method calls but blocks bare/global fetch', async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-fetch-gate-'));
+  try {
+    const syncRes = runNode(path.join(REPO_ROOT, 'scripts/sync-skills.mjs'), ['init', tmpRoot, '--demo'], REPO_ROOT);
+    assert.equal(syncRes.status, 0, syncRes.stderr);
+    const specBody = (snippet) => `import { test, expect } from '@fixtures/app.fixture';
+import { UserBuilder } from '@data/user.builder';
+
+test('fetch gate check @smoke', async ({ page }) => {
+  await test.step('Check fetch gating', async () => {
+    expect(UserBuilder.standardUser().username).toBeTruthy();
+${snippet}
+  });
+});
+`;
+    // Object-method call must NOT trip the gate.
+    fs.writeFileSync(
+      path.join(tmpRoot, 'tests/fetch-method.spec.ts'),
+      specBody(`    const orderApi = { fetch: async (id) => id };\n    await orderApi.fetch('1');`)
+    );
+    let res = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.equal(res.status, 0, `audit-solid must pass on orderApi.fetch(id): ${res.stdout}\n${res.stderr}`);
+    // Bare fetch() must trip the gate.
+    fs.writeFileSync(path.join(tmpRoot, 'tests/fetch-bare.spec.ts'), specBody(`    await fetch('/api/orders');`));
+    res = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.notEqual(res.status, 0, 'audit-solid must fail on bare fetch()');
+    assert.match(res.stdout + res.stderr, /Direct Network Access/);
+    fs.rmSync(path.join(tmpRoot, 'tests/fetch-bare.spec.ts'));
+    // globalThis.fetch() must trip the gate.
+    fs.writeFileSync(path.join(tmpRoot, 'tests/fetch-global.spec.ts'), specBody(`    await globalThis.fetch('/api/orders');`));
+    res = runNode(path.join(tmpRoot, 'scripts/audit-solid.mjs'), [], tmpRoot);
+    assert.notEqual(res.status, 0, 'audit-solid must fail on globalThis.fetch()');
+    assert.match(res.stdout + res.stderr, /Direct Network Access/);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -5442,6 +5576,27 @@ test('framework-hardening-batch-3: compact multi-attr refs, ErrorBannerContract,
     assert.equal(parsedImps.length, 1);
     assert.deepEqual(parsedImps[0].symbols, ['InvoiceBuilder']);
 
+    // 8b. impact-graph: parseImports keeps imports whose specifier contains
+    // `import`/`export` as a path segment (PR #71 review: the next-keyword
+    // window used to truncate inside the quoted specifier).
+    fs.mkdirSync(path.join(tmpRoot, 'src/pages'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, 'src/components/import'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, 'src/pages/export-report.page.ts'), 'export class ExportPage {}\n', 'utf8');
+    fs.writeFileSync(path.join(tmpRoot, 'src/components/import/data.ts'), 'export const loadData = () => ({});\n', 'utf8');
+    const keywordImps = parseImports(
+      path.join(tmpRoot, 'src/components/nav.component.ts'),
+      "import { ExportPage } from '../pages/export-report.page';\nimport { loadData } from './import/data';\n",
+      tmpRoot,
+      aliases
+    );
+    assert.equal(keywordImps.length, 2);
+    assert.deepEqual(
+      keywordImps.map((i) => i.specifier),
+      ['../pages/export-report.page', './import/data']
+    );
+    assert.deepEqual(keywordImps[0].symbols, ['ExportPage']);
+    assert.deepEqual(keywordImps[1].symbols, ['loadData']);
+
     // 9. tape-cli federated builder scan + escaped quote replacement without duplicate key
     applyBuilderDataOverrides(tmpRoot, [{ ref: 'InvoiceBuilder.standard().note', value: 'Updated' }]);
     const updatedBuilder = fs.readFileSync(path.join(tmpRoot, 'src/domains/billing/data/invoice.builder.ts'), 'utf8');
@@ -6315,7 +6470,7 @@ test('generate-release-notes: syncReleaseManifests aligns package.json, package-
       path.join(tmpDir, 'CHANGELOG.json'),
       JSON.stringify({ schemaVersion: '1.0.0', latestVersion: '0.48.11', releases: [{ version: '0.48.11', date: '2026-11-22', highlights: ['prev'], nextActions: [] }] }, null, 2)
     );
-    const res = syncReleaseManifests(tmpDir, { version: 'v0.48.12', date: '2026-11-23', highlights: ['fix: sample'] });
+    const res = syncReleaseManifests(tmpDir, { version: 'v0.48.12', date: '2026-11-23', highlights: ['feat(map): add export', 'fix: sample'] });
     assert.equal(res.version, '0.48.12');
     assert.deepEqual(res.updatedFiles, ['package.json', 'package-lock.json', 'CHANGELOG.json']);
     assert.equal(JSON.parse(fs.readFileSync(path.join(tmpDir, 'package.json'), 'utf8')).version, '0.48.12');
@@ -6325,7 +6480,9 @@ test('generate-release-notes: syncReleaseManifests aligns package.json, package-
     const cl = JSON.parse(fs.readFileSync(path.join(tmpDir, 'CHANGELOG.json'), 'utf8'));
     assert.equal(cl.latestVersion, '0.48.12');
     assert.equal(cl.releases[0].version, '0.48.12');
-    assert.deepEqual(cl.releases[0].highlights, ['fix: sample']);
+    // CHANGELOG.json is plain text (PR #71 review): scoped subjects must be
+    // stored unescaped — `feat(map): ...`, not `feat\(map\): ...`.
+    assert.deepEqual(cl.releases[0].highlights, ['feat(map): add export', 'fix: sample']);
 
     // Idempotent on second call
     const res2 = syncReleaseManifests(tmpDir, { version: '0.48.12', date: '2026-11-23', highlights: ['fix: sample'] });
@@ -6764,6 +6921,15 @@ test('security-audit: Zip-Slip tar validation, repo slug hardening, ReDoS guards
   assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'acme/agentic-solid-qe' }), /explicitly opt in/);
   assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: '-evil/repo' }), /Security Error/);
   assert.throws(() => resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'owner/-evil' }), /Security Error/);
+  // An explicitly configured default repo IS the official repo — no opt-in needed (PR #71 review).
+  assert.equal(
+    resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'letstrnsfrm-ai/agentic-solid-qe' }),
+    'letstrnsfrm-ai/agentic-solid-qe'
+  );
+  assert.equal(
+    resolveUpgradeRepoSlug({ CORTEX_UPGRADE_REPO: 'LETSTRNSFRM-AI/AGENTIC-SOLID-QE' }),
+    'letstrnsfrm-ai/agentic-solid-qe'
+  );
 
   // 3. Hardened ReDoS validator blocks alternation/nested-group/braced/backref bypasses
   assert.equal(isSafeRegexPattern('/orders/([A-Z0-9-]+)'), true);
@@ -7160,7 +7326,7 @@ test('security-audit-v0.48.18: secret redaction, tar symlink/PAX defense, SSRF/U
   // framework-repo-only and is not synced to adopter repos, so importing it
   // unconditionally breaks `cortex verify --with-engine` there.
   if (HAS_RELEASE_NOTES_SCRIPT) {
-    const { sanitizeReleaseCommitText, resolveSafeRepoOutputPath } = await import(
+    const { sanitizeReleaseCommitText, sanitizeReleasePlainText, resolveSafeRepoOutputPath } = await import(
       './generate-release-notes.mjs'
     );
     const cleanCommit = sanitizeReleaseCommitText('feat: fix \u202E[spoof](https://evil.example/payload)');
@@ -7182,6 +7348,11 @@ test('security-audit-v0.48.18: secret redaction, tar symlink/PAX defense, SSRF/U
     const mentionPayload = sanitizeReleaseCommitText('fix: @ceo please approve **URGENT**');
     assert.ok(!mentionPayload.includes('@ceo'), '@mention must be neutralised');
     assert.ok(!mentionPayload.includes('**URGENT**'), 'emphasis must be escaped');
+    // CHANGELOG.json plain-text sanitizer (PR #71 review): strips
+    // control/BiDi chars and neutralises @mentions WITHOUT Markdown-escaping.
+    assert.equal(sanitizeReleasePlainText('feat(map): add export'), 'feat(map): add export');
+    assert.ok(!sanitizeReleasePlainText('fix: a\u202Eb').includes('\u202E'));
+    assert.ok(!sanitizeReleasePlainText('ping @ceo now').includes('@ceo'));
     assert.throws(() => resolveSafeRepoOutputPath('.git/config', '--output'), /Security Error/i);
   }
 

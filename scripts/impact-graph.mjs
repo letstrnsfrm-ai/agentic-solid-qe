@@ -372,7 +372,22 @@ export function parseImports(fileAbs, codeNoComments, rootDir, pathAliases) {
     if (semiAt === -1 || semiAt > kwEnd + MAX_IMPORT_STATEMENT_CHARS) {
       semiAt = kwEnd + MAX_IMPORT_STATEMENT_CHARS;
     }
-    const windowEnd = Math.min(semiAt, nextKeywordAt, src.length);
+    const windowEnd0 = Math.min(semiAt, nextKeywordAt, src.length);
+    // A keyword (or `;`) inside the quoted module specifier (e.g.
+    // '../pages/export-report.page' or './import/data') is not a statement
+    // boundary: if the window ends inside an unclosed quote, extend it to
+    // the closing quote so the specifier parses instead of truncating
+    // mid-string (parseStaticImportStatement would otherwise hit endIdx
+    // === -1 and silently drop the import). All scans here are bounded to
+    // MAX_IMPORT_STATEMENT_CHARS, so this stays linear.
+    let windowEnd = windowEnd0;
+    const head = src.slice(kwEnd, windowEnd);
+    const quoteIdx = head.search(/['"]/);
+    if (quoteIdx !== -1 && head.indexOf(head[quoteIdx], quoteIdx + 1) === -1) {
+      const tail = src.slice(windowEnd, kwEnd + MAX_IMPORT_STATEMENT_CHARS);
+      const closeIdx = tail.indexOf(head[quoteIdx]);
+      if (closeIdx !== -1) windowEnd = windowEnd + closeIdx + 1;
+    }
     if (windowEnd <= kwEnd) continue;
     const parsed = parseStaticImportStatement(src.slice(kwEnd, windowEnd));
     if (!parsed) continue;

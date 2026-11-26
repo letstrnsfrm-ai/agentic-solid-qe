@@ -237,6 +237,21 @@ function statusBadge(status) {
   }
 }
 
+/**
+ * Plain-text sanitizer for values stored in CHANGELOG.json (plain text, also
+ * printed directly to stdout by sync-skills.mjs). Strips control/BiDi chars
+ * and neutralises @mentions like cleanHeadline does — but does NOT
+ * Markdown-escape, or scoped subjects such as `feat(map): ...` would be
+ * stored as `feat\(map\): ...`. Markdown escaping happens at Markdown render
+ * time instead (sanitizeReleaseCommitText, used as escapeMdInline).
+ */
+export function sanitizeReleasePlainText(val) {
+  return String(val ?? '')
+    .replace(/[\x00-\x1f\x7f\u202A-\u202E\u2066-\u2069\r\n]+/g, ' ')
+    .replace(/@/g, '@\u200B')
+    .trim();
+}
+
 export function sanitizeReleaseCommitText(val) {
   return String(val ?? '')
     .replace(/[\x00-\x1f\x7f\u202A-\u202E\u2066-\u2069\r\n]+/g, ' ')
@@ -531,7 +546,7 @@ export function syncReleaseManifests(rootDir, { version, date = null, highlights
     }
     if (changelog.releases[0]?.version !== cleanVersion) {
       const cleanHighlights = (highlights || [])
-        .map((h) => sanitizeReleaseCommitText(h))
+        .map((h) => sanitizeReleasePlainText(h))
         .filter(Boolean)
         .slice(0, 5);
       changelog.releases.unshift({
