@@ -7212,3 +7212,203 @@ test('security-audit-v0.48.18: secret redaction, tar symlink/PAX defense, SSRF/U
 });
 
 
+
+test('Non-Functional Testing (NFR): schema validation, SOLID tape compilation (@a11y, @perf, @security), collector logic, audit:solid guard & cloud report counts', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-nfr-'));
+  try {
+    // Seed minimal workspace with schema + existing NFR builder & shared collectors
+    fs.mkdirSync(path.join(tmpDir, '.agents/domain'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.exploratory/tapes'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src/data'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src/fixtures'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src/shared/nfr'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'tests'), { recursive: true });
+
+    fs.copyFileSync(
+      path.join(REPO_ROOT, '.agents/domain/session-tape.schema.json'),
+      path.join(tmpDir, '.agents/domain/session-tape.schema.json')
+    );
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'src/data/nfr-budget.builder.ts'),
+      path.join(tmpDir, 'src/data/nfr-budget.builder.ts')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.agents/domain/domain-memory.md'),
+      '# Domain Memory\n- **Base URL:** `https://app.example.com`\n',
+      'utf8'
+    );
+
+    const nfrTapes = [
+      {
+        scenarioId: 'catalog-a11y-wcag',
+        title: 'Catalog page passes WCAG 2.1 AA accessibility audit',
+        charter: 'accessibility',
+        assertionType: 'toPassAxeAudit',
+        expectedValueRef: 'NfrBudgetBuilder.wcagAA()',
+        expectedTag: '@a11y',
+        expectedFixture: 'a11yCollector',
+      },
+      {
+        scenarioId: 'catalog-perf-vitals',
+        title: 'Catalog page meets Core Web Vitals performance budgets',
+        charter: 'performance-budget',
+        assertionType: 'toMeetPerformanceBudget',
+        expectedValueRef: 'NfrBudgetBuilder.webVitalsStandard()',
+        expectedTag: '@perf',
+        expectedFixture: 'perfCollector',
+      },
+      {
+        scenarioId: 'catalog-security-hygiene',
+        title: 'Catalog page enforces HTTP security headers and cookie flags',
+        charter: 'security-hygiene',
+        assertionType: 'toMeetSecurityHygiene',
+        expectedValueRef: 'NfrBudgetBuilder.securityBaseline()',
+        expectedTag: '@security',
+        expectedFixture: 'securityCollector',
+      },
+    ];
+
+    for (const cfg of nfrTapes) {
+      const tape = {
+        schemaVersion: '1.0.0',
+        scenarioId: cfg.scenarioId,
+        title: cfg.title,
+        charter: cfg.charter,
+        recordedAt: '2026-11-25T12:00:00.000Z',
+        baseUrl: 'https://app.example.com',
+        persona: { role: 'standard', dataBuilderRef: 'UserBuilder.standardUser()' },
+        preconditions: ['Application is reachable'],
+        semanticSteps: [
+          {
+            stepIndex: 1,
+            intent: 'Open catalog landing page',
+            businessStep: 'Navigate to catalog page',
+            action: 'goto',
+            componentCandidate: 'CatalogPage',
+            locatorContract: { strategy: 'url', value: '/catalog' },
+          },
+        ],
+        networkContracts: [],
+        expectedStates: [
+          {
+            description: cfg.title,
+            businessStep: `Verify ${cfg.charter} budget`,
+            assertionType: cfg.assertionType,
+            targetComponent: 'page',
+            targetProperty: 'url',
+            expectedValueRef: cfg.expectedValueRef,
+          },
+        ],
+      };
+      fs.writeFileSync(
+        path.join(tmpDir, `.exploratory/tapes/${cfg.scenarioId}.json`),
+        JSON.stringify(tape, null, 2),
+        'utf8'
+      );
+    }
+
+    // 1. Validate all 3 NFR tapes against session-tape.schema.json
+    const valRes = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts/validate-tapes.mjs')], {
+      cwd: tmpDir,
+      encoding: 'utf8',
+    });
+    assert.equal(valRes.status, 0, `validate-tapes failed: ${valRes.stdout}\n${valRes.stderr}`);
+
+    // 2. Compile each NFR tape and verify SOLID output
+    for (const cfg of nfrTapes) {
+      const compRes = spawnSync(
+        process.execPath,
+        [path.join(REPO_ROOT, 'scripts/compile-tape.mjs'), `.exploratory/tapes/${cfg.scenarioId}.json`, '--apply'],
+        { cwd: tmpDir, encoding: 'utf8' }
+      );
+      assert.equal(compRes.status, 0, `compile-tape failed for ${cfg.scenarioId}: ${compRes.stdout}\n${compRes.stderr}`);
+
+      const specPath = path.join(tmpDir, `tests/${cfg.scenarioId}.spec.ts`);
+      assert.ok(fs.existsSync(specPath), `Expected compiled spec ${specPath}`);
+      const specCode = fs.readFileSync(specPath, 'utf8');
+      assert.match(specCode, new RegExp(cfg.expectedTag));
+      assert.match(specCode, /@nfr/);
+      assert.match(specCode, new RegExp(`\\b${cfg.expectedFixture}\\b`));
+      assert.match(specCode, /import \{ NfrBudgetBuilder \} from '@data\/nfr-budget\.builder'/);
+      assert.match(specCode, new RegExp(`${cfg.expectedFixture}\\.audit\\(page, ${cfg.expectedValueRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
+    }
+
+    // 3. Verify analyze-coverage.mjs reports aggregate nfrCoverage counts
+    const covRes = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, 'scripts/analyze-coverage.mjs'), '--summary', '--json'],
+      { cwd: tmpDir, encoding: 'utf8' }
+    );
+    assert.equal(covRes.status, 0, `analyze-coverage failed: ${covRes.stderr}`);
+    const covJson = JSON.parse(covRes.stdout.slice(covRes.stdout.indexOf('{')));
+    assert.equal(covJson.nfrCoverage.a11ySpecs, 1);
+    assert.equal(covJson.nfrCoverage.perfSpecs, 1);
+    assert.equal(covJson.nfrCoverage.securitySpecs, 1);
+    assert.equal(covJson.nfrCoverage.totalNfrSpecs, 3);
+    assert.equal(covJson.nfrCoverage.nfrTapes, 3);
+
+    // 4. Verify report-cloud.mjs --dry-run includes nfrCoverage object
+    const repRes = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, 'scripts/report-cloud.mjs'), '--dry-run'],
+      { cwd: tmpDir, encoding: 'utf8' }
+    );
+    assert.equal(repRes.status, 0, `report-cloud --dry-run failed: ${repRes.stderr}`);
+    const repJson = JSON.parse(repRes.stdout.slice(repRes.stdout.indexOf('{')));
+    assert.equal(repJson.nfrCoverage.totalNfrSpecs, 3);
+    assert.equal(repJson.nfrCoverage.a11ySpecs, 1);
+    assert.equal(repJson.nfrCoverage.perfSpecs, 1);
+    assert.equal(repJson.nfrCoverage.securitySpecs, 1);
+
+    // 5. Verify audit-solid.mjs blocks expect() inside src/shared/nfr/
+    fs.writeFileSync(
+      path.join(tmpDir, 'src/shared/nfr/bad.collector.ts'),
+      'export function bad() { expect(1).toBe(1); }\n',
+      'utf8'
+    );
+    const badAudit = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts/audit-solid.mjs')], {
+      cwd: tmpDir,
+      encoding: 'utf8',
+    });
+    assert.notEqual(badAudit.status, 0, 'audit-solid must reject expect() inside src/shared/nfr/');
+    assert.match(`${badAudit.stdout}\n${badAudit.stderr}`, /SRP Assertion Ban.*bad\.collector\.ts/);
+
+    // 6. Direct unit test of PerformanceCollector tiered severity + CI multiplier (Node 22+)
+    const nodeMajor = Number(process.versions.node.split('.')[0]);
+    if (nodeMajor >= 22) {
+      const { PerformanceCollector } = await import('../src/shared/nfr/performance.collector.ts');
+      const perf = new PerformanceCollector();
+      const policy = {
+        lcpWarnMs: 2500,
+        lcpMaxMs: 4000,
+        clsWarn: 0.1,
+        clsMax: 0.25,
+        ttfbWarnMs: 800,
+        ttfbMaxMs: 1800,
+        loadWarnMs: 4000,
+        loadMaxMs: 8000,
+        ciTimingMultiplier: 1.5,
+      };
+      const localWarn = perf.evaluate(
+        { url: 'https://app.example.com', ttfbMs: 500, fcpMs: 900, lcpMs: 3000, cls: 0.05, domContentLoadedMs: 1200, loadEventMs: 2500 },
+        policy,
+        false
+      );
+      assert.equal(localWarn.hardFailures.length, 0);
+      assert.equal(localWarn.softWarnings.length, 1);
+      assert.equal(localWarn.softWarnings[0].metric, 'lcpMs');
+
+      const ciRelaxed = perf.evaluate(
+        { url: 'https://app.example.com', ttfbMs: 500, fcpMs: 900, lcpMs: 3000, cls: 0.3, domContentLoadedMs: 1200, loadEventMs: 2500 },
+        policy,
+        true
+      );
+      // In CI (1.5x): lcpWarn=3750 so 3000 passes, but cls is NEVER multiplied so 0.3 > 0.25 hard-fails!
+      assert.equal(ciRelaxed.softWarnings.length, 0);
+      assert.equal(ciRelaxed.hardFailures.length, 1);
+      assert.equal(ciRelaxed.hardFailures[0].metric, 'cls');
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

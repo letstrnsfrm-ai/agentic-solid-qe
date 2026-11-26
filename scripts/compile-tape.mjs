@@ -914,8 +914,14 @@ export class ${clientClass} implements ApiClientContract {
   }
 
   // Also inspect expectedStates to ensure any referenced targetProperty exists on the target component
+  const NFR_ASSERTION_TYPES = new Set([
+    'toPassAxeAudit',
+    'toMeetPerformanceBudget',
+    'toMeetSecurityHygiene',
+  ]);
   const expectedPropsBySubProp = new Map(); // subPropName -> Map(targetProperty -> locatorContract|null)
   for (const state of tape.expectedStates || []) {
+    if (NFR_ASSERTION_TYPES.has(state.assertionType)) continue;
     const parts = String(state.targetComponent || '').split('.');
     const subProp = parts.length >= 2 ? parts[1] : parts[0];
     if (subProp) {
@@ -1498,6 +1504,23 @@ export class ${seederClass} implements StateSeederContract<Record<string, unknow
     }
   }
 
+  const nfrFixtureSpecs = [
+    { assertionType: 'toPassAxeAudit', propName: 'a11yCollector', typeName: 'AccessibilityCollector' },
+    { assertionType: 'toMeetPerformanceBudget', propName: 'perfCollector', typeName: 'PerformanceCollector' },
+    { assertionType: 'toMeetSecurityHygiene', propName: 'securityCollector', typeName: 'SecurityHygieneCollector' },
+  ];
+  const usesNfrAssertions = (tape.expectedStates || []).some((s) => NFR_ASSERTION_TYPES.has(s.assertionType));
+  for (const nf of nfrFixtureSpecs) {
+    if ((tape.expectedStates || []).some((s) => s.assertionType === nf.assertionType)) {
+      allFixtureEntries.push({
+        propName: nf.propName,
+        typeName: nf.typeName,
+        importAlias: '@shared/nfr',
+        kind: 'nfr',
+      });
+    }
+  }
+
   if (fs.existsSync(fixtureFullPath)) {
     let fixtureContent = fs.readFileSync(fixtureFullPath, 'utf8');
     const missingEntries = allFixtureEntries.filter(
@@ -1524,6 +1547,9 @@ export class ${seederClass} implements StateSeederContract<Record<string, unknow
 
       const implLines = missingEntries
         .map((e) => {
+          if (e.kind === 'nfr') {
+            return `  ${e.propName}: async ({}, use) => {\n    await use(new ${e.typeName}());\n  },`;
+          }
           if (e.kind === 'seeder') {
             return `  ${e.propName}: async ({ request }, use) => {\n    const seeder = new ${e.typeName}(request, process.env.API_BASE_URL || process.env.BASE_URL || ${JSON.stringify(e.apiBaseUrl)});\n    const handle = await seeder.seed();\n    try {\n      await use(handle);\n    } finally {\n      await seeder.teardown?.(handle);\n    }\n  },`;
           }
@@ -1570,6 +1596,9 @@ export class ${seederClass} implements StateSeederContract<Record<string, unknow
       .join('\n');
     const implLines = allFixtureEntries
       .map((e) => {
+        if (e.kind === 'nfr') {
+          return `  ${e.propName}: async ({}, use) => {\n    await use(new ${e.typeName}());\n  },`;
+        }
         if (e.kind === 'seeder') {
           return `  ${e.propName}: async ({ request }, use) => {\n    const seeder = new ${e.typeName}(request, process.env.API_BASE_URL || process.env.BASE_URL || ${JSON.stringify(e.apiBaseUrl)});\n    const handle = await seeder.seed();\n    try {\n      await use(handle);\n    } finally {\n      await seeder.teardown?.(handle);\n    }\n  },`;
         }
@@ -1624,9 +1653,24 @@ export { expect };
       addedMembers: [],
     });
   } else {
-    const tagsList = Array.isArray(tape.tags) && tape.tags.length > 0 ? tape.tags : ['@p0', '@smoke'];
+    const defaultCharterTags = {
+      accessibility: ['@nfr', '@a11y'],
+      'performance-budget': ['@nfr', '@perf'],
+      'security-hygiene': ['@nfr', '@security'],
+      'visual-regression': ['@nfr', '@visual'],
+    };
+    const tagsList =
+      Array.isArray(tape.tags) && tape.tags.length > 0
+        ? tape.tags
+        : defaultCharterTags[tape.charter] || ['@p0', '@smoke'];
     const tagsSuffix = tagsList.join(' ');
-    const injectedFixtures = allFixtureEntries.map((e) => e.propName);
+    const injectedFixtures = [
+      ...(usesNfrAssertions ? ['page'] : []),
+      ...allFixtureEntries.map((e) => e.propName),
+    ].filter((v, idx, arr) => arr.indexOf(v) === idx);
+    if (usesNfrAssertions && !builderImports.has('NfrBudgetBuilder')) {
+      builderImports.set('NfrBudgetBuilder', '@data/nfr-budget.builder');
+    }
     const builderImportLines = [...builderImports.entries()]
       .map(([cls, alias]) => `import { ${cls} } from '${alias}';`)
       .join('\n');
@@ -1927,6 +1971,18 @@ export { expect };
           : [];
         const maskProp = masks.length > 0 ? `, mask: [${masks.join(', ')}]` : '';
         assertStmt = `await expect(${targetExpr}).toHaveScreenshot(String(${valExpr}), { animations: 'disabled', maxDiffPixelRatio: ${ratio}${maskProp} });`;
+      } else if (state.assertionType === 'toPassAxeAudit') {
+        const policyExpr = valExpr || 'NfrBudgetBuilder.wcagAA()';
+        const varIdx = (tape.expectedStates || []).indexOf(state) + 1;
+        assertStmt = `const a11yReport${varIdx} = await a11yCollector.audit(page, ${policyExpr});\n      for (const w of a11yReport${varIdx}.warnings) test.info().annotations.push({ type: 'a11y-warning', description: \`\${w.id}: \${w.help}\` });\n      expect(a11yReport${varIdx}.blockingViolations, a11yReport${varIdx}.summary).toEqual([]);`;
+      } else if (state.assertionType === 'toMeetPerformanceBudget') {
+        const policyExpr = valExpr || 'NfrBudgetBuilder.webVitalsStandard()';
+        const varIdx = (tape.expectedStates || []).indexOf(state) + 1;
+        assertStmt = `const perfReport${varIdx} = await perfCollector.audit(page, ${policyExpr});\n      for (const w of perfReport${varIdx}.softWarnings) test.info().annotations.push({ type: 'perf-warning', description: w.message });\n      expect(perfReport${varIdx}.hardFailures, perfReport${varIdx}.summary).toEqual([]);`;
+      } else if (state.assertionType === 'toMeetSecurityHygiene') {
+        const policyExpr = valExpr || 'NfrBudgetBuilder.securityBaseline()';
+        const varIdx = (tape.expectedStates || []).indexOf(state) + 1;
+        assertStmt = `const securityReport${varIdx} = await securityCollector.audit(page, ${policyExpr});\n      for (const w of securityReport${varIdx}.warnings) test.info().annotations.push({ type: 'security-warning', description: w.message });\n      expect(securityReport${varIdx}.hardFailures, securityReport${varIdx}.summary).toEqual([]);`;
       } else {
         assertStmt = `await expect(${targetExpr}).${state.assertionType}(String(${valExpr}));`;
       }

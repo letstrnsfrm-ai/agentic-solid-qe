@@ -659,6 +659,8 @@ export interface ErrorBannerContract extends IdentifiableComponent {
     'src/shared/api/auth-token.bridge.ts',
     'src/shared/data/relative-date.helper.ts',
     'src/shared/ui/explore-handshake.ts',
+    'src/shared/nfr',
+    'src/data/nfr-budget.builder.ts',
   ]) {
     copyRecursive(path.join(SOURCE_ROOT, sharedPath), path.join(TARGET_ROOT, sharedPath), {
       overwrite,
@@ -1511,6 +1513,8 @@ if (command === 'init') {
     'src/shared/data/relative-date.helper.ts',
     'src/shared/ui/explore-handshake.ts',
     'src/shared/ui/overlay-handler.ts',
+    'src/shared/nfr',
+    'src/data/nfr-budget.builder.ts',
   ]) {
     copyRecursive(path.join(SOURCE_ROOT, foundationalPath), path.join(TARGET_ROOT, foundationalPath), {
       overwrite: false,

@@ -18,8 +18,5 @@
 | **Embedded `<iframe>`** | Inspect frame refs in snapshot | `locatorContract.iframeSelector` (`page.frameLocator(...)`). |
 | **Portal Dropdowns (`body`)** | Snapshot after opening combobox | `locatorContract.portalScope: true` (roots on `page`). |
 
-## 3. Non-Functional Charters (A11y & Visual Regression)
-| Charter | Exploration Oracle | `expectedStates[]` Encoding |
-| :--- | :--- | :--- |
-| **`accessibility`** | Verify landmarks (`main`, `nav`, `banner`), `h1`->`h2`, Tab order, accessible names via `a11y --json`. | `assertionType: "toMatchAriaSnapshot"` with ARIA YAML builder ref in `expectedValueRef`. |
-| **`visual-regression`** | Identify volatile regions (timestamps, live counters, avatars). | `assertionType: "toHaveScreenshot"`, `maskSelectors: [...]`, `maxDiffPixelRatio: 0.02` (`animations: 'disabled'`). |
+## 3. Non-Functional Charters
+See `references/charter-nfr.md` for `accessibility` (`toPassAxeAudit`, `toMatchAriaSnapshot`), `performance-budget` (`toMeetPerformanceBudget`), `security-hygiene` (`toMeetSecurityHygiene`), and `visual-regression` (`toHaveScreenshot`).

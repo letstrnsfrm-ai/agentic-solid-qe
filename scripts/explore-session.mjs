@@ -1099,7 +1099,7 @@ Options:
   --title "<title>"     Human-readable scenario title
   --charter <charter>   Valid values: happy-path-baseline, boundary-analysis, state-interruption,
                         chaos-network-500, multi-persona-auth, api-contract, cross-portal-handoff,
-                        accessibility, visual-regression, e2e-migration
+                        accessibility, visual-regression, performance-budget, security-hygiene, e2e-migration
   --tags "@p0,@smoke"   Comma-separated Playwright execution tags
   --assert-url <route>  Append a toHaveURL expectedState before finalizing
   --assert-text "<txt>" Append a toContainText expectedState before finalizing

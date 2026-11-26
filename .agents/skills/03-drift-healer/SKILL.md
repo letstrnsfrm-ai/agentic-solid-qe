@@ -15,7 +15,7 @@ When invoked as `/03-drift-healer`:
 2. Capture `.agent-browser/page-heal.yml`, `eval "location.href"`, `console`, and `errors`, then compare against `npx cortex tape show <id>`.
 
 ## 3. Root-Cause Classification & Action
-- **App Regression:** Never weaken `expect()`. Capture `screenshot defects/evidence.png --annotate`, log `defects/DEFECT-<timestamp>.md`, mark `test.fixme()`/`test.fail()`, pause for review.
+- **App / NFR Regression:** Never weaken `expect()` or loosen `NfrBudgetBuilder` thresholds (`@a11y`/`@perf`/`@security`). Capture `screenshot defects/evidence.png --annotate`, log `defects/DEFECT-<timestamp>.md`, mark `test.fixme()`/`test.fail()`, pause for review.
 - **Expired `.auth/<persona>.json` (`401/403`):** Refresh via `00-env-bootstrap` before editing code.
 - **UI/Wizard/API/Sandbox Drift:** Run `npx cortex heal --apply` (`--verify-affected` for shared modules), refresh shard `**Last Verified:**`, run `npm run verify:fast -- --specs <spec>` ➔ `npm run verify`.
 

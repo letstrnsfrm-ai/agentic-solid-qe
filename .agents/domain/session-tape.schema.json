@@ -43,7 +43,9 @@
         "api-contract",
         "cross-portal-handoff",
         "accessibility",
-        "visual-regression"
+        "visual-regression",
+        "performance-budget",
+        "security-hygiene"
       ]
     },
     "tags": {
@@ -409,7 +411,10 @@
               "toHaveStatus",
               "toMatchObject",
               "toMatchAriaSnapshot",
-              "toHaveScreenshot"
+              "toHaveScreenshot",
+              "toPassAxeAudit",
+              "toMeetPerformanceBudget",
+              "toMeetSecurityHygiene"
             ]
           },
           "maskSelectors": {

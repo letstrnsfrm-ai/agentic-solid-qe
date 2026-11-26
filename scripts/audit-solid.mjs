@@ -504,6 +504,24 @@ for (const file of flowFiles) {
   }
 }
 
+// 3a-quater. Audit Pure NFR Collectors in src/shared/nfr (<= 150 lines, zero expect())
+const nfrFiles = walkFiles(path.join(ROOT, 'src/shared/nfr'), '.ts');
+for (const file of nfrFiles) {
+  const content = fs.readFileSync(file, 'utf8');
+  const lines = content.split('\n').length;
+  if (lines > MAX_COMPONENT_LINES) {
+    violations.push(
+      `[SRP Line Cap] ${rel(file)} has ${lines} lines (max ${MAX_COMPONENT_LINES}). Split NFR collectors into smaller single-purpose modules.`
+    );
+  }
+  const codeOnly = stripComments(content);
+  if (/\bexpect\s*\(/.test(codeOnly)) {
+    violations.push(
+      `[SRP Assertion Ban] ${rel(file)} contains an expect() call. NFR collectors must return pure reports; assertions belong in tests/*.spec.ts.`
+    );
+  }
+}
+
 // 3b. Verify Published Capabilities in Domain Shards match exported classes/interfaces in src/
 const allSrcTsFiles = walkFiles(path.join(ROOT, 'src'), '.ts');
 const exportedSymbols = new Set();
