@@ -406,14 +406,27 @@ for (const file of fixtureFiles) {
 
 // 3a. Audit Backend API Clients across src/api and src/domains/*/api (SRP Zero expect() & LSP ApiClientContract)
 const apiClientFiles = filterSquad
-  ? walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.client.ts')
+  ? [
+      ...walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.client.ts'),
+      ...walkFiles(path.join(ROOT, 'src/domains', filterSquad), '.api.ts'),
+    ]
   : [
       ...walkFiles(path.join(ROOT, 'src/api'), '.client.ts'),
+      ...walkFiles(path.join(ROOT, 'src/api'), '.api.ts'),
       ...walkFiles(path.join(ROOT, 'src/domains'), '.client.ts'),
+      ...walkFiles(path.join(ROOT, 'src/domains'), '.api.ts'),
     ];
 for (const file of apiClientFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const codeOnly = stripComments(content);
+  const lines = content.split('\n').length;
+
+  if (lines > MAX_COMPONENT_LINES) {
+    violations.push(
+      `[SRP Line Cap] ${rel(file)} has ${lines} lines (max ${MAX_COMPONENT_LINES}). Split into smaller focused API clients.`
+    );
+  }
+
   if (/\bexpect\s*\(/.test(codeOnly)) {
     violations.push(
       `[SRP Assertion Ban] ${rel(file)} contains an expect() call. Return typed ApiResponseEnvelope<T> and assert in tests/*.spec.ts.`

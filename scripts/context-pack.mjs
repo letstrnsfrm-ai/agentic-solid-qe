@@ -347,6 +347,7 @@ export function buildContextPack(
     keywords.push(...String(effectiveTape.data.scenarioId || '').split('-'));
     for (const st of effectiveTape.data.semanticSteps || []) {
       if (st.componentCandidate) keywords.push(st.componentCandidate.replace(/Component|Page/g, ''));
+      if (st.pageRoute) keywords.push(...String(st.pageRoute).split(/[/?=&_-]+/).filter(Boolean));
     }
   }
   if (specInfo) {
@@ -354,7 +355,7 @@ export function buildContextPack(
     keywords.push(...path.basename(specInfo.rel, '.spec.ts').split('-'));
   }
 
-  const shards = collectShards(rootDir, { route, squad });
+  let shards = collectShards(rootDir, { route, squad });
   const arch = collectArchitecture(rootDir, { squad, keywords });
 
   // Compute reverse-dependency blast radius for --file or shared modules consumed by --spec
@@ -389,6 +390,23 @@ export function buildContextPack(
     }
     return score;
   };
+
+  // Issue #63: when --tape/--spec/--file scopes the pack without an explicit
+  // --route/--squad, collectShards returns every shard alphabetically and the
+  // SHARDS block crowds the architecture lines out of the <=400-token budget.
+  // Rank shards by the same keywords used for tapes/specs and keep only the
+  // matching ones (falling back to the top 3 when nothing matches, mirroring
+  // collectArchitecture's fallback), so the relevant shard is shown first.
+  if (!route && !squad && lowerKeywords.length > 0) {
+    const scored = shards
+      .map((sh) => ({
+        ...sh,
+        _score: scoreRelevance(`${sh.rel} ${sh.squad} ${sh.title} ${sh.routes.join(' ')} ${sh.bullets.join(' ')}`),
+      }))
+      .sort((a, b) => b._score - a._score);
+    const matched = scored.filter((s) => s._score > 0);
+    shards = (matched.length > 0 ? matched : scored.slice(0, 3)).map(({ _score, ...rest }) => rest);
+  }
 
   const allTapes = walkFiles(path.join(rootDir, '.exploratory/tapes'), (f) => f.endsWith('.json'))
     .map((f) => {
