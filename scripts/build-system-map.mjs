@@ -65,11 +65,38 @@ function assertSafeWorkspacePath(rootDir, targetPath, label = 'output path') {
     if (parent === cur) break;
     cur = parent;
   }
+  // Realpath check: the lstat walk above covers existing components, but a
+  // symlinked workspace root (or an ancestor swapped after the walk) is only
+  // visible after resolution. Resolve the nearest existing ancestor and
+  // require it to stay inside the real workspace root.
+  try {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let nearest = resolvedOut;
+    while (!fs.existsSync(nearest) && nearest !== resolvedRoot) nearest = path.dirname(nearest);
+    if (!isWithinDir(fs.realpathSync(nearest), realRoot)) {
+      throw new Error(`Security Error: Refusing to write ${label} outside workspace (realpath): ${targetPath}`);
+    }
+  } catch (err) {
+    if (err?.message?.startsWith('Security Error:')) throw err;
+    // Unresolvable path — the lstat walk above already ran.
+  }
   return resolvedOut;
 }
 
 function rel(filePath) {
   return path.relative(ROOT, filePath).replace(/\\/g, '/');
+}
+
+// A file listed by walkFiles can disappear (or become unreadable) before it
+// is read; failing the whole map run on one file is wrong. Returns null and
+// warns instead.
+function readTextSafe(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    console.warn(`⚠️  Skipped unreadable file: ${rel(filePath)}`);
+    return null;
+  }
 }
 
 function walkFiles(dir, extFilter) {
@@ -371,9 +398,11 @@ function parseSpecTestBlocks(content) {
 
 function readSpecs() {
   const specFiles = walkFiles(path.join(ROOT, 'tests'), '.spec.ts');
-  return specFiles.map((filePath) => {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const tags = extractTagsFromText(content);
+  return specFiles
+    .map((filePath) => {
+      const content = readTextSafe(filePath);
+      if (content === null) return null;
+      const tags = extractTagsFromText(content);
     const tapeMatch = content.match(/Compiled from Session Tape:\s*([a-z0-9-_]+)/i);
     const { describeTitle, cases } = parseSpecTestBlocks(content);
     const relFile = rel(filePath);
@@ -387,21 +416,25 @@ function readSpecs() {
       testCases: cases,
       scenarioId: tapeMatch ? tapeMatch[1] : null,
     };
-  });
+    })
+    .filter(Boolean);
 }
 
 function readDefects() {
   const defectFiles = walkFiles(path.join(ROOT, 'defects'), '.md').filter(
     (f) => path.basename(f).toLowerCase() !== 'readme.md'
   );
-  return defectFiles.map((filePath) => {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const title = content.match(/^#\s+(.+)$/m)?.[1]?.trim() || path.basename(filePath, '.md');
-    const severity = content.match(/\*\*Severity:\*\*\s*([^\n]+)/i)?.[1]?.trim() || 'Medium';
-    const endpoint = content.match(/\*\*Endpoint:\*\*\s*`?([^`\n]+)`?/i)?.[1]?.trim() || '';
-    const route = content.match(/\*\*Route \/ Portal:\*\*\s*([^\n]+)/i)?.[1]?.trim() || '';
-    return { file: rel(filePath), title, severity, endpoint, route };
-  });
+  return defectFiles
+    .map((filePath) => {
+      const content = readTextSafe(filePath);
+      if (content === null) return null;
+      const title = content.match(/^#\s+(.+)$/m)?.[1]?.trim() || path.basename(filePath, '.md');
+      const severity = content.match(/\*\*Severity:\*\*\s*([^\n]+)/i)?.[1]?.trim() || 'Medium';
+      const endpoint = content.match(/\*\*Endpoint:\*\*\s*`?([^`\n]+)`?/i)?.[1]?.trim() || '';
+      const route = content.match(/\*\*Route \/ Portal:\*\*\s*([^\n]+)/i)?.[1]?.trim() || '';
+      return { file: rel(filePath), title, severity, endpoint, route };
+    })
+    .filter(Boolean);
 }
 
 function readSrcInventory() {
@@ -410,7 +443,8 @@ function readSrcInventory() {
   const layers = { pages: [], steps: [], components: [], apiClients: [], seeders: [], builders: [] };
   for (const f of tsFiles) {
     const r = rel(f);
-    const content = fs.readFileSync(f, 'utf8');
+    const content = readTextSafe(f);
+    if (content === null) continue;
     const classMatch = content.match(/export\s+class\s+([A-Za-z0-9_]+)/);
     const name = classMatch ? classMatch[1] : path.basename(f, '.ts');
     const routes = [...new Set([...content.matchAll(/['"`](\/[a-zA-Z0-9._/-]+)['"`]/g)].map((m) => m[1]))];
@@ -1372,7 +1406,7 @@ function renderHtml(model, { liveReload = false } = {}) {
 
 <script>
 const MODEL = ${safeJson};
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc = (s) => String(s ?? '').replace(/[\x00-\x1f\x7f\u202A-\u202E\u2066-\u2069]/g, '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // Theme initialization (respects saved preference or OS prefers-color-scheme)
 (function initTheme() {

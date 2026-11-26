@@ -377,7 +377,13 @@ function scanExistingArchitecture() {
 
   for (const filePath of srcFiles) {
     const relPath = rel(filePath);
-    const content = fs.readFileSync(filePath, 'utf8');
+    let content;
+    try {
+      content = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      // A file deleted/unreadable mid-scan is skipped, not fatal to the run.
+      continue;
+    }
     const lines = content.split('\n').length;
     const importAlias = toImportAlias(relPath);
 
@@ -576,7 +582,12 @@ export function compileSessionTape({
     throw new Error(`Security Error: Refusing to compile symbolic link or oversized Session Tape: ${rel(tapePath)}`);
   }
 
-  const tape = JSON.parse(fs.readFileSync(tapePath, 'utf8'));
+  let tape;
+  try {
+    tape = JSON.parse(fs.readFileSync(tapePath, 'utf8'));
+  } catch (err) {
+    throw new Error(`Session Tape ${rel(tapePath)} is not valid JSON: ${err.message}`);
+  }
   const validationErrors = validateTapeObject(tape, path.basename(tapePath), {
     expectedScenarioId: path.basename(tapePath, '.json'),
   });

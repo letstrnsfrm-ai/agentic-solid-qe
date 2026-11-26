@@ -2213,6 +2213,58 @@ Usage:
   } else {
 
   // 1. Unified Sub-Workflow Routing via agentic-solid-qe
+  // Flags that change state destructively. They are stripped from args
+  // forwarded to a subcommand unless that subcommand documents them as its
+  // own flag — otherwise a flag meant for one command (or smuggled in as a
+  // value) can be reinterpreted by another subcommand as --apply/--force.
+  // (Twin of the same helper in sync-skills.mjs, which guards the CLI
+  // delegate boundary.) Flags the orchestrator adds itself intentionally
+  // (e.g. --apply for --heal-action apply) are added after filtering.
+  const DESTRUCTIVE_FLAGS = new Set([
+    '--apply',
+    '--force',
+    '--reset',
+    '--delete',
+    '--remove',
+    '--overwrite',
+    '--yes',
+    '--purge',
+    '--destroy',
+    '--wipe',
+    '--force-shared',
+    '--force-spec',
+    '--apply-patches',
+    '--clean',
+  ]);
+  const DESTRUCTIVE_FLAG_ALLOWLIST = {
+    compile: new Set(['--apply', '--force-spec']),
+    // NOTE: '--apply' is deliberately NOT allowed for heal — the
+    // --heal-action apply branch adds it itself, and a user-supplied
+    // '--apply' forwarded here would override '--dry-run' in heal-drift
+    // (args.includes('--apply')) and mutate during a dry run.
+    heal: new Set(['--force-shared']),
+    migrate: new Set(['--apply']),
+    upgrade: new Set(['--force', '--apply-patches']),
+    orchestrate: new Set(['--reset']),
+  };
+  const filterDelegatedArgs = (subcommand, forwardedArgs) => {
+    const allowed = DESTRUCTIVE_FLAG_ALLOWLIST[subcommand] || new Set();
+    const kept = [];
+    for (const arg of forwardedArgs) {
+      if (typeof arg === 'string' && arg.startsWith('--')) {
+        const flag = arg.split('=')[0];
+        if (DESTRUCTIVE_FLAGS.has(flag) && !allowed.has(flag)) {
+          console.warn(
+            `⚠️  Stripped '${flag}' at the '${subcommand}' boundary: it is not a documented flag of that subcommand.`
+          );
+          continue;
+        }
+      }
+      kept.push(arg);
+    }
+    return kept;
+  };
+
   const exploreIdx = args.indexOf('--explore');
   if (exploreIdx !== -1) {
     const rest = args.slice(exploreIdx + 1);
@@ -2259,7 +2311,7 @@ Usage:
         }
       }
     }
-    const res = spawnSync(process.execPath, [path.join(__dirname, 'explore-session.mjs'), subCmd, ...subArgs], {
+    const res = spawnSync(process.execPath, [path.join(__dirname, 'explore-session.mjs'), subCmd, ...filterDelegatedArgs('explore', subArgs)], {
       cwd: rootDir,
       stdio: 'inherit',
     });
@@ -2272,7 +2324,7 @@ Usage:
 
   const tapeIdx = args.indexOf('--tape');
   if (tapeIdx !== -1) {
-    const tapeArgs = args.slice(tapeIdx + 1);
+    const tapeArgs = filterDelegatedArgs('tape', args.slice(tapeIdx + 1));
     const res = spawnSync(process.execPath, [path.join(__dirname, 'tape-cli.mjs'), ...tapeArgs], {
       cwd: rootDir,
       stdio: 'inherit',
@@ -2282,7 +2334,7 @@ Usage:
 
   const ctxIdx = args.indexOf('--context');
   if (ctxIdx !== -1) {
-    const ctxArgs = args.slice(ctxIdx + 1);
+    const ctxArgs = filterDelegatedArgs('context', args.slice(ctxIdx + 1));
     const res = spawnSync(process.execPath, [path.join(__dirname, 'context-pack.mjs'), ...ctxArgs], {
       cwd: rootDir,
       stdio: 'inherit',
@@ -2299,7 +2351,7 @@ Usage:
       console.error(`❌ Invalid --heal-action mode '${mode}'. Expected 'dry-run' or 'apply'.`);
       process.exit(1);
     }
-    const extraHealArgs = args.slice(healIdx + (hasExplicitMode ? 2 : 1));
+    const extraHealArgs = filterDelegatedArgs('heal', args.slice(healIdx + (hasExplicitMode ? 2 : 1)));
     const healCliArgs = mode === 'apply' ? ['--apply', ...extraHealArgs] : ['--dry-run', ...extraHealArgs];
     const res = spawnSync(process.execPath, [path.join(__dirname, 'heal-drift.mjs'), ...healCliArgs], {
       cwd: rootDir,
@@ -2329,7 +2381,7 @@ Usage:
     const updatedBp = buildOrchestrationBlueprint(rootDir);
     console.log(formatCompactBlueprint(updatedBp));
     if (args.includes('--verify')) {
-      const vArgs = args.filter((a) => a !== '--ci-init' && a !== '--verify');
+      const vArgs = filterDelegatedArgs('verify', args.filter((a) => a !== '--ci-init' && a !== '--verify'));
       const vRes = spawnSync(process.execPath, [path.join(__dirname, 'verify-fast.mjs'), ...vArgs], {
         cwd: rootDir,
         stdio: 'inherit',
@@ -2340,7 +2392,7 @@ Usage:
   }
 
   if (args.includes('--verify')) {
-    const vArgs = args.filter((a) => a !== '--verify');
+    const vArgs = filterDelegatedArgs('verify', args.filter((a) => a !== '--verify'));
     const res = spawnSync(process.execPath, [path.join(__dirname, 'verify-fast.mjs'), ...vArgs], {
       cwd: rootDir,
       stdio: 'inherit',

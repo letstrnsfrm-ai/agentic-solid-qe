@@ -66,9 +66,61 @@ const subcommandDelegateMap = {
   audit: 'audit-solid.mjs',
 };
 
+// Flags that change state destructively. They are stripped at a subcommand
+// boundary unless the target subcommand documents them as its own flag —
+// otherwise a flag meant for one command (or smuggled in as a value from
+// untrusted content) can be reinterpreted by another subcommand as
+// --apply/--force/--reset. (Twin of the same helper in orchestrate.mjs,
+// which guards the orchestrator's own delegation sites.)
+const DESTRUCTIVE_FLAGS = new Set([
+  '--apply',
+  '--force',
+  '--reset',
+  '--delete',
+  '--remove',
+  '--overwrite',
+  '--yes',
+  '--purge',
+  '--destroy',
+  '--wipe',
+  '--force-shared',
+  '--force-spec',
+  '--apply-patches',
+  '--clean',
+]);
+const DESTRUCTIVE_FLAG_ALLOWLIST = {
+  compile: new Set(['--apply', '--force-spec']),
+  heal: new Set(['--apply', '--force-shared']),
+  migrate: new Set(['--apply']),
+  upgrade: new Set(['--force', '--apply-patches']),
+  // '--force-shared' is a documented orchestrate/heal consent flag: it only
+  // permits mutating a shared module alongside --apply and changes nothing
+  // on its own, so forwarding it to orchestrate is safe.
+  orchestrate: new Set(['--reset', '--force-shared']),
+  status: new Set(['--reset']),
+};
+
+function filterDelegatedArgs(subcommand, args) {
+  const allowed = DESTRUCTIVE_FLAG_ALLOWLIST[subcommand] || new Set();
+  const kept = [];
+  for (const arg of args) {
+    if (typeof arg === 'string' && arg.startsWith('--')) {
+      const flag = arg.split('=')[0];
+      if (DESTRUCTIVE_FLAGS.has(flag) && !allowed.has(flag)) {
+        console.warn(
+          `⚠️  Stripped '${flag}' at the '${subcommand}' boundary: it is not a documented flag of that subcommand.`
+        );
+        continue;
+      }
+    }
+    kept.push(arg);
+  }
+  return kept;
+}
+
 if (rawArgs[0] && Object.hasOwn(subcommandDelegateMap, rawArgs[0])) {
   const scriptFile = path.join(__dirname, subcommandDelegateMap[rawArgs[0]]);
-  const res = spawnSync(process.execPath, [scriptFile, ...rawArgs.slice(1)], {
+  const res = spawnSync(process.execPath, [scriptFile, ...filterDelegatedArgs(rawArgs[0], rawArgs.slice(1))], {
     stdio: 'inherit',
   });
   if (res.error) {
@@ -392,25 +444,52 @@ function sha256File(filePath) {
 
 const MANIFEST_REL_PATH = '.agents/framework-manifest.json';
 const UPGRADE_PATCHES_DIR = path.join(TARGET_ROOT, '.agents/upgrade-patches');
+const LEGACY_BACKUPS_DIR = path.join(TARGET_ROOT, '.agents/legacy-backups');
 const previousManifest = (() => {
   const manifestPath = path.join(TARGET_ROOT, MANIFEST_REL_PATH);
   const emptyFiles = Object.create(null);
   if (!fs.existsSync(manifestPath)) return { version: null, files: emptyFiles };
+  let parsed;
   try {
-    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    const safeFiles = Object.create(null);
-    if (parsed.files && typeof parsed.files === 'object' && !Array.isArray(parsed.files)) {
-      for (const [k, v] of Object.entries(parsed.files)) {
-        if (typeof v === 'string') safeFiles[k] = v;
-      }
-    }
-    return {
-      version: typeof parsed.version === 'string' ? parsed.version : null,
-      files: safeFiles,
-    };
+    parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   } catch {
+    // A malformed manifest is not the same as a missing one: warn loudly so
+    // a tampered file cannot silently downgrade the sync to "no manifest".
+    console.warn(
+      `⚠️  Framework manifest ${MANIFEST_REL_PATH} is not valid JSON; treating it as missing (existing files will be preserved, not overwritten).`
+    );
     return { version: null, files: emptyFiles };
   }
+  const safeFiles = Object.create(null);
+  let dropped = 0;
+  if (parsed.files && typeof parsed.files === 'object' && !Array.isArray(parsed.files)) {
+    for (const [k, v] of Object.entries(parsed.files)) {
+      // Entries must be safe relative paths mapped to a sha256 hex hash.
+      // Anything else (absolute path, traversal, non-hash value) is dropped
+      // so a doctored manifest cannot claim a local edit is a framework file.
+      const key = String(k || '').replace(/\\/g, '/');
+      if (
+        !key ||
+        path.isAbsolute(key) ||
+        key.split('/').includes('..') ||
+        typeof v !== 'string' ||
+        !/^[0-9a-f]{64}$/i.test(v)
+      ) {
+        dropped++;
+        continue;
+      }
+      safeFiles[key] = v.toLowerCase();
+    }
+  }
+  if (dropped > 0) {
+    console.warn(
+      `⚠️  Dropped ${dropped} invalid entr${dropped === 1 ? 'y' : 'ies'} from the framework manifest; those files will be preserved, not overwritten.`
+    );
+  }
+  return {
+    version: typeof parsed.version === 'string' ? parsed.version : null,
+    files: safeFiles,
+  };
 })();
 
 const nextManagedFiles = Object.create(null);
@@ -445,7 +524,7 @@ function isUnsafeSource(sourceRoot, candidateSrc) {
   return false;
 }
 
-function copyRecursive(src, dest, { overwrite = true, trackManifest = false, sourceRoot = null } = {}) {
+function copyRecursive(src, dest, { overwrite = true, trackManifest = false, sourceRoot = null, backupBeforeOverwrite = '' } = {}) {
   if (!fs.existsSync(src)) return;
   if (sourceRoot && isUnsafeSource(sourceRoot, src)) {
     console.warn(`⚠️  Skipped unsafe/symlinked source path: ${src}`);
@@ -459,7 +538,7 @@ function copyRecursive(src, dest, { overwrite = true, trackManifest = false, sou
       fs.mkdirSync(dest, { recursive: true });
     }
     for (const entry of fs.readdirSync(src)) {
-      copyRecursive(path.join(src, entry), path.join(dest, entry), { overwrite, trackManifest, sourceRoot });
+      copyRecursive(path.join(src, entry), path.join(dest, entry), { overwrite, trackManifest, sourceRoot, backupBeforeOverwrite });
     }
   } else {
     const relPath = rel(dest).replace(/\\/g, '/');
@@ -486,7 +565,14 @@ function copyRecursive(src, dest, { overwrite = true, trackManifest = false, sou
         return;
       }
       const prevHash = Object.hasOwn(previousManifest.files, relPath) ? previousManifest.files[relPath] : undefined;
-      if (trackManifest && prevHash && destHash !== prevHash && !forceOverwrite) {
+      // Preserve when the local file differs from the last synced version —
+      // and also when the manifest has no record for it at all (manifest
+      // missing, entry removed, or hash doctored into an invalid shape).
+      // Without a trustworthy previous hash we cannot tell a framework file
+      // from a local edit, so the local file is kept and the incoming
+      // version is saved as a patch. --force still overwrites deliberately.
+      const locallyEdited = prevHash ? destHash !== prevHash : true;
+      if (trackManifest && locallyEdited && !forceOverwrite) {
         const patchDest = path.join(UPGRADE_PATCHES_DIR, relPath);
         if (!dryRun && !isUnsafeDest(patchDest)) {
           fs.mkdirSync(path.dirname(patchDest), { recursive: true });
@@ -494,9 +580,26 @@ function copyRecursive(src, dest, { overwrite = true, trackManifest = false, sou
         }
         preservedLocalEdits.push({ relPath, patchRel: rel(patchDest).replace(/\\/g, '/') });
         console.log(
-          `${dryRun ? '🔍 [DRY-RUN] Would preserve' : '🛡️  Preserved'} locally edited file: ${relPath} (incoming saved to ${rel(patchDest).replace(/\\/g, '/')})`
+          prevHash
+            ? `${dryRun ? '🔍 [DRY-RUN] Would preserve' : '🛡️  Preserved'} locally edited file: ${relPath} (incoming saved to ${rel(patchDest).replace(/\\/g, '/')})`
+            : `${dryRun ? '🔍 [DRY-RUN] Would preserve' : '🛡️  Preserved'} ${relPath}: no manifest record — existing file kept, incoming saved to ${rel(patchDest).replace(/\\/g, '/')} (use --force to overwrite)`
         );
         return;
+      }
+      // Push syncs (e.g. --org-brain) have no manifest record to compare
+      // against, so instead of silently overwriting a differing local file,
+      // back it up first — the org update still lands, and the local edit
+      // stays recoverable.
+      if (backupBeforeOverwrite && !dryRun) {
+        const safeBackupRel = relPath.replace(/[\\/]+/g, '__');
+        const backupPath = path.join(LEGACY_BACKUPS_DIR, `${safeBackupRel}.${backupBeforeOverwrite}`);
+        if (!isUnsafeDest(backupPath)) {
+          fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+          fs.copyFileSync(dest, backupPath);
+          console.log(
+            `💾 Backed up locally modified file before overwrite: ${relPath} -> ${rel(backupPath).replace(/\\/g, '/')}`
+          );
+        }
       }
     }
 
@@ -1544,6 +1647,7 @@ if (orgBrainSource) {
         copyRecursive(srcPath, path.join(TARGET_ROOT, sharedRel), {
           overwrite: true,
           sourceRoot: resolvedBrainRoot,
+          backupBeforeOverwrite: 'pre-org-brain',
         });
       }
     }

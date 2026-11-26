@@ -661,6 +661,22 @@ export function executeWaveBatch(
 
 // ─── 5. Interactive HTML Migration Burn-Down & N:1 Parity Dashboard ─────────
 
+// Statuses the migration dashboard knows how to render. Ledger entries come
+// from a persisted JSON file, so a tampered or future unknown status must not
+// be interpolated into a CSS class name (class injection). Anything outside
+// this set renders as 'unknown' with the default badge style.
+const VALID_DASHBOARD_STATUSES = new Set([
+  'pending',
+  'compiled',
+  'live-verified',
+  'healed',
+  'parity-verified',
+  'needs-triage',
+  'consolidated',
+  'skipped-quarantine',
+  'wave0-scaffolded',
+]);
+
 export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'reports/migration-dashboard.html') {
   const manifestPath = path.join(projectRoot, MIGRATION_MANIFEST_REL_PATH);
   if (!fs.existsSync(manifestPath)) {
@@ -708,16 +724,17 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
 
   const parityRowsHtml = ledger
     .slice(0, 500)
-    .map(
-      (e) => `<tr data-squad="${escapeHtml(e.squad)}" data-status="${escapeHtml(e.status)}" data-wave="${escapeHtml(e.wave)}">
+    .map((e) => {
+      const safeStatus = VALID_DASHBOARD_STATUSES.has(e.status) ? e.status : 'unknown';
+      return `<tr data-squad="${escapeHtml(e.squad)}" data-status="${safeStatus}" data-wave="${escapeHtml(e.wave)}">
         <td><code>${escapeHtml(e.id)}</code></td>
         <td>${escapeHtml(e.squad)}</td>
         <td>W${escapeHtml(e.wave)}</td>
-        <td><span class="badge status-${escapeHtml(e.status)}" title="${escapeHtml(e.lastError || '')}">${escapeHtml(e.status)}</span></td>
+        <td><span class="badge status-${safeStatus}" title="${escapeHtml(e.lastError || '')}">${safeStatus}</span></td>
         <td>${escapeHtml(e.seederStrategy || 'standalone')}</td>
         <td><code>${escapeHtml(e.consolidatedInto ? `-> ${e.consolidatedInto} (N:1)` : e.targetSpec || '-')}</code></td>
-      </tr>`
-    )
+      </tr>`;
+    })
     .join('\n');
 
   const html = `<!doctype html>
@@ -749,6 +766,7 @@ export function generateMigrationDashboard(projectRoot = ROOT, outRelPath = 'rep
     .status-needs-triage { background: #991b1b; color: #fecaca; }
     .status-consolidated { background: #5b21b6; color: #ddd6fe; }
     .status-skipped-quarantine { background: #78350f; color: #fde68a; }
+    .status-unknown { background: #475569; color: #e2e8f0; }
   </style>
 </head>
 <body>

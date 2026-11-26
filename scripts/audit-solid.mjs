@@ -779,6 +779,13 @@ const PROMPT_INJECTION_PATTERNS = [
   },
 ];
 
+// Verifying a repo runs its specs as code (Playwright executes tests/, which
+// can import anything). There is no sandbox around that — it is inherent to
+// test runners — so this gate is the mitigation: it fails the audit when
+// specs or framework code contain process-spawning, VM, eval, or
+// direct-network primitives. Treat `cortex verify` on an untrusted repo like
+// running its code: only verify repos you trust, or verify in an isolated
+// environment (throwaway container/VM) first.
 const UNSAFE_TS_CODE_PATTERNS = [
   {
     name: 'Dynamic Code Execution (eval / Function)',
@@ -796,6 +803,18 @@ const UNSAFE_TS_CODE_PATTERNS = [
   {
     name: 'Hardcoded Content-Security-Policy Bypass (bypassCSP: true)',
     regex: /\bbypassCSP\s*:\s*true\b/,
+  },
+];
+
+// Spec-only patterns: a spec that reaches the network outside the framework's
+// API layer (src/api/* via Playwright's page.request / APIRequestContext)
+// bypasses the framework's request handling and can exfiltrate data or pull
+// in untrusted content while `cortex verify` runs it as code.
+const UNSAFE_SPEC_PATTERNS = [
+  {
+    name: 'Direct Network Access in Spec (fetch / axios / node:http(s) — use src/api/* via page.request instead)',
+    regex:
+      /(?:(?<![.\w$])fetch|\b(?:globalThis|window|self)\.fetch)\s*\(|\baxios\s*(?:\(|\.)|(?:from\s+['"](?:axios|node:https?|https?)['"]|require\s*\(\s*['"](?:axios|node:https?|https?)['"]\s*\))/,
   },
 ];
 
@@ -841,8 +860,18 @@ const ARTIFACT_CREDENTIAL_ASSIGN_REGEX =
   /(['"`]?)\b(password|passcode|pin|otp|cvv|cvc|ssn|secret|client[_-]?secret|private[_-]?key|access[_-]?key|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token)\b\1\s*[:=]\s*(['"`])((?:\\.|(?!\3)[^\\\r\n]){4,})\3/gi;
 
 for (const targetFile of allCodeAndArtifactFiles) {
-  const rawText = fs.readFileSync(targetFile, 'utf8');
   const relTarget = rel(targetFile);
+  let rawText;
+  try {
+    rawText = fs.readFileSync(targetFile, 'utf8');
+  } catch (err) {
+    // An unreadable file must not silently skip the gate — record it so the
+    // audit is visibly incomplete for that file instead of vouching for it.
+    violations.push(
+      `[Audit Read Failure] ${relTarget} could not be read (${err?.code || err?.message}); audit is incomplete for this file.`
+    );
+    continue;
+  }
 
   if (BIDI_UNICODE_REGEX.test(rawText)) {
     violations.push(
@@ -881,12 +910,21 @@ for (const targetFile of allCodeAndArtifactFiles) {
       }
     }
 
+    if (relTarget.startsWith('tests/')) {
+      for (const specRule of UNSAFE_SPEC_PATTERNS) {
+        if (specRule.regex.test(inspectText)) {
+          violations.push(
+            `[Enterprise Code Security Gate] ${relTarget} contains forbidden pattern '${specRule.name}'.`
+          );
+        }
+      }
+    }
+
     for (const match of inspectText.matchAll(TS_SENSITIVE_ASSIGN_REGEX)) {
       const propName = match[2];
       const literalVal = match[4].trim();
       if (
         literalVal &&
-        literalVal !== 'secret_sauce' &&
         literalVal !== 'invalid-test-credential' &&
         !literalVal.startsWith('${') &&
         !literalVal.startsWith('<') &&
@@ -905,7 +943,7 @@ for (const targetFile of allCodeAndArtifactFiles) {
         /(?:password|passcode|\bpin\b|_pin|pin_|\botp\b|_otp|cvv|cvc|\bssn\b|_ssn|secret|private[_-]?key|access[_-]?key|api[_-]?key|token)/i.test(
           envName
         );
-      if (isSensitiveEnv && fallbackVal && fallbackVal !== 'secret_sauce' && fallbackVal !== 'invalid-test-credential') {
+      if (isSensitiveEnv && fallbackVal && fallbackVal !== 'invalid-test-credential') {
         violations.push(
           `[Secret Hygiene Gate] ${relTarget} defines a non-empty fallback secret literal for process.env.${envName}. Use requireEnv('${envName}') instead of a hardcoded fallback credential.`
         );
@@ -933,7 +971,6 @@ for (const targetFile of allCodeAndArtifactFiles) {
       const assignedVal = match[4].trim();
       if (
         assignedVal &&
-        assignedVal !== 'secret_sauce' &&
         assignedVal !== '[REDACTED]' &&
         !assignedVal.startsWith('[REDACTED') &&
         !assignedVal.startsWith('<') &&

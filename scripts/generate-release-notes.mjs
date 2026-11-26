@@ -237,10 +237,32 @@ function statusBadge(status) {
   }
 }
 
+/**
+ * Plain-text sanitizer for values stored in CHANGELOG.json (plain text, also
+ * printed directly to stdout by sync-skills.mjs). Strips control/BiDi chars
+ * and neutralises @mentions like cleanHeadline does — but does NOT
+ * Markdown-escape, or scoped subjects such as `feat(map): ...` would be
+ * stored as `feat\(map\): ...`. Markdown escaping happens at Markdown render
+ * time instead (sanitizeReleaseCommitText, used as escapeMdInline).
+ */
+export function sanitizeReleasePlainText(val) {
+  return String(val ?? '')
+    .replace(/[\x00-\x1f\x7f\u202A-\u202E\u2066-\u2069\r\n]+/g, ' ')
+    .replace(/@/g, '@\u200B')
+    .trim();
+}
+
 export function sanitizeReleaseCommitText(val) {
   return String(val ?? '')
     .replace(/[\x00-\x1f\x7f\u202A-\u202E\u2066-\u2069\r\n]+/g, ' ')
-    .replace(/([|`<>\[\]])/g, '\\$1')
+    // Escape backslashes FIRST: a pre-escaped payload such as `\[spoof\](url)`
+    // otherwise survives as `\\[spoof\\](url)`, which Markdown collapses back
+    // into a live link. Doubling the backslash first keeps every later escape literal.
+    .replace(/\\/g, '\\\\')
+    .replace(/([|`<>\[\]()!*_])/g, '\\$1')
+    // Neutralise @mentions so a crafted subject/scope cannot ping users from
+    // the official release body (same treatment the author field already gets).
+    .replace(/@/g, '@\u200B')
     .trim();
 }
 
@@ -255,7 +277,14 @@ function generateMarkdown({
 }) {
   const headlineCommit = commits[0];
   const cleanHeadline = headlineCommit
-    ? String(headlineCommit.subject || '').replace(/[\x00-\x1f\x7f\u202A-\u202E\u2066-\u2069\r\n]+/g, ' ').trim()
+    ? String(headlineCommit.subject || '')
+        .replace(/[\x00-\x1f\x7f\u202A-\u202E\u2066-\u2069\r\n]+/g, ' ')
+        // Plain-text title (also passed to `gh release create --title`): do not
+        // Markdown-escape it, or every scoped subject would show backslashes.
+        // Instead break link/image formation and neutralise @mentions.
+        .replace(/@/g, '@\u200B')
+        .replace(/([\[!])/g, '$1\u200B')
+        .trim()
     : '';
   const releaseTitle = cleanHeadline
     ? `${nextTag} — ${cleanHeadline}`
@@ -309,7 +338,7 @@ function generateMarkdown({
     for (const commit of matching) {
       const scopePrefix = commit.scope ? `**${escapeMdInline(commit.scope)}:** ` : '';
       const commitUrl = `https://github.com/${repoSlug}/commit/${commit.hash}`;
-      const safeAuthor = commit.author ? escapeMdInline(commit.author).replace(/@/g, '@\u200B') : '';
+      const safeAuthor = commit.author ? escapeMdInline(commit.author) : '';
       const authorSuffix = safeAuthor ? ` by **${safeAuthor}**` : '';
       sections.push(
         `- ${scopePrefix}${escapeMdInline(commit.description)} ([\`${commit.shortHash}\`](${commitUrl}))${authorSuffix}`
@@ -517,7 +546,7 @@ export function syncReleaseManifests(rootDir, { version, date = null, highlights
     }
     if (changelog.releases[0]?.version !== cleanVersion) {
       const cleanHighlights = (highlights || [])
-        .map((h) => String(h || '').replace(/[\u202A-\u202E\u2066-\u2069\r\n]/g, ' ').trim())
+        .map((h) => sanitizeReleasePlainText(h))
         .filter(Boolean)
         .slice(0, 5);
       changelog.releases.unshift({

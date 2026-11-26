@@ -22,7 +22,13 @@ if (!fs.existsSync(SCHEMA_PATH)) {
   process.exit(1);
 }
 
-const schema = JSON.parse(fs.readFileSync(SCHEMA_PATH, 'utf8'));
+let schema;
+try {
+  schema = JSON.parse(fs.readFileSync(SCHEMA_PATH, 'utf8'));
+} catch (err) {
+  console.error(`❌ Invalid JSON in session-tape schema at ${SCHEMA_PATH}: ${err.message}`);
+  process.exit(1);
+}
 const VALID_CHARTERS = new Set(schema.properties.charter.enum);
 const VALID_ACTIONS = new Set(schema.properties.semanticSteps.items.properties.action.enum);
 const VALID_STRATEGIES = new Set(
