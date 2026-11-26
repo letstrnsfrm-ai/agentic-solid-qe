@@ -418,7 +418,7 @@ function readSrcInventory() {
     if (r.endsWith('.step.ts') || r.includes('/steps/')) layers.steps.push(item);
     else if (r.endsWith('.page.ts') || r.includes('/pages/')) layers.pages.push(item);
     else if (r.endsWith('.component.ts') || r.includes('/components/')) layers.components.push(item);
-    else if (r.endsWith('.client.ts') || r.includes('/api/')) layers.apiClients.push(item);
+    else if (r.endsWith('.client.ts') || r.endsWith('.api.ts') || r.includes('/api/')) layers.apiClients.push(item);
     else if (r.endsWith('.seeder.ts') || r.includes('/seeders/')) layers.seeders.push(item);
     else if (r.endsWith('.builder.ts') || r.includes('/data/')) layers.builders.push(item);
   }
