@@ -45,7 +45,7 @@ export function parseTtlSeconds(ttlSpec) {
   return seconds;
 }
 
-export function deriveVaultKey(secretMaterial) {
+export function deriveVaultKey(secretMaterial, salt) {
   const raw = String(secretMaterial || '').trim();
   if (!raw) {
     throw new Error('Missing vault encryption key. Set CORTEX_VAULT_KEY or pass --key-env <VAR>.');
@@ -53,7 +53,8 @@ export function deriveVaultKey(secretMaterial) {
   if (/^[0-9a-fA-F]{64}$/.test(raw)) {
     return Buffer.from(raw, 'hex');
   }
-  return crypto.scryptSync(raw, 'cortex-auth-vault-v1', 32);
+  const saltBuf = salt ? Buffer.from(salt, 'base64') : Buffer.from('cortex-auth-vault-v1', 'utf8');
+  return crypto.scryptSync(raw, saltBuf, 32);
 }
 
 export function encryptStorageState(plaintextJson, secretMaterial, options = {}) {
@@ -65,7 +66,8 @@ export function encryptStorageState(plaintextJson, secretMaterial, options = {})
   // Validate JSON structure before encrypting so corrupt files are rejected early.
   JSON.parse(plaintextJson);
 
-  const key = deriveVaultKey(secretMaterial);
+  const salt = crypto.randomBytes(16).toString('base64');
+  const key = deriveVaultKey(secretMaterial, salt);
   const iv = crypto.randomBytes(12);
   const aad = Buffer.from(`cortex-auth-v1:${personaId}:${expiresAt.toISOString()}`, 'utf8');
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
@@ -76,6 +78,8 @@ export function encryptStorageState(plaintextJson, secretMaterial, options = {})
   return {
     schemaVersion: '1.0.0',
     alg: 'aes-256-gcm',
+    kdf: 'scrypt',
+    salt,
     personaId,
     createdAt: now.toISOString(),
     expiresAt: expiresAt.toISOString(),
@@ -96,7 +100,7 @@ export function decryptStorageState(envelope, secretMaterial, options = {}) {
     throw new Error(`Auth state for persona '${personaId}' expired at ${envelope.expiresAt}. Run 'npx cortex auth push --persona ${personaId}' to refresh.`);
   }
 
-  const key = deriveVaultKey(secretMaterial);
+  const key = deriveVaultKey(secretMaterial, envelope.salt || null);
   const iv = Buffer.from(envelope.iv, 'base64');
   const authTag = Buffer.from(envelope.authTag, 'base64');
   const ciphertext = Buffer.from(envelope.ciphertext, 'base64');
@@ -229,7 +233,7 @@ export function pullAuthState({ personaId, outputPath, vaultUri, secretMaterial,
 
 function parseCliArgs(argv) {
   const sub = argv[0] || 'help';
-  const opts = { persona: 'standard', ttl: '8h', json: false };
+  const opts = { persona: 'standard', ttl: '8h', keyEnv: 'CORTEX_VAULT_KEY', json: false };
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--persona' && argv[i + 1]) opts.persona = argv[++i];
@@ -242,6 +246,8 @@ function parseCliArgs(argv) {
     else if (a.startsWith('--vault=')) opts.vault = a.slice('--vault='.length);
     else if (a === '--ttl' && argv[i + 1]) opts.ttl = argv[++i];
     else if (a.startsWith('--ttl=')) opts.ttl = a.slice('--ttl='.length);
+    else if (a === '--key-env' && argv[i + 1]) opts.keyEnv = argv[++i];
+    else if (a.startsWith('--key-env=')) opts.keyEnv = a.slice('--key-env='.length);
     else if (a === '--json') opts.json = true;
   }
   return { sub, opts };
@@ -252,13 +258,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
   try {
     if (sub === 'help' || sub === '--help' || sub === '-h') {
       console.log(`Usage:
-  cortex auth push   --persona <id> [--input .auth/<id>.json] [--vault file://.cortex-vault|aws-sm://prefix] [--ttl 8h]
-  cortex auth pull   --persona <id> [--output .auth/<id>.json] [--vault file://.cortex-vault|aws-sm://prefix]
+  cortex auth push   --persona <id> [--input .auth/<id>.json] [--vault file://.cortex-vault|aws-sm://prefix] [--ttl 8h] [--key-env CORTEX_VAULT_KEY]
+  cortex auth pull   --persona <id> [--output .auth/<id>.json] [--vault file://.cortex-vault|aws-sm://prefix] [--key-env CORTEX_VAULT_KEY]
   cortex auth status --persona <id> [--vault file://.cortex-vault|aws-sm://prefix]`);
       process.exit(0);
     }
 
-    const secret = process.env.CORTEX_VAULT_KEY || '';
+    const secret = process.env[opts.keyEnv] || '';
     if (sub === 'push') {
       const res = pushAuthState({
         personaId: opts.persona,

@@ -1,0 +1,17 @@
+# Prevent local secrets, auth states, vaults, and build artifacts from entering VPC runner images
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.auth/
+.cortex-vault/
+node_modules/
+playwright-report/
+test-results/
+reports/
+.exploratory/screenshots/
+.playwright-cli/
+.agent-browser/
+.agents/legacy-backups/
+*.log

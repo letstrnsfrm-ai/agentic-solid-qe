@@ -7816,6 +7816,92 @@ test('QE Software Factory Phase 2: Encrypted VPC Auth Vault, resolveGateChoice, 
           /Token footprint budget exceeded/.test(c.body.error || '')
       )
     );
+
+    // 5. PR #72 review fixes: random per-envelope salt, in-flight heartbeat, resume-only guard,
+    //    parseCommandLine, normalizePollMs, vpc-iam-gateway, and real orchestrate.mjs --loop --resume-gate subprocess
+    const {
+      parseCommandLine,
+      normalizePollMs,
+      defaultRunCortexOrchestrate,
+    } = await import('./runner-daemon.mjs');
+
+    // Distinct random scrypt salt per encryption
+    const envA = encryptStorageState(sampleState, 'vpc-master-passphrase', { personaId: 'p1', ttl: '2h', now });
+    const envB = encryptStorageState(sampleState, 'vpc-master-passphrase', { personaId: 'p1', ttl: '2h', now });
+    assert.ok(envA.salt && envB.salt && envA.salt !== envB.salt);
+    assert.notEqual(envA.ciphertext, envB.ciphertext);
+    assert.equal(decryptStorageState(envB, 'vpc-master-passphrase', { now: new Date('2026-11-27T11:00:00Z') }).plaintext, sampleState);
+
+    // Quote-aware parseCommandLine & pollMs NaN guard
+    assert.deepEqual(parseCommandLine('gh copilot --model "claude sonnet" --dir \'/tmp/my app\''), [
+      'gh',
+      'copilot',
+      '--model',
+      'claude sonnet',
+      '--dir',
+      '/tmp/my app',
+    ]);
+    assert.throws(() => parseCommandLine('gh "unterminated'), /Unterminated/);
+    assert.equal(normalizePollMs('not-a-number', 5000), 5000);
+    assert.equal(normalizePollMs(200, 5000), 5000);
+    assert.equal(normalizePollMs('2500', 5000), 2500);
+
+    // In-flight heartbeat fires during long-running executeWorkOrder & stops after completion
+    let inFlightHeartbeats = 0;
+    let vpcIamInvoked = false;
+    const hbClient = createCloudClient({
+      cloudUrl: 'https://cloud.example.internal',
+      token: 'cq_live_testtoken',
+      fetchImpl: async (url) => {
+        if (url.endsWith('/api/v1/runners/heartbeat')) inFlightHeartbeats++;
+        if (url.endsWith('/api/v1/runners/claim')) {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ workOrder: mockWorkOrder }) };
+        }
+        return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+      },
+    });
+    const hbCycle = await runSinglePollCycle({
+      cloudClient: hbClient,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'vpc-iam-gateway',
+      heartbeatIntervalMs: 25,
+      cwd: tmpDir,
+      runAgentSeat: async ({ executorMode }) => {
+        vpcIamInvoked = executorMode === 'vpc-iam-gateway';
+      },
+      runOrchestrate: async () => {
+        await new Promise((r) => setTimeout(r, 90));
+        return { exitCode: 0, parsed: { stoppedReason: 'completed', tokenUsed: 120 } };
+      },
+    });
+    assert.equal(hbCycle.outcome, 'completed');
+    assert.equal(vpcIamInvoked, true);
+    assert.ok(inFlightHeartbeats >= 2, `Expected >=2 in-flight heartbeats, got ${inFlightHeartbeats}`);
+
+    // Guard: resume-only (executed: false) output must NOT mark work order completed
+    const resumeOnlyCycle = await runSinglePollCycle({
+      cloudClient: hbClient,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'deterministic',
+      cwd: tmpDir,
+      runOrchestrate: async () => ({ exitCode: 0, parsed: { resumed: true, executed: false } }),
+    });
+    assert.equal(resumeOnlyCycle.outcome, 'failed');
+
+    // Real subprocess test: orchestrate.mjs --loop --json --resume-gate runs the loop (does not exit early)
+    const realSubRes = defaultRunCortexOrchestrate({
+      cwd: path.resolve(__dirname, '..'),
+      resumeGate: '01-cli-explorer',
+      choice: 1,
+    });
+    // Even if active gate mismatches or stops at a human gate, output must never be a silent empty completion
+    assert.ok(realSubRes.parsed !== null, 'Expected structured JSON from real orchestrate.mjs subprocess');
+    if (realSubRes.exitCode === 0) {
+      assert.ok(
+        realSubRes.parsed.stoppedReason || realSubRes.parsed.finalBlueprint,
+        'Expected --loop --resume-gate to return full loop result (stoppedReason/finalBlueprint), not early exit'
+      );
+    }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

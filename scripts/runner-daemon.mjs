@@ -62,9 +62,48 @@ export function createCloudClient({ cloudUrl, token, fetchImpl = fetch }) {
     register: (payload) => requestJson('POST', '/api/v1/runners/register', payload),
     heartbeat: (payload) => requestJson('POST', '/api/v1/runners/heartbeat', payload),
     claim: (payload) => requestJson('POST', '/api/v1/runners/claim', payload),
-    postEvent: (workOrderId, payload) => requestJson('POST', `/api/v1/work-orders/${workOrderId}/events`, payload),
-    postGate: (workOrderId, payload) => requestJson('POST', `/api/v1/work-orders/${workOrderId}/gates`, payload),
+    postEvent: (workOrderId, payload) =>
+      requestJson('POST', `/api/v1/work-orders/${encodeURIComponent(String(workOrderId))}/events`, payload),
+    postGate: (workOrderId, payload) =>
+      requestJson('POST', `/api/v1/work-orders/${encodeURIComponent(String(workOrderId))}/gates`, payload),
   };
+}
+
+/**
+ * Splits a CLI command string honoring single and double quotes without invoking a shell.
+ */
+export function parseCommandLine(cmd) {
+  const str = String(cmd || '').trim();
+  if (!str) return [];
+  const args = [];
+  let current = '';
+  let quote = null;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else if (ch === '\\' && quote === '"' && i + 1 < str.length) {
+        current += str[++i];
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        args.push(current);
+        current = '';
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (quote) {
+    throw new Error(`Unterminated ${quote} quote in --agent-cmd.`);
+  }
+  if (current.length > 0) args.push(current);
+  return args;
 }
 
 export function extractGatePayloadFromBlueprint(result) {
@@ -149,6 +188,7 @@ export async function executeWorkOrder({
   vaultUri,
   cwd = process.cwd(),
   cloudClient,
+  heartbeatIntervalMs = 60_000,
   runOrchestrate = defaultRunCortexOrchestrate,
   runAgentSeat = null,
 }) {
@@ -193,78 +233,105 @@ export async function executeWorkOrder({
     branchName: workOrder.branchName || undefined,
   });
 
-  // If using an enterprise coding-agent seat (zero API key) and an agentCmd/hook is provided, invoke it first.
-  if (executorMode === 'agent-seat' && (runAgentSeat || agentCmd)) {
-    const prompt = buildExecutorPrompt(workOrder);
-    if (runAgentSeat) {
-      await runAgentSeat({ prompt, workOrder, cwd });
-    } else if (agentCmd) {
-      const parts = agentCmd.split(/\s+/).filter(Boolean);
-      const res = spawnSync(parts[0], [...parts.slice(1), prompt], {
-        cwd,
-        encoding: 'utf8',
-        stdio: 'pipe',
-        shell: false,
-      });
-      if (res.status !== 0) {
-        await cloudClient.postEvent(workOrder.id, {
-          runnerId,
-          status: 'failed',
-          error: `Agent-seat command exited with code ${res.status}: ${(res.stderr || res.stdout || '').slice(0, 1000)}`,
+  // Keep shard lease alive during long-running executions (>5 min).
+  let heartbeatTimer = null;
+  if (typeof cloudClient.heartbeat === 'function' && Number.isFinite(heartbeatIntervalMs) && heartbeatIntervalMs > 0) {
+    heartbeatTimer = setInterval(() => {
+      void cloudClient.heartbeat({ runnerId, status: 'busy', activeJobs: 1 }).catch(() => {});
+    }, heartbeatIntervalMs);
+    if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+  }
+
+  try {
+    // Delegate reasoning to zero-API-key enterprise agent seat or VPC Workload-IAM gateway when configured.
+    const usesExternalExecutor = executorMode === 'agent-seat' || executorMode === 'vpc-iam-gateway';
+    if (usesExternalExecutor && (runAgentSeat || agentCmd)) {
+      const prompt = buildExecutorPrompt(workOrder);
+      if (runAgentSeat) {
+        await runAgentSeat({ prompt, workOrder, cwd, executorMode });
+      } else if (agentCmd) {
+        const parts = parseCommandLine(agentCmd);
+        if (parts.length === 0) {
+          throw new Error('Empty --agent-cmd.');
+        }
+        const res = spawnSync(parts[0], [...parts.slice(1), prompt], {
+          cwd,
+          encoding: 'utf8',
+          stdio: 'pipe',
+          shell: false,
         });
-        return { outcome: 'failed' };
+        if (res.status !== 0) {
+          await cloudClient.postEvent(workOrder.id, {
+            runnerId,
+            status: 'failed',
+            error: `Executor command exited with code ${res.status}: ${(res.stderr || res.stdout || '').slice(0, 1000)}`,
+          });
+          return { outcome: 'failed' };
+        }
       }
     }
-  }
 
-  // Run deterministic Cortex orchestrator loop (with --resume-gate if resuming from Async Gate Inbox).
-  const resume = workOrder.lastGateResolution || null;
-  const orchResult = await runOrchestrate({
-    cwd,
-    squad: workOrder.squad,
-    resumeGate: resume?.gateId,
-    choice: resume?.selectedOptionIndex,
-    workOrder,
-  });
-
-  const gatePayload = extractGatePayloadFromBlueprint(orchResult.parsed);
-  if (gatePayload) {
-    await cloudClient.postGate(workOrder.id, {
-      runnerId,
-      ...gatePayload,
-      branchName: workOrder.branchName || undefined,
+    // Run deterministic Cortex orchestrator loop (with --resume-gate if resuming from Async Gate Inbox).
+    const resume = workOrder.lastGateResolution || null;
+    const orchResult = await runOrchestrate({
+      cwd,
+      squad: workOrder.squad,
+      resumeGate: resume?.gateId,
+      choice: resume?.selectedOptionIndex,
+      workOrder,
     });
-    return { outcome: 'waiting_gate', gateId: gatePayload.gateId };
-  }
 
-  if (orchResult.exitCode !== 0) {
+    const gatePayload = extractGatePayloadFromBlueprint(orchResult.parsed);
+    if (gatePayload) {
+      await cloudClient.postGate(workOrder.id, {
+        runnerId,
+        ...gatePayload,
+        branchName: workOrder.branchName || undefined,
+      });
+      return { outcome: 'waiting_gate', gateId: gatePayload.gateId };
+    }
+
+    // Never mark a work order completed if orchestrate only resolved a gate without executing the loop.
+    if (orchResult.parsed?.executed === false) {
+      await cloudClient.postEvent(workOrder.id, {
+        runnerId,
+        status: 'failed',
+        error: 'Orchestrator returned resume-only output (executed: false) without running the loop.',
+      });
+      return { outcome: 'failed' };
+    }
+
+    if (orchResult.exitCode !== 0) {
+      await cloudClient.postEvent(workOrder.id, {
+        runnerId,
+        status: 'failed',
+        error: (orchResult.stderr || orchResult.stdout || 'cortex orchestrate failed').slice(0, 1500),
+      });
+      return { outcome: 'failed' };
+    }
+
+    const tokenUsed = Number(orchResult.parsed?.tokenUsed || 0);
+    if (workOrder.tokenBudget && tokenUsed > workOrder.tokenBudget) {
+      await cloudClient.postEvent(workOrder.id, {
+        runnerId,
+        status: 'failed',
+        branchName: workOrder.branchName || undefined,
+        tokenUsed,
+        error: `Token footprint budget exceeded (${tokenUsed} > ${workOrder.tokenBudget} tok).`,
+      });
+      return { outcome: 'budget_exceeded', tokenUsed };
+    }
+
     await cloudClient.postEvent(workOrder.id, {
       runnerId,
-      status: 'failed',
-      error: (orchResult.stderr || orchResult.stdout || 'cortex orchestrate failed').slice(0, 1500),
-    });
-    return { outcome: 'failed' };
-  }
-
-  const tokenUsed = Number(orchResult.parsed?.tokenUsed || 0);
-  if (workOrder.tokenBudget && tokenUsed > workOrder.tokenBudget) {
-    await cloudClient.postEvent(workOrder.id, {
-      runnerId,
-      status: 'failed',
+      status: 'completed',
       branchName: workOrder.branchName || undefined,
       tokenUsed,
-      error: `Token footprint budget exceeded (${tokenUsed} > ${workOrder.tokenBudget} tok).`,
     });
-    return { outcome: 'budget_exceeded', tokenUsed };
+    return { outcome: 'completed', tokenUsed };
+  } finally {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
   }
-
-  await cloudClient.postEvent(workOrder.id, {
-    runnerId,
-    status: 'completed',
-    branchName: workOrder.branchName || undefined,
-    tokenUsed,
-  });
-  return { outcome: 'completed', tokenUsed };
 }
 
 /**
@@ -294,6 +361,7 @@ export async function runSinglePollCycle({
   agentCmd = '',
   vaultUri,
   cwd = process.cwd(),
+  heartbeatIntervalMs = 60_000,
   runOrchestrate,
   runAgentSeat,
 }) {
@@ -309,10 +377,17 @@ export async function runSinglePollCycle({
     vaultUri,
     cwd,
     cloudClient,
+    heartbeatIntervalMs,
     runOrchestrate,
     runAgentSeat,
   });
   return { claimed: true, workOrderId: claimed.workOrder.id, ...execRes };
+}
+
+export function normalizePollMs(value, fallback = 5000) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 1000) return fallback;
+  return Math.trunc(num);
 }
 
 function parseRunnerArgs(argv) {
@@ -325,8 +400,7 @@ function parseRunnerArgs(argv) {
     executor: process.env.CORTEX_EXECUTOR_MODE || 'agent-seat',
     agentCmd: process.env.CORTEX_AGENT_CMD || '',
     vault: process.env.CORTEX_AUTH_VAULT || 'file://.cortex-vault',
-    concurrency: Number(process.env.CORTEX_RUNNER_CONCURRENCY || '1'),
-    pollMs: Number(process.env.CORTEX_RUNNER_POLL_MS || '5000'),
+    pollMs: normalizePollMs(process.env.CORTEX_RUNNER_POLL_MS, 5000),
     once: false,
   };
 
@@ -343,8 +417,7 @@ function parseRunnerArgs(argv) {
     else if (a.startsWith('--executor=')) opts.executor = a.slice('--executor='.length);
     else if (a === '--agent-cmd' && argv[i + 1]) opts.agentCmd = argv[++i];
     else if (a === '--vault' && argv[i + 1]) opts.vault = argv[++i];
-    else if (a === '--concurrency' && argv[i + 1]) opts.concurrency = Number(argv[++i]);
-    else if (a === '--poll-ms' && argv[i + 1]) opts.pollMs = Number(argv[++i]);
+    else if (a === '--poll-ms' && argv[i + 1]) opts.pollMs = normalizePollMs(argv[++i], 5000);
     else if (a === '--once') opts.once = true;
   }
 
@@ -368,7 +441,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
     const { sub, opts } = parseRunnerArgs(process.argv.slice(2));
     if (sub === 'help' || sub === '--help' || sub === '-h') {
       console.log(`Usage:
-  cortex runner start --cloud-url <url> --token <token> [--executor agent-seat|deterministic|vpc-iam-gateway] [--agent-cmd "<cmd>"] [--labels vpc:staging] [--concurrency 1] [--once]`);
+  CORTEX_CLOUD_TOKEN=<token> cortex runner start --cloud-url <url> [--executor agent-seat|deterministic|vpc-iam-gateway] [--agent-cmd "<cmd>"] [--labels vpc:staging] [--poll-ms 5000] [--once]
+
+Notes:
+  - Prefer CORTEX_CLOUD_TOKEN env var over --token so bearer secrets are not exposed in process argv.
+  - Each runner pod executes 1 work order at a time (scale horizontally with K8s replicas).`);
       process.exit(0);
     }
     if (sub !== 'start') {
@@ -380,7 +457,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
       name: opts.name,
       labels: opts.labels,
       executorMode: opts.executor,
-      maxConcurrency: opts.concurrency,
+      maxConcurrency: 1,
       cliVersion: readPackageVersion(),
     });
     const runnerId = reg.runner.id;
@@ -395,7 +472,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
         vaultUri: opts.vault,
       });
       console.log(JSON.stringify(cycle, null, 2));
-      process.exit(cycle.outcome === 'failed' ? 1 : 0);
+      process.exit(cycle.outcome === 'failed' || cycle.outcome === 'budget_exceeded' ? 1 : 0);
     }
 
     let stopping = false;
@@ -419,7 +496,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
         console.error(`⚠️  Runner poll error: ${err.message}`);
       }
       if (!stopping) {
-        await new Promise((r) => setTimeout(r, Math.max(1000, opts.pollMs)));
+        await new Promise((r) => setTimeout(r, opts.pollMs));
       }
     }
   })().catch((err) => {

@@ -2512,34 +2512,33 @@ Usage:
     }
   }
 
+  let resumedGateInfo = null;
   if (resumeGate) {
     const blueprint = buildOrchestrationBlueprint(rootDir, { squad });
     const resolved = resolveGateChoice(blueprint, resumeGate, gateChoice);
     if (!resolved.ok) {
       if (jsonOut) {
-        console.log(JSON.stringify({ resumed: false, error: resolved.error, gateId: resumeGate }, null, 2));
+        console.log(JSON.stringify({ resumed: false, executed: false, error: resolved.error, gateId: resumeGate }, null, 2));
       } else {
         console.error(`❌ --resume-gate failed: ${resolved.error}`);
       }
       process.exit(1);
     }
-    if (jsonOut) {
-      console.log(
-        JSON.stringify(
-          {
-            resumed: true,
-            gateId: resolved.gateId,
-            choice: resolved.choice,
-            selectedOption: resolved.option,
-          },
-          null,
-          2
-        )
-      );
+    resumedGateInfo = {
+      gateId: resolved.gateId,
+      choice: resolved.choice,
+      selectedOption: resolved.option,
+    };
+    if (!loopMode) {
+      if (jsonOut) {
+        console.log(JSON.stringify({ resumed: true, executed: false, ...resumedGateInfo }, null, 2));
+      } else {
+        console.log(
+          `✅ Resolved gate '${resolved.gateId}' with choice #${resolved.choice}: ${resolved.option.label} -> ${resolved.option.command}`
+        );
+      }
       process.exit(0);
     }
-    console.log(`✅ Resumed gate '${resolved.gateId}' with choice #${resolved.choice}: ${resolved.option.label} -> ${resolved.option.command}`);
-    process.exit(0);
   }
 
   if (loopMode) {
@@ -2553,8 +2552,9 @@ Usage:
       quiet: jsonOut,
     })
       .then((res) => {
+        const output = resumedGateInfo ? { ...res, resumedGate: resumedGateInfo } : res;
         if (jsonOut) {
-          console.log(JSON.stringify(res, null, 2));
+          console.log(JSON.stringify(output, null, 2));
         }
         const failed = ['compile-failed', 'verify-failed', 'heal-verify-failed', 'final-verify-failed'].includes(
           res.stoppedReason
