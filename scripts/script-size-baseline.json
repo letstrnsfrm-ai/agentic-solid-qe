@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0.0",
+  "maxNewScriptLines": 500,
+  "note": "Framework-maintainer line ratchet. Legacy monoliths cannot grow; extract new logic into scripts/lib/ (<= 500 lines) and new engine tests into scripts/tests/*.test.mjs (<= 500 lines).",
+  "legacyBaselines": {
+    "scripts/analyze-coverage.mjs": 719,
+    "scripts/audit-solid.mjs": 1111,
+    "scripts/build-system-map.mjs": 2004,
+    "scripts/compile-tape.mjs": 2417,
+    "scripts/context-pack.mjs": 570,
+    "scripts/dotnet-enterprise-analyzer.mjs": 719,
+    "scripts/explore-session.mjs": 2081,
+    "scripts/generate-release-notes.mjs": 813,
+    "scripts/heal-drift.mjs": 1196,
+    "scripts/impact-graph.mjs": 1212,
+    "scripts/legacy-test-migrator.mjs": 2184,
+    "scripts/lib/autonomous-mode.mjs": 873,
+    "scripts/migrate-skill.mjs": 1539,
+    "scripts/migration-wave-factory.mjs": 940,
+    "scripts/orchestrate.mjs": 2765,
+    "scripts/report-cloud.mjs": 683,
+    "scripts/runner-daemon.mjs": 539,
+    "scripts/self-test.mjs": 7957,
+    "scripts/sync-skills.mjs": 1839,
+    "scripts/tape-cli.mjs": 680,
+    "scripts/upgrade-framework.mjs": 1075,
+    "scripts/validate-tapes.mjs": 786,
+    "scripts/verify-fast.mjs": 548
+  }
+}

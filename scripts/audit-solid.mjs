@@ -9,6 +9,8 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { estimateTokens, TOKEN_BUDGETS } from './lib/cli-output.mjs';
+import { auditOverrides } from './lib/audit-overrides.mjs';
+import { auditScriptsRatchet } from './lib/audit-scripts-ratchet.mjs';
 import { buildImpactGraph, inferSquadFromPath, stripComments } from './impact-graph.mjs';
 
 const ROOT = process.cwd();
@@ -1077,6 +1079,15 @@ try {
 } catch {
   /* non-fatal if impact graph cannot be built */
 }
+
+// 10. Audit Sharded Team Overrides (.agents/overrides/) & Framework Scripts Line Ratchet
+const overridesAudit = auditOverrides(ROOT);
+violations.push(...overridesAudit.violations);
+warnings.push(...overridesAudit.warnings);
+
+const scriptsRatchetAudit = auditScriptsRatchet(ROOT);
+violations.push(...scriptsRatchetAudit.violations);
+warnings.push(...scriptsRatchetAudit.warnings);
 
 if (warnings.length > 0) {
   console.warn('\n⚠️  SOLID & Scale Hygiene Warnings:\n');

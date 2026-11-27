@@ -547,7 +547,7 @@ function copyRecursive(src, dest, { overwrite = true, trackManifest = false, sou
   } else {
     const relPath = rel(dest).replace(/\\/g, '/');
     const normalizedDest = dest.replace(/\\/g, '/');
-    if (normalizedDest.endsWith('/references/local-overrides.md') && fs.existsSync(dest)) {
+    if ((normalizedDest.endsWith('/references/local-overrides.md') || relPath.startsWith('.agents/overrides/')) && fs.existsSync(dest)) {
       console.log(`🛡️  Preserved local override: ${rel(dest)}`);
       return;
     }
@@ -1405,8 +1405,7 @@ const coreEnginePaths = [
   '.github/prompts',
   '.claude/commands',
   'CHANGELOG.json',
-  'scripts/lib/cli-output.mjs',
-  'scripts/lib/autonomous-mode.mjs',
+  'scripts/lib',
   'scripts/context-pack.mjs',
   'scripts/impact-graph.mjs',
   'scripts/tape-cli.mjs',
