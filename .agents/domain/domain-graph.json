@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "2.0.0",
+  "schemaVersion": "3.0.0",
   "architecture": "3-tier-federated-brain",
   "targetApp": {
     "appName": "Swag Labs (SauceDemo Reference Sandbox)",
@@ -8,7 +8,21 @@
   "summary": {
     "totalDomainHubs": 0,
     "totalShards": 3,
-    "staleShards": []
+    "staleShards": [],
+    "ontology": {
+      "domain": "swag-labs-ecommerce",
+      "schemaVersion": "1.0.0",
+      "entities": 4,
+      "links": 4,
+      "actions": 7,
+      "transitions": 10,
+      "invariants": 5,
+      "coveredEntities": 4,
+      "coveredActions": 5,
+      "coveredTransitions": 7,
+      "coveredInvariants": 4,
+      "uncoveredP0Invariants": 0
+    }
   },
   "domainHubs": [],
   "shards": [
@@ -104,5 +118,900 @@
       ".agents/domain/shards/inventory-cart.md"
     ]
   },
-  "codeownersRules": []
+  "codeownersRules": [],
+  "ontology": {
+    "sourcePath": ".agents/domain/ontology.json",
+    "domain": "swag-labs-ecommerce",
+    "lastVerified": "2026-11-27",
+    "summary": {
+      "domain": "swag-labs-ecommerce",
+      "schemaVersion": "1.0.0",
+      "entities": 4,
+      "links": 4,
+      "actions": 7,
+      "transitions": 10,
+      "invariants": 5,
+      "coveredEntities": 4,
+      "coveredActions": 5,
+      "coveredTransitions": 7,
+      "coveredInvariants": 4,
+      "uncoveredP0Invariants": 0
+    },
+    "links": [
+      {
+        "id": "user-owns-cart",
+        "from": "User",
+        "relation": "owns",
+        "to": "Cart",
+        "cardinality": "1:1"
+      },
+      {
+        "id": "cart-contains-product",
+        "from": "Cart",
+        "relation": "contains",
+        "to": "Product",
+        "cardinality": "1:N"
+      },
+      {
+        "id": "cart-creates-order",
+        "from": "Cart",
+        "relation": "creates",
+        "to": "Order",
+        "cardinality": "1:1"
+      },
+      {
+        "id": "user-owns-order",
+        "from": "User",
+        "relation": "owns",
+        "to": "Order",
+        "cardinality": "1:N"
+      }
+    ],
+    "coverage": {
+      "entities": {
+        "total": 4,
+        "covered": 4,
+        "uncovered": []
+      },
+      "actions": {
+        "total": 7,
+        "covered": 5,
+        "uncovered": [
+          "logoutUser",
+          "removeItemFromCart"
+        ]
+      },
+      "transitions": {
+        "total": 10,
+        "covered": 7,
+        "uncovered": [
+          {
+            "key": "User:authenticated->anonymous",
+            "entity": "User",
+            "from": "authenticated",
+            "to": "anonymous",
+            "viaAction": "logoutUser"
+          },
+          {
+            "key": "Product:in_cart->listed",
+            "entity": "Product",
+            "from": "in_cart",
+            "to": "listed",
+            "viaAction": "removeItemFromCart"
+          },
+          {
+            "key": "Cart:populated->empty",
+            "entity": "Cart",
+            "from": "populated",
+            "to": "empty",
+            "viaAction": "removeItemFromCart"
+          }
+        ]
+      },
+      "invariants": {
+        "total": 5,
+        "covered": 4,
+        "uncovered": [
+          {
+            "id": "inv-checkout-requires-customer-info",
+            "severity": "p1",
+            "entity": "Order",
+            "action": "submitShippingInfo",
+            "description": "Submitting Checkout Step One with missing first name, last name, or postal code displays a validation error and stays on /checkout-step-one.html."
+          }
+        ]
+      },
+      "gaps": [
+        {
+          "kind": "invariant",
+          "priority": "p1",
+          "target": "inv-checkout-requires-customer-info",
+          "entity": "Order",
+          "summary": "[P1] Uncovered invariant 'inv-checkout-requires-customer-info' on Order: Submitting Checkout Step One with missing first name, last name, or postal code displays a validation error and stays on /checkout-step-one.html."
+        },
+        {
+          "kind": "transition",
+          "priority": "p1",
+          "target": "User:authenticated->anonymous",
+          "entity": "User",
+          "summary": "Uncovered state transition 'User:authenticated->anonymous' via action 'logoutUser'"
+        },
+        {
+          "kind": "transition",
+          "priority": "p1",
+          "target": "Product:in_cart->listed",
+          "entity": "Product",
+          "summary": "Uncovered state transition 'Product:in_cart->listed' via action 'removeItemFromCart'"
+        },
+        {
+          "kind": "transition",
+          "priority": "p1",
+          "target": "Cart:populated->empty",
+          "entity": "Cart",
+          "summary": "Uncovered state transition 'Cart:populated->empty' via action 'removeItemFromCart'"
+        }
+      ]
+    },
+    "semanticIndex": {
+      "byEntity": {
+        "User": {
+          "id": "User",
+          "name": "Storefront User",
+          "ownerSquad": "@org/identity-squad",
+          "states": [
+            "anonymous",
+            "authenticated",
+            "locked_out"
+          ],
+          "routes": [
+            "/",
+            "/inventory.html"
+          ],
+          "components": [
+            "LoginPage",
+            "LoginFormComponent",
+            "HeaderNavComponent"
+          ],
+          "dataBuilders": [
+            "UserBuilder"
+          ],
+          "actions": [
+            "authenticateUser",
+            "logoutUser"
+          ],
+          "invariants": [
+            "inv-standard-user-reaches-inventory",
+            "inv-locked-user-denied-inventory"
+          ],
+          "relatedEntities": [
+            "Cart",
+            "Order"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "Product": {
+          "id": "Product",
+          "name": "Catalog Product",
+          "ownerSquad": "@org/catalog-squad",
+          "states": [
+            "listed",
+            "in_cart"
+          ],
+          "routes": [
+            "/inventory.html"
+          ],
+          "components": [
+            "InventoryPage",
+            "InventoryListComponent"
+          ],
+          "dataBuilders": [
+            "ProductBuilder"
+          ],
+          "actions": [
+            "addItemToCart",
+            "removeItemFromCart"
+          ],
+          "invariants": [],
+          "relatedEntities": [
+            "Cart"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "Cart": {
+          "id": "Cart",
+          "name": "Shopping Cart",
+          "ownerSquad": "@org/catalog-squad",
+          "states": [
+            "empty",
+            "populated",
+            "checked_out"
+          ],
+          "routes": [
+            "/inventory.html",
+            "/cart.html"
+          ],
+          "components": [
+            "InventoryPage",
+            "CartListComponent",
+            "HeaderNavComponent"
+          ],
+          "dataBuilders": [
+            "ProductBuilder"
+          ],
+          "actions": [
+            "addItemToCart",
+            "removeItemFromCart",
+            "proceedToCheckout"
+          ],
+          "invariants": [
+            "inv-cart-badge-matches-item-count"
+          ],
+          "relatedEntities": [
+            "User",
+            "Product",
+            "Order"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "Order": {
+          "id": "Order",
+          "name": "Customer Order",
+          "ownerSquad": "@org/checkout-squad",
+          "states": [
+            "draft",
+            "shipping_entered",
+            "completed"
+          ],
+          "routes": [
+            "/checkout-step-one.html",
+            "/checkout-step-two.html",
+            "/checkout-complete.html"
+          ],
+          "components": [
+            "CheckoutPage",
+            "CheckoutFormComponent",
+            "CheckoutSummaryComponent"
+          ],
+          "dataBuilders": [
+            "CheckoutBuilder"
+          ],
+          "actions": [
+            "proceedToCheckout",
+            "submitShippingInfo",
+            "completeOrder"
+          ],
+          "invariants": [
+            "inv-order-confirmation-shown",
+            "inv-checkout-requires-customer-info"
+          ],
+          "relatedEntities": [
+            "Cart",
+            "User"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts"
+          ]
+        }
+      },
+      "byAction": {
+        "authenticateUser": {
+          "id": "authenticateUser",
+          "name": "Authenticate Storefront User",
+          "targetEntity": "User",
+          "mutatesEntities": [],
+          "actorPersonas": [
+            "standard",
+            "locked_out",
+            "problem"
+          ],
+          "routes": [
+            "/",
+            "/inventory.html"
+          ],
+          "apiEndpoints": [
+            "GET https://www.saucedemo.com/**"
+          ],
+          "components": [
+            "LoginPage",
+            "LoginFormComponent"
+          ],
+          "invariants": [
+            "inv-standard-user-reaches-inventory",
+            "inv-locked-user-denied-inventory"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "logoutUser": {
+          "id": "logoutUser",
+          "name": "Log Out Storefront User",
+          "targetEntity": "User",
+          "mutatesEntities": [],
+          "actorPersonas": [
+            "standard"
+          ],
+          "routes": [
+            "/inventory.html",
+            "/"
+          ],
+          "apiEndpoints": [],
+          "components": [
+            "HeaderNavComponent",
+            "LoginPage"
+          ],
+          "invariants": [],
+          "tapes": [],
+          "specs": []
+        },
+        "addItemToCart": {
+          "id": "addItemToCart",
+          "name": "Add Product to Cart",
+          "targetEntity": "Cart",
+          "mutatesEntities": [
+            "Product",
+            "Cart"
+          ],
+          "actorPersonas": [
+            "standard"
+          ],
+          "routes": [
+            "/inventory.html"
+          ],
+          "apiEndpoints": [],
+          "components": [
+            "InventoryPage",
+            "InventoryListComponent",
+            "HeaderNavComponent"
+          ],
+          "invariants": [
+            "inv-cart-badge-matches-item-count"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "removeItemFromCart": {
+          "id": "removeItemFromCart",
+          "name": "Remove Product from Cart",
+          "targetEntity": "Cart",
+          "mutatesEntities": [
+            "Product",
+            "Cart"
+          ],
+          "actorPersonas": [
+            "standard"
+          ],
+          "routes": [
+            "/inventory.html",
+            "/cart.html"
+          ],
+          "apiEndpoints": [],
+          "components": [
+            "InventoryListComponent",
+            "CartListComponent",
+            "HeaderNavComponent"
+          ],
+          "invariants": [],
+          "tapes": [],
+          "specs": []
+        },
+        "proceedToCheckout": {
+          "id": "proceedToCheckout",
+          "name": "Proceed From Cart to Checkout",
+          "targetEntity": "Cart",
+          "mutatesEntities": [
+            "Cart",
+            "Order"
+          ],
+          "actorPersonas": [
+            "standard"
+          ],
+          "routes": [
+            "/cart.html",
+            "/checkout-step-one.html"
+          ],
+          "apiEndpoints": [],
+          "components": [
+            "CartListComponent",
+            "CheckoutPage"
+          ],
+          "invariants": [],
+          "tapes": [
+            "saucedemo-e2e-checkout"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts"
+          ]
+        },
+        "submitShippingInfo": {
+          "id": "submitShippingInfo",
+          "name": "Submit Customer Shipping Information",
+          "targetEntity": "Order",
+          "mutatesEntities": [],
+          "actorPersonas": [
+            "standard"
+          ],
+          "routes": [
+            "/checkout-step-one.html",
+            "/checkout-step-two.html"
+          ],
+          "apiEndpoints": [],
+          "components": [
+            "CheckoutPage",
+            "CheckoutFormComponent"
+          ],
+          "invariants": [
+            "inv-checkout-requires-customer-info"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts"
+          ]
+        },
+        "completeOrder": {
+          "id": "completeOrder",
+          "name": "Confirm and Complete Order",
+          "targetEntity": "Order",
+          "mutatesEntities": [],
+          "actorPersonas": [
+            "standard"
+          ],
+          "routes": [
+            "/checkout-step-two.html",
+            "/checkout-complete.html"
+          ],
+          "apiEndpoints": [],
+          "components": [
+            "CheckoutPage",
+            "CheckoutSummaryComponent"
+          ],
+          "invariants": [
+            "inv-order-confirmation-shown"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts"
+          ]
+        }
+      },
+      "byComponent": {
+        "LoginPage": {
+          "file": "src/pages/login.page.ts",
+          "entities": [
+            "User"
+          ],
+          "actions": [
+            "authenticateUser",
+            "logoutUser"
+          ],
+          "invariants": [
+            "inv-standard-user-reaches-inventory",
+            "inv-locked-user-denied-inventory"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "LoginFormComponent": {
+          "file": "src/components/login-form.component.ts",
+          "entities": [
+            "User"
+          ],
+          "actions": [
+            "authenticateUser"
+          ],
+          "invariants": [
+            "inv-standard-user-reaches-inventory",
+            "inv-locked-user-denied-inventory"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "HeaderNavComponent": {
+          "file": "src/components/header-nav.component.ts",
+          "entities": [
+            "User",
+            "Cart"
+          ],
+          "actions": [
+            "logoutUser",
+            "addItemToCart",
+            "removeItemFromCart"
+          ],
+          "invariants": [
+            "inv-cart-badge-matches-item-count"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts"
+          ]
+        },
+        "InventoryPage": {
+          "file": "src/pages/inventory.page.ts",
+          "entities": [
+            "Product",
+            "Cart"
+          ],
+          "actions": [
+            "addItemToCart"
+          ],
+          "invariants": [
+            "inv-standard-user-reaches-inventory"
+          ],
+          "tapes": [],
+          "specs": []
+        },
+        "InventoryListComponent": {
+          "file": "src/components/inventory-list.component.ts",
+          "entities": [
+            "Product"
+          ],
+          "actions": [
+            "addItemToCart",
+            "removeItemFromCart"
+          ],
+          "invariants": [
+            "inv-cart-badge-matches-item-count"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "CartListComponent": {
+          "file": "src/components/cart-list.component.ts",
+          "entities": [
+            "Cart"
+          ],
+          "actions": [
+            "removeItemFromCart",
+            "proceedToCheckout"
+          ],
+          "invariants": [
+            "inv-cart-badge-matches-item-count"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts"
+          ]
+        },
+        "CheckoutPage": {
+          "file": "src/pages/checkout.page.ts",
+          "entities": [
+            "Order"
+          ],
+          "actions": [
+            "proceedToCheckout",
+            "submitShippingInfo",
+            "completeOrder"
+          ],
+          "invariants": [
+            "inv-order-confirmation-shown",
+            "inv-checkout-requires-customer-info"
+          ],
+          "tapes": [],
+          "specs": []
+        },
+        "CheckoutFormComponent": {
+          "file": "src/components/checkout-form.component.ts",
+          "entities": [
+            "Order"
+          ],
+          "actions": [
+            "submitShippingInfo"
+          ],
+          "invariants": [
+            "inv-checkout-requires-customer-info"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts"
+          ]
+        },
+        "CheckoutSummaryComponent": {
+          "file": "src/components/checkout-summary.component.ts",
+          "entities": [
+            "Order"
+          ],
+          "actions": [
+            "completeOrder"
+          ],
+          "invariants": [
+            "inv-order-confirmation-shown"
+          ],
+          "tapes": [
+            "saucedemo-e2e-checkout"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts"
+          ]
+        }
+      },
+      "byApi": {
+        "GET https://www.saucedemo.com/**": {
+          "actions": [
+            "authenticateUser"
+          ],
+          "entities": [
+            "User"
+          ],
+          "invariants": [],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        }
+      },
+      "byRoute": {
+        "/": {
+          "entities": [
+            "User"
+          ],
+          "actions": [
+            "authenticateUser",
+            "logoutUser"
+          ],
+          "invariants": [
+            "inv-standard-user-reaches-inventory",
+            "inv-locked-user-denied-inventory"
+          ]
+        },
+        "/inventory.html": {
+          "entities": [
+            "User",
+            "Product",
+            "Cart"
+          ],
+          "actions": [
+            "authenticateUser",
+            "logoutUser",
+            "addItemToCart",
+            "removeItemFromCart"
+          ],
+          "invariants": [
+            "inv-standard-user-reaches-inventory",
+            "inv-cart-badge-matches-item-count"
+          ]
+        },
+        "/cart.html": {
+          "entities": [
+            "Cart"
+          ],
+          "actions": [
+            "removeItemFromCart",
+            "proceedToCheckout"
+          ],
+          "invariants": [
+            "inv-cart-badge-matches-item-count"
+          ]
+        },
+        "/checkout-step-one.html": {
+          "entities": [
+            "Order"
+          ],
+          "actions": [
+            "proceedToCheckout",
+            "submitShippingInfo"
+          ],
+          "invariants": [
+            "inv-checkout-requires-customer-info"
+          ]
+        },
+        "/checkout-step-two.html": {
+          "entities": [
+            "Order"
+          ],
+          "actions": [
+            "submitShippingInfo",
+            "completeOrder"
+          ],
+          "invariants": [
+            "inv-order-confirmation-shown"
+          ]
+        },
+        "/checkout-complete.html": {
+          "entities": [
+            "Order"
+          ],
+          "actions": [
+            "completeOrder"
+          ],
+          "invariants": [
+            "inv-order-confirmation-shown"
+          ]
+        }
+      },
+      "byInvariant": {
+        "inv-standard-user-reaches-inventory": {
+          "id": "inv-standard-user-reaches-inventory",
+          "description": "A valid standard user authenticating from / lands on /inventory.html and sees the Products catalog.",
+          "severity": "p0",
+          "entity": "User",
+          "action": "authenticateUser",
+          "personas": [
+            "standard"
+          ],
+          "routes": [
+            "/",
+            "/inventory.html"
+          ],
+          "components": [
+            "LoginPage",
+            "LoginFormComponent",
+            "InventoryPage"
+          ],
+          "apiEndpoints": [],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "inv-locked-user-denied-inventory": {
+          "id": "inv-locked-user-denied-inventory",
+          "description": "A locked_out user is blocked at / with an error banner and cannot reach /inventory.html.",
+          "severity": "p0",
+          "entity": "User",
+          "action": "authenticateUser",
+          "personas": [
+            "locked_out"
+          ],
+          "routes": [
+            "/"
+          ],
+          "components": [
+            "LoginPage",
+            "LoginFormComponent"
+          ],
+          "apiEndpoints": [],
+          "tapes": [
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "inv-cart-badge-matches-item-count": {
+          "id": "inv-cart-badge-matches-item-count",
+          "description": "The header cart badge count always equals the number of items currently in the shopping cart.",
+          "severity": "p0",
+          "entity": "Cart",
+          "action": "addItemToCart",
+          "personas": [
+            "standard"
+          ],
+          "routes": [
+            "/inventory.html",
+            "/cart.html"
+          ],
+          "components": [
+            "HeaderNavComponent",
+            "InventoryListComponent",
+            "CartListComponent"
+          ],
+          "apiEndpoints": [],
+          "tapes": [
+            "saucedemo-e2e-checkout",
+            "saucedemo-login-inventory"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts",
+            "tests/auth-and-inventory.spec.ts"
+          ]
+        },
+        "inv-order-confirmation-shown": {
+          "id": "inv-order-confirmation-shown",
+          "description": "Completing checkout Step Two transitions to /checkout-complete.html and renders the order confirmation message.",
+          "severity": "p0",
+          "entity": "Order",
+          "action": "completeOrder",
+          "personas": [
+            "standard"
+          ],
+          "routes": [
+            "/checkout-step-two.html",
+            "/checkout-complete.html"
+          ],
+          "components": [
+            "CheckoutPage",
+            "CheckoutSummaryComponent"
+          ],
+          "apiEndpoints": [],
+          "tapes": [
+            "saucedemo-e2e-checkout"
+          ],
+          "specs": [
+            "tests/e2e-checkout.spec.ts"
+          ]
+        },
+        "inv-checkout-requires-customer-info": {
+          "id": "inv-checkout-requires-customer-info",
+          "description": "Submitting Checkout Step One with missing first name, last name, or postal code displays a validation error and stays on /checkout-step-one.html.",
+          "severity": "p1",
+          "entity": "Order",
+          "action": "submitShippingInfo",
+          "personas": [
+            "standard"
+          ],
+          "routes": [
+            "/checkout-step-one.html"
+          ],
+          "components": [
+            "CheckoutPage",
+            "CheckoutFormComponent"
+          ],
+          "apiEndpoints": [],
+          "tapes": [],
+          "specs": []
+        }
+      }
+    }
+  }
 }

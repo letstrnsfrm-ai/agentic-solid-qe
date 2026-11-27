@@ -511,6 +511,32 @@
           }
         }
       }
+    },
+    "ontology": {
+      "type": "object",
+      "description": "Optional Operational QE Ontology bindings linking this Session Tape to domain Entities, Actions, State Transitions, and Invariants.",
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" }
+        },
+        "actions": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" }
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*:[a-z0-9_-]+->[a-z0-9_-]+$"
+          }
+        },
+        "invariants": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+        }
+      }
     }
   }
 }

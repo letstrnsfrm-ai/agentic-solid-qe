@@ -19,6 +19,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { computeTokenFootprint } from './lib/cli-output.mjs';
+import { buildCloudOntologyCoverage } from './lib/ontology.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -505,13 +506,11 @@ export function buildSanitizedReport({ prNumber } = {}) {
     uncompiledTapeCount: Number(counts.uncompiledTapes ?? (covJson.uncompiledTapes || []).length ?? 0),
     automatedSpecCount: Number(counts.automatedSpecs ?? (covJson.automatedSpecs || []).length ?? 0),
     nfrCoverage: {
-      a11ySpecs: Number(nfrCov.a11ySpecs ?? 0),
-      perfSpecs: Number(nfrCov.perfSpecs ?? 0),
-      securitySpecs: Number(nfrCov.securitySpecs ?? 0),
-      visualSpecs: Number(nfrCov.visualSpecs ?? 0),
-      totalNfrSpecs: Number(nfrCov.totalNfrSpecs ?? 0),
-      nfrTapes: Number(nfrCov.nfrTapes ?? 0),
+      a11ySpecs: Number(nfrCov.a11ySpecs ?? 0), perfSpecs: Number(nfrCov.perfSpecs ?? 0),
+      securitySpecs: Number(nfrCov.securitySpecs ?? 0), visualSpecs: Number(nfrCov.visualSpecs ?? 0),
+      totalNfrSpecs: Number(nfrCov.totalNfrSpecs ?? 0), nfrTapes: Number(nfrCov.nfrTapes ?? 0),
     },
+    ...buildCloudOntologyCoverage(covJson),
     componentCount: Number(counts.components ?? 0),
     pageCount: Number(counts.pages ?? 0),
     apiClientCount: Number(counts.apiClients ?? 0),

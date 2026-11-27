@@ -66,38 +66,19 @@ const subcommandDelegateMap = {
   audit: 'audit-solid.mjs',
   runner: 'runner-daemon.mjs',
   auth: 'auth-vault.mjs',
+  ontology: 'lib/ontology.mjs',
 };
-
-// Flags that change state destructively. They are stripped at a subcommand
-// boundary unless the target subcommand documents them as its own flag —
-// otherwise a flag meant for one command (or smuggled in as a value from
-// untrusted content) can be reinterpreted by another subcommand as
-// --apply/--force/--reset. (Twin of the same helper in orchestrate.mjs,
-// which guards the orchestrator's own delegation sites.)
+// Flags that change state destructively are stripped at subcommand boundaries unless allowlisted.
 const DESTRUCTIVE_FLAGS = new Set([
-  '--apply',
-  '--force',
-  '--reset',
-  '--delete',
-  '--remove',
-  '--overwrite',
-  '--yes',
-  '--purge',
-  '--destroy',
-  '--wipe',
-  '--force-shared',
-  '--force-spec',
-  '--apply-patches',
-  '--clean',
+  '--apply', '--force', '--reset', '--delete', '--remove', '--overwrite', '--yes',
+  '--purge', '--destroy', '--wipe', '--force-shared', '--force-spec', '--apply-patches', '--clean',
 ]);
 const DESTRUCTIVE_FLAG_ALLOWLIST = {
   compile: new Set(['--apply', '--force-spec']),
   heal: new Set(['--apply', '--force-shared']),
   migrate: new Set(['--apply']),
   upgrade: new Set(['--force', '--apply-patches']),
-  // '--force-shared' is a documented orchestrate/heal consent flag: it only
-  // permits mutating a shared module alongside --apply and changes nothing
-  // on its own, so forwarding it to orchestrate is safe.
+  ontology: new Set(['--force']),
   orchestrate: new Set(['--reset', '--force-shared']),
   status: new Set(['--reset']),
 };
@@ -1400,6 +1381,7 @@ function backupPreExistingInstructionFiles() {
 const coreEnginePaths = [
   '.agents/skills',
   '.agents/domain/session-tape.schema.json',
+  '.agents/domain/ontology.schema.json',
   'AGENTS.md',
   '.github/copilot-instructions.md',
   '.github/prompts',
@@ -1455,6 +1437,7 @@ const ALLOWED_PRUNE_PREFIXES = [
   '.claude/commands/',
   'scripts/',
   '.agents/domain/session-tape.schema.json',
+  '.agents/domain/ontology.schema.json',
 ];
 const prunedFiles = [];
 for (const [oldRel, oldHash] of Object.entries(previousManifest.files)) {

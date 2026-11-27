@@ -11,6 +11,7 @@ import path from 'node:path';
 import { estimateTokens, TOKEN_BUDGETS } from './lib/cli-output.mjs';
 import { auditOverrides } from './lib/audit-overrides.mjs';
 import { auditScriptsRatchet } from './lib/audit-scripts-ratchet.mjs';
+import { auditOntologyGate } from './lib/ontology.mjs';
 import { buildImpactGraph, inferSquadFromPath, stripComments } from './impact-graph.mjs';
 
 const ROOT = process.cwd();
@@ -1080,31 +1081,26 @@ try {
   /* non-fatal if impact graph cannot be built */
 }
 
-// 10. Audit Sharded Team Overrides (.agents/overrides/) & Framework Scripts Line Ratchet
+// 10. Audit Sharded Team Overrides, Scripts Line Ratchet & Operational QE Ontology
 const overridesAudit = auditOverrides(ROOT);
 violations.push(...overridesAudit.violations);
 warnings.push(...overridesAudit.warnings);
-
 const scriptsRatchetAudit = auditScriptsRatchet(ROOT);
 violations.push(...scriptsRatchetAudit.violations);
 warnings.push(...scriptsRatchetAudit.warnings);
+const ontologySummaryNote = auditOntologyGate(ROOT, { violations, warnings });
 
 if (warnings.length > 0) {
   console.warn('\n⚠️  SOLID & Scale Hygiene Warnings:\n');
-  for (const w of warnings) {
-    console.warn(`  - ${w}`);
-  }
+  for (const w of warnings) console.warn(`  - ${w}`);
 }
-
 if (violations.length > 0) {
   console.error('\n❌ SOLID Architecture Audit Failed:\n');
-  for (const v of violations) {
-    console.error(`  - ${v}`);
-  }
+  for (const v of violations) console.error(`  - ${v}`);
   process.exit(1);
 }
 
 const totalShards = globalShardFiles.length + squadShardFiles.length;
 console.log(
-  `✅ SOLID & Federated Brain Audit Passed (${skillFiles.length} skills < ${MAX_SKILL_TOKENS} tokens, 1 root hub + ${squadHubFiles.length} domain hub(s) + ${totalShards} shard(s) <= ${MAX_DOMAIN_LINES} lines, ${componentFiles.length} components <= ${MAX_COMPONENT_LINES} lines, ${pageFiles.length} pages, ${specFiles.length} specs verified against ${globalBuilderLiterals.size} global Data Builder literals).`
+  `✅ SOLID & Federated Brain Audit Passed (${skillFiles.length} skills < ${MAX_SKILL_TOKENS} tokens, 1 root hub + ${squadHubFiles.length} domain hub(s) + ${totalShards} shard(s) <= ${MAX_DOMAIN_LINES} lines, ${componentFiles.length} components <= ${MAX_COMPONENT_LINES} lines, ${pageFiles.length} pages, ${specFiles.length} specs verified against ${globalBuilderLiterals.size} global Data Builder literals${ontologySummaryNote}).`
 );

@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDomainGraph } from './build-domain-graph.mjs';
 import { isCompactMode } from './lib/cli-output.mjs';
+import { buildOntologyCoverageSection, formatCompactOntologyCoverageLine } from './lib/ontology.mjs';
 
 const MAX_SCAN_FILE_BYTES = 1024 * 1024; // 1 MB cap
 
@@ -530,6 +531,7 @@ const nfrCoverage = {
   ).length,
 };
 
+const ontologyCoverage = buildOntologyCoverageSection(domainGraph);
 const isCompact = !forceFull && (forceSummary || scopedSpecs.length + scopedTapes.length > 25);
 
 const report = isCompact
@@ -564,6 +566,7 @@ const report = isCompact
         handoffRecommendations: scopedHandoffRecommendations.length,
       },
       nfrCoverage,
+      ...(ontologyCoverage ? { ontologyCoverage } : {}),
       topUncoveredShards: scopedUncovered.slice(0, 10),
       topUncompiledTapes: scopedUncompiled.slice(0, 10),
       topStaleShards: scopedStale.slice(0, 10),
@@ -578,20 +581,10 @@ const report = isCompact
       coverageMaturityStage,
       upgradeStatus,
       ...(legacyMigrationProgress ? { legacyMigrationProgress } : {}),
-      targetApp: {
-        appName,
-        baseUrl,
-        needsTargetUrlConfig,
-        savedAuthSessions,
-        missingAuthSessions: scopedMissingAuthSessions,
-      },
-      federatedBrain: {
-        domainGraphPath: '.agents/domain/domain-graph.json',
-        domainHubs: domainGraph.domainHubs,
-        routeIndex: domainGraph.routeIndex,
-        staleShards: scopedStale,
-      },
+      targetApp: { appName, baseUrl, needsTargetUrlConfig, savedAuthSessions, missingAuthSessions: scopedMissingAuthSessions },
+      federatedBrain: { domainGraphPath: '.agents/domain/domain-graph.json', domainHubs: domainGraph.domainHubs, routeIndex: domainGraph.routeIndex, staleShards: scopedStale },
       nfrCoverage,
+      ...(ontologyCoverage ? { ontologyCoverage } : {}),
       domainShards: scopedShards,
       uncoveredShards: scopedUncovered,
       recordedSessionTapes: scopedTapes,
@@ -602,14 +595,7 @@ const report = isCompact
       nextSingleScenarioToAutomate,
       openDefects,
       automatedSpecs: scopedSpecs,
-      existingArchitecture: {
-        contracts,
-        pages,
-        components,
-        wizardSteps,
-        dataBuilders,
-        apiClients,
-      },
+      existingArchitecture: { contracts, pages, components, wizardSteps, dataBuilders, apiClients },
       recommendedNextAction,
     };
 
@@ -628,18 +614,16 @@ export function formatCompactCoverage(report) {
     pages: (report.existingArchitecture?.pages || []).length,
     openDefects: (report.openDefects || []).length,
   };
-  const uncompiled = (report.uncompiledTapes || report.topUncompiledTapes || [])
-    .map((t) => (typeof t === 'string' ? t : t.scenarioId || t.file))
-    .slice(0, 5);
-  const uncovered = (report.uncoveredShards || report.topUncoveredShards || [])
-    .map((s) => (typeof s === 'string' ? s : s.file || s.shard))
-    .slice(0, 5);
+  const uncompiled = (report.uncompiledTapes || report.topUncompiledTapes || []).map((t) => (typeof t === 'string' ? t : t.scenarioId || t.file)).slice(0, 5);
+  const uncovered = (report.uncoveredShards || report.topUncoveredShards || []).map((s) => (typeof s === 'string' ? s : s.file || s.shard)).slice(0, 5);
   const missingAuth = (report.targetApp?.missingAuthSessions || []).slice(0, 4);
   const lines = [
     `STAGE  | ${stage.stage ?? '?'} — ${stage.name || 'Unknown'}`,
     `APP    | ${report.targetApp?.baseUrl || 'unconfigured'}${missingAuth.length ? ` | missingAuth=[${missingAuth.join(', ')}]` : ''}`,
     `COUNTS | shards=${counts.domainShards} uncovered=${counts.uncoveredShards} tapes=${counts.recordedTapes} uncompiled=${counts.uncompiledTapes} specs=${counts.automatedSpecs} comps=${counts.components} defects=${counts.openDefects}`,
   ];
+  const ontLine = formatCompactOntologyCoverageLine(report);
+  if (ontLine) lines.push(ontLine);
   if (uncompiled.length) lines.push(`UNCOMP | ${uncompiled.join(', ')}`);
   if (uncovered.length) lines.push(`UNCOV  | ${uncovered.join(', ')}`);
   if (report.nextSingleScenarioToAutomate) {
@@ -647,8 +631,7 @@ export function formatCompactCoverage(report) {
     lines.push(`PICK   | ${typeof nxt === 'string' ? nxt : nxt.scenarioId || JSON.stringify(nxt)}`);
   }
   const rawNext = String(report.recommendedNextAction || '').trim();
-  const clippedNext =
-    rawNext.length > 180 ? `${rawNext.slice(0, 177).replace(/\s+\S*$/, '')}...` : rawNext;
+  const clippedNext = rawNext.length > 180 ? `${rawNext.slice(0, 177).replace(/\s+\S*$/, '')}...` : rawNext;
   lines.push(`NEXT   | ${clippedNext}`);
   return lines.join('\n');
 }
