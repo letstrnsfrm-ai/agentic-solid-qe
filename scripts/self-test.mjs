@@ -7617,3 +7617,207 @@ test('Non-Functional Testing (NFR): schema validation, SOLID tape compilation (@
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('QE Software Factory Phase 2: Encrypted VPC Auth Vault, resolveGateChoice, and Zero-API-Key VPC Runner lifecycle', async () => {
+  const {
+    encryptStorageState,
+    decryptStorageState,
+    pushAuthState,
+    pullAuthState,
+  } = await import('./auth-vault.mjs');
+  const { resolveGateChoice } = await import('./orchestrate.mjs');
+  const {
+    createCloudClient,
+    buildExecutorPrompt,
+    extractGatePayloadFromBlueprint,
+    runSinglePollCycle,
+  } = await import('./runner-daemon.mjs');
+
+  // 1. AES-256-GCM Encrypted Auth Vault round-trip, wrong-key rejection & TTL expiry
+  const sampleState = JSON.stringify({ cookies: [{ name: 'sid', value: 'secret-token' }], origins: [] });
+  const now = new Date('2026-11-27T10:00:00Z');
+  const envelope = encryptStorageState(sampleState, 'vpc-master-passphrase', {
+    personaId: 'underwriter-std',
+    ttl: '2h',
+    now,
+  });
+  assert.equal(envelope.alg, 'aes-256-gcm');
+  assert.equal(envelope.ciphertext.includes('secret-token'), false);
+
+  const decrypted = decryptStorageState(envelope, 'vpc-master-passphrase', {
+    now: new Date('2026-11-27T11:00:00Z'),
+  });
+  assert.equal(decrypted.plaintext, sampleState);
+
+  assert.throws(
+    () => decryptStorageState(envelope, 'wrong-key', { now: new Date('2026-11-27T11:00:00Z') }),
+    /Failed to decrypt/
+  );
+  assert.throws(
+    () => decryptStorageState(envelope, 'vpc-master-passphrase', { now: new Date('2026-11-27T12:05:00Z') }),
+    /expired/
+  );
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-factory-p2-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, '.auth'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.auth/underwriter-std.json'), sampleState, 'utf8');
+    const pushed = pushAuthState({
+      personaId: 'underwriter-std',
+      vaultUri: `file://${path.join(tmpDir, 'vault')}`,
+      ttl: '4h',
+      secretMaterial: 'vpc-master-passphrase',
+      cwd: tmpDir,
+    });
+    assert.equal(pushed.backend, 'file');
+
+    fs.rmSync(path.join(tmpDir, '.auth/underwriter-std.json'));
+    const pulled = pullAuthState({
+      personaId: 'underwriter-std',
+      vaultUri: `file://${path.join(tmpDir, 'vault')}`,
+      secretMaterial: 'vpc-master-passphrase',
+      cwd: tmpDir,
+    });
+    assert.equal(fs.readFileSync(pulled.outputPath, 'utf8'), sampleState);
+
+    // 2. resolveGateChoice validates gateId and choice bounds
+    const mockBlueprint = {
+      nextAction: {
+        skill: '01-cli-explorer',
+        gatePayload: {
+          gateId: 'scenario-approval',
+          options: [
+            { label: 'Explore checkout happy path', command: 'npx cortex explore start' },
+            { label: 'Skip shard', command: 'npx cortex orchestrate --skip' },
+          ],
+        },
+      },
+    };
+    const okChoice = resolveGateChoice(mockBlueprint, 'scenario-approval', 1);
+    assert.equal(okChoice.ok, true);
+    assert.equal(okChoice.option.label, 'Explore checkout happy path');
+    assert.equal(resolveGateChoice(mockBlueprint, 'wrong-gate', 1).ok, false);
+    assert.equal(resolveGateChoice(mockBlueprint, 'scenario-approval', 9).ok, false);
+
+    // 3. Zero-API-Key Runner Daemon full pull -> claim -> gate-park -> resume -> complete cycle
+    const calls = [];
+    const mockWorkOrder = {
+      id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      squad: 'checkout',
+      shardKey: 'routes/checkout-payment',
+      branchName: 'cortex/wo-aaaaaaaa-checkout-routes-checkout-payment',
+      payload: {
+        deployedUrl: 'https://staging.acme.internal/checkout',
+        routeShard: 'routes/checkout-payment',
+        goal: 'Cover payment checkout flow',
+      },
+      lastGateResolution: null,
+    };
+
+    let pollCount = 0;
+    const mockFetch = async (url, init) => {
+      const parsedBody = init?.body ? JSON.parse(init.body) : null;
+      calls.push({ url, method: init?.method, body: parsedBody });
+      if (url.endsWith('/api/v1/runners/claim')) {
+        pollCount++;
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              workOrder:
+                pollCount === 1
+                  ? mockWorkOrder
+                  : {
+                      ...mockWorkOrder,
+                      lastGateResolution: {
+                        gateId: 'scenario-approval',
+                        selectedOptionIndex: 1,
+                        label: 'Explore checkout happy path',
+                        command: 'npx cortex explore start',
+                      },
+                    },
+            }),
+        };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+    };
+
+    const client = createCloudClient({
+      cloudUrl: 'https://cloud.example.internal',
+      token: 'cq_live_testtoken',
+      fetchImpl: mockFetch,
+    });
+
+    // Cycle 1: orchestrator hits a human gate -> runner posts GATE_OPTIONS and parks non-blockingly
+    const cycle1 = await runSinglePollCycle({
+      cloudClient: client,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'deterministic',
+      cwd: tmpDir,
+      runOrchestrate: async () => ({ exitCode: 0, parsed: mockBlueprint }),
+    });
+    assert.equal(cycle1.claimed, true);
+    assert.equal(cycle1.outcome, 'waiting_gate');
+    assert.equal(cycle1.gateId, 'scenario-approval');
+    assert.ok(calls.some((c) => c.url.endsWith('/gates') && c.body.gateId === 'scenario-approval'));
+
+    // Cycle 2: resumed with human gate choice -> completes cleanly with zero LLM API keys
+    let receivedResume = null;
+    const cycle2 = await runSinglePollCycle({
+      cloudClient: client,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'agent-seat',
+      cwd: tmpDir,
+      runAgentSeat: async ({ prompt }) => {
+        assert.match(prompt, /Resolved Human Gate \(scenario-approval\)/);
+      },
+      runOrchestrate: async ({ resumeGate, choice }) => {
+        receivedResume = { resumeGate, choice };
+        return { exitCode: 0, parsed: { stoppedReason: 'completed', tokenUsed: 320 } };
+      },
+    });
+    assert.equal(cycle2.outcome, 'completed');
+    assert.deepEqual(receivedResume, { resumeGate: 'scenario-approval', choice: 1 });
+    assert.ok(calls.some((c) => c.url.endsWith('/events') && c.body.status === 'completed' && c.body.tokenUsed === 320));
+    assert.ok(extractGatePayloadFromBlueprint(mockBlueprint));
+    assert.match(buildExecutorPrompt(mockWorkOrder), /Target Deployed App URL/);
+
+    // 4. Phase 4: Runner enforces per-work-order tokenBudget fail-fast
+    const budgetClient = createCloudClient({
+      cloudUrl: 'https://cloud.example.internal',
+      token: 'cq_live_testtoken',
+      fetchImpl: async (url, init) => {
+        const parsedBody = init?.body ? JSON.parse(init.body) : null;
+        calls.push({ url, method: init?.method, body: parsedBody });
+        if (url.endsWith('/api/v1/runners/claim')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ workOrder: { ...mockWorkOrder, tokenBudget: 200 } }),
+          };
+        }
+        return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+      },
+    });
+    const budgetCycle = await runSinglePollCycle({
+      cloudClient: budgetClient,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'deterministic',
+      cwd: tmpDir,
+      runOrchestrate: async () => ({ exitCode: 0, parsed: { stoppedReason: 'completed', tokenUsed: 500 } }),
+    });
+    assert.equal(budgetCycle.outcome, 'budget_exceeded');
+    assert.ok(
+      calls.some(
+        (c) =>
+          c.url.endsWith('/events') &&
+          c.body.status === 'failed' &&
+          /Token footprint budget exceeded/.test(c.body.error || '')
+      )
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

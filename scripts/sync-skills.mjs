@@ -64,6 +64,8 @@ const subcommandDelegateMap = {
   map: 'build-system-map.mjs',
   gaps: 'analyze-coverage.mjs',
   audit: 'audit-solid.mjs',
+  runner: 'runner-daemon.mjs',
+  auth: 'auth-vault.mjs',
 };
 
 // Flags that change state destructively. They are stripped at a subcommand
@@ -139,6 +141,8 @@ Usage:
   cortex verify [--fast]       Run parallel two-tier verification gate (incremental tsc + domain:graph + audit + tapes + tests)
   cortex upgrade               Resolve latest release tag and incrementally sync skills, contracts, and upgrade patches
   cortex report                Emit opt-in sanitized governance telemetry (schemaVersion: 1.0.0) to Cortex Cloud
+  cortex runner start [opts]   Run Zero-API-Key VPC Factory Runner daemon (--executor agent-seat|deterministic|vpc-iam-gateway)
+  cortex auth push|pull|status Manage AES-256-GCM encrypted TTL persona storageState in VPC Auth Vault
   cortex compile [<tape>]      Compile Session Tape into SOLID Components, Pages, Builders, Fixtures & Spec (--apply)
   cortex explore <cmd>         High-speed Point-A seed/spec/checkpoint attach, batched explore & live tape recorder
   cortex heal [--spec <path>]  Diagnose failing specs & heal drifted locators (--apply)

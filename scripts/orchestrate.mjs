@@ -2047,6 +2047,33 @@ export async function runAutonomousLoop(
   };
 }
 
+export function resolveGateChoice(blueprint, gateId, choiceIndex) {
+  const gp = blueprint?.nextAction?.gatePayload;
+  if (!gp || !Array.isArray(gp.options) || gp.options.length === 0) {
+    return { ok: false, error: 'No active gatePayload options available on current blueprint.' };
+  }
+  const activeGateId = String(gp.gateId || blueprint?.nextAction?.skill || '');
+  if (gateId && activeGateId && gateId !== activeGateId) {
+    return {
+      ok: false,
+      error: `Gate mismatch: requested '${gateId}', but active gate is '${activeGateId}'.`,
+    };
+  }
+  const idx = Number(choiceIndex);
+  if (!Number.isInteger(idx) || idx < 1 || idx > gp.options.length) {
+    return {
+      ok: false,
+      error: `Invalid choice '${choiceIndex}'. Must be an integer between 1 and ${gp.options.length}.`,
+    };
+  }
+  return {
+    ok: true,
+    gateId: activeGateId || gateId,
+    choice: idx,
+    option: gp.options[idx - 1],
+  };
+}
+
 // CLI Entrypoint
 const isMain = (() => {
   if (!process.argv[1]) return false;
@@ -2453,6 +2480,8 @@ Usage:
   let fastOnly = false;
   let skipTests = false;
   let verifyWaves = false;
+  let resumeGate = null;
+  let gateChoice = null;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--squad' && args[i + 1]) squad = args[++i];
@@ -2461,6 +2490,10 @@ Usage:
     else if (args[i].startsWith('--max-steps=')) maxSteps = Number(args[i].slice('--max-steps='.length));
     else if (args[i] === '--workers' && args[i + 1]) workers = Number(args[++i]);
     else if (args[i].startsWith('--workers=')) workers = Number(args[i].slice('--workers='.length));
+    else if (args[i] === '--resume-gate' && args[i + 1]) resumeGate = args[++i];
+    else if (args[i].startsWith('--resume-gate=')) resumeGate = args[i].slice('--resume-gate='.length);
+    else if (args[i] === '--choice' && args[i + 1]) gateChoice = Number(args[++i]);
+    else if (args[i].startsWith('--choice=')) gateChoice = Number(args[i].slice('--choice='.length));
     else if (args[i] === '--json') jsonOut = true;
     else if (args[i] === '--compact') compactOut = true;
     else if (args[i] === '--run') runNext = true;
@@ -2477,6 +2510,36 @@ Usage:
       console.error(`❌ ${err.message}`);
       process.exit(1);
     }
+  }
+
+  if (resumeGate) {
+    const blueprint = buildOrchestrationBlueprint(rootDir, { squad });
+    const resolved = resolveGateChoice(blueprint, resumeGate, gateChoice);
+    if (!resolved.ok) {
+      if (jsonOut) {
+        console.log(JSON.stringify({ resumed: false, error: resolved.error, gateId: resumeGate }, null, 2));
+      } else {
+        console.error(`❌ --resume-gate failed: ${resolved.error}`);
+      }
+      process.exit(1);
+    }
+    if (jsonOut) {
+      console.log(
+        JSON.stringify(
+          {
+            resumed: true,
+            gateId: resolved.gateId,
+            choice: resolved.choice,
+            selectedOption: resolved.option,
+          },
+          null,
+          2
+        )
+      );
+      process.exit(0);
+    }
+    console.log(`✅ Resumed gate '${resolved.gateId}' with choice #${resolved.choice}: ${resolved.option.label} -> ${resolved.option.command}`);
+    process.exit(0);
   }
 
   if (loopMode) {
