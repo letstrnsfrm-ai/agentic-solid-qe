@@ -2074,6 +2074,91 @@ export function resolveGateChoice(blueprint, gateId, choiceIndex) {
   };
 }
 
+const DETERMINISTIC_GATE_SCRIPTS = {
+  compile: 'compile-tape.mjs',
+  verify: 'verify-fast.mjs',
+  heal: 'heal-drift.mjs',
+  graph: 'build-domain-graph.mjs',
+  audit: 'audit-solid.mjs',
+  gaps: 'analyze-coverage.mjs',
+  tape: 'tape-cli.mjs',
+  wave: 'migration-wave-factory.mjs',
+};
+
+function splitSimpleCommand(cmd) {
+  const str = String(cmd || '').trim();
+  if (!str) return [];
+  const tokens = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      if (cur) {
+        tokens.push(cur);
+        cur = '';
+      }
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+/**
+ * Executes an allowlisted deterministic `cortex` command from a resolved GATE_OPTIONS entry
+ * directly via Node.js (`shell: false`). Returns `requiresAgentSeat: true` for interactive
+ * browser/LLM options so deterministic runners fail cleanly instead of ping-ponging gates.
+ */
+export function executeSafeGateOption(rootDir, option) {
+  const rawCmd = String(option?.command || '').trim();
+  if (!rawCmd) {
+    return { executed: false, requiresAgentSeat: true, reason: 'Gate option has no executable command.' };
+  }
+  if (rawCmd.toLowerCase() === 'cancel') {
+    return { executed: true, canceled: true, exitCode: 0 };
+  }
+
+  const tokens = splitSimpleCommand(rawCmd);
+  // Normalize optional `npx cortex <subcmd> ...` or `cortex <subcmd> ...`
+  let idx = 0;
+  if (tokens[idx] === 'npx') idx++;
+  if (tokens[idx] === 'cortex' || tokens[idx] === 'asqe') idx++;
+  const subcmd = tokens[idx];
+  const restArgs = tokens.slice(idx + 1);
+
+  if (!subcmd || !Object.hasOwn(DETERMINISTIC_GATE_SCRIPTS, subcmd)) {
+    return {
+      executed: false,
+      requiresAgentSeat: true,
+      reason: `Selected gate option '${rawCmd}' requires an agent-seat runner (not in deterministic allowlist).`,
+    };
+  }
+
+  const scriptPath = path.join(__dirname, DETERMINISTIC_GATE_SCRIPTS[subcmd]);
+  const res = spawnSync(process.execPath, [scriptPath, ...restArgs], {
+    cwd: rootDir,
+    encoding: 'utf8',
+    shell: false,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  return {
+    executed: true,
+    command: rawCmd,
+    exitCode: res.status ?? 1,
+    stdout: res.stdout || '',
+    stderr: res.stderr || '',
+    error: res.status === 0 ? null : (res.stderr || res.stdout || `Command '${rawCmd}' failed`).slice(0, 1000),
+  };
+}
+
 // CLI Entrypoint
 const isMain = (() => {
   if (!process.argv[1]) return false;
@@ -2539,6 +2624,62 @@ Usage:
       }
       process.exit(0);
     }
+
+    // In --loop mode, actually execute allowlisted deterministic gate commands before continuing the loop.
+    const execRes = executeSafeGateOption(rootDir, resolved.option);
+    if (execRes.canceled) {
+      if (jsonOut) {
+        console.log(
+          JSON.stringify(
+            { resumed: true, executed: true, canceled: true, stoppedReason: 'canceled', resumedGate: resumedGateInfo },
+            null,
+            2
+          )
+        );
+      }
+      process.exit(0);
+    }
+    if (execRes.requiresAgentSeat) {
+      if (jsonOut) {
+        console.log(
+          JSON.stringify(
+            {
+              resumed: true,
+              executed: false,
+              requiresAgentSeat: true,
+              error: execRes.reason,
+              resumedGate: resumedGateInfo,
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        console.error(`❌ ${execRes.reason}`);
+      }
+      process.exit(1);
+    }
+    if (execRes.exitCode !== 0) {
+      if (jsonOut) {
+        console.log(
+          JSON.stringify(
+            {
+              resumed: true,
+              executed: true,
+              exitCode: execRes.exitCode,
+              error: execRes.error,
+              resumedGate: resumedGateInfo,
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        console.error(`❌ Resumed gate command failed: ${execRes.error}`);
+      }
+      process.exit(1);
+    }
+    resumedGateInfo = { ...resumedGateInfo, executed: true, exitCode: 0 };
   }
 
   if (loopMode) {

@@ -189,6 +189,7 @@ export async function executeWorkOrder({
   cwd = process.cwd(),
   cloudClient,
   heartbeatIntervalMs = 60_000,
+  rebaseBaseBranch = '',
   runOrchestrate = defaultRunCortexOrchestrate,
   runAgentSeat = null,
 }) {
@@ -291,12 +292,23 @@ export async function executeWorkOrder({
       return { outcome: 'waiting_gate', gateId: gatePayload.gateId };
     }
 
-    // Never mark a work order completed if orchestrate only resolved a gate without executing the loop.
-    if (orchResult.parsed?.executed === false) {
+    // Never mark a work order completed if orchestrate could not execute the resumed gate option.
+    if (orchResult.parsed?.canceled === true) {
       await cloudClient.postEvent(workOrder.id, {
         runnerId,
         status: 'failed',
-        error: 'Orchestrator returned resume-only output (executed: false) without running the loop.',
+        error: 'Work order canceled via Async Gate Inbox decision.',
+      });
+      return { outcome: 'canceled' };
+    }
+
+    if (orchResult.parsed?.requiresAgentSeat === true || orchResult.parsed?.executed === false) {
+      await cloudClient.postEvent(workOrder.id, {
+        runnerId,
+        status: 'failed',
+        error:
+          orchResult.parsed?.error ||
+          'Selected gate option requires an agent-seat runner and cannot execute in deterministic mode.',
       });
       return { outcome: 'failed' };
     }
@@ -308,6 +320,19 @@ export async function executeWorkOrder({
         error: (orchResult.stderr || orchResult.stdout || 'cortex orchestrate failed').slice(0, 1500),
       });
       return { outcome: 'failed' };
+    }
+
+    if (rebaseBaseBranch) {
+      const rebaseRes = rebaseAndRefreshGraph({ cwd, baseBranch: rebaseBaseBranch });
+      if (!rebaseRes.ok) {
+        await cloudClient.postEvent(workOrder.id, {
+          runnerId,
+          status: 'failed',
+          branchName: workOrder.branchName || undefined,
+          error: `Pre-PR ${rebaseRes.step} failed: ${rebaseRes.error}`,
+        });
+        return { outcome: 'failed' };
+      }
     }
 
     const tokenUsed = Number(orchResult.parsed?.tokenUsed || 0);
@@ -362,6 +387,7 @@ export async function runSinglePollCycle({
   vaultUri,
   cwd = process.cwd(),
   heartbeatIntervalMs = 60_000,
+  rebaseBaseBranch = '',
   runOrchestrate,
   runAgentSeat,
 }) {
@@ -378,6 +404,7 @@ export async function runSinglePollCycle({
     cwd,
     cloudClient,
     heartbeatIntervalMs,
+    rebaseBaseBranch,
     runOrchestrate,
     runAgentSeat,
   });
@@ -400,6 +427,7 @@ function parseRunnerArgs(argv) {
     executor: process.env.CORTEX_EXECUTOR_MODE || 'agent-seat',
     agentCmd: process.env.CORTEX_AGENT_CMD || '',
     vault: process.env.CORTEX_AUTH_VAULT || 'file://.cortex-vault',
+    rebaseBase: process.env.CORTEX_REBASE_BASE || '',
     pollMs: normalizePollMs(process.env.CORTEX_RUNNER_POLL_MS, 5000),
     once: false,
   };
@@ -417,6 +445,8 @@ function parseRunnerArgs(argv) {
     else if (a.startsWith('--executor=')) opts.executor = a.slice('--executor='.length);
     else if (a === '--agent-cmd' && argv[i + 1]) opts.agentCmd = argv[++i];
     else if (a === '--vault' && argv[i + 1]) opts.vault = argv[++i];
+    else if (a === '--rebase-base' && argv[i + 1]) opts.rebaseBase = argv[++i];
+    else if (a.startsWith('--rebase-base=')) opts.rebaseBase = a.slice('--rebase-base='.length);
     else if (a === '--poll-ms' && argv[i + 1]) opts.pollMs = normalizePollMs(argv[++i], 5000);
     else if (a === '--once') opts.once = true;
   }
@@ -441,7 +471,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
     const { sub, opts } = parseRunnerArgs(process.argv.slice(2));
     if (sub === 'help' || sub === '--help' || sub === '-h') {
       console.log(`Usage:
-  CORTEX_CLOUD_TOKEN=<token> cortex runner start --cloud-url <url> [--executor agent-seat|deterministic|vpc-iam-gateway] [--agent-cmd "<cmd>"] [--labels vpc:staging] [--poll-ms 5000] [--once]
+  CORTEX_CLOUD_TOKEN=<token> cortex runner start --cloud-url <url> [--executor agent-seat|deterministic|vpc-iam-gateway] [--agent-cmd "<cmd>"] [--labels vpc:staging] [--rebase-base origin/main] [--poll-ms 5000] [--once]
 
 Notes:
   - Prefer CORTEX_CLOUD_TOKEN env var over --token so bearer secrets are not exposed in process argv.
@@ -470,6 +500,7 @@ Notes:
         executorMode: opts.executor,
         agentCmd: opts.agentCmd,
         vaultUri: opts.vault,
+        rebaseBaseBranch: opts.rebaseBase,
       });
       console.log(JSON.stringify(cycle, null, 2));
       process.exit(cycle.outcome === 'failed' || cycle.outcome === 'budget_exceeded' ? 1 : 0);
@@ -488,6 +519,7 @@ Notes:
           executorMode: opts.executor,
           agentCmd: opts.agentCmd,
           vaultUri: opts.vault,
+          rebaseBaseBranch: opts.rebaseBase,
         });
         if (cycle.claimed) {
           console.log(`⚙️  Work order ${cycle.workOrderId} -> ${cycle.outcome}`);

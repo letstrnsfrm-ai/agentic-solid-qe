@@ -27,18 +27,20 @@ export function assertSafePersonaId(persona) {
 
 export function parseTtlSeconds(ttlSpec) {
   if (ttlSpec === undefined || ttlSpec === null || ttlSpec === '') return DEFAULT_TTL_SECONDS;
-  if (typeof ttlSpec === 'number' && Number.isFinite(ttlSpec) && ttlSpec > 0) {
-    return Math.trunc(ttlSpec);
+  let seconds;
+  if (typeof ttlSpec === 'number' && Number.isFinite(ttlSpec)) {
+    seconds = Math.trunc(ttlSpec);
+  } else {
+    const str = String(ttlSpec).trim().toLowerCase();
+    const match = /^(\d+)(s|m|h|d)?$/.exec(str);
+    if (!match) {
+      throw new Error(`Invalid TTL '${ttlSpec}'. Examples: 30m, 8h, 1d, 3600s.`);
+    }
+    const value = Number(match[1]);
+    const unit = match[2] || 's';
+    const mult = unit === 'd' ? 86400 : unit === 'h' ? 3600 : unit === 'm' ? 60 : 1;
+    seconds = value * mult;
   }
-  const str = String(ttlSpec).trim().toLowerCase();
-  const match = /^(\d+)(s|m|h|d)?$/.exec(str);
-  if (!match) {
-    throw new Error(`Invalid TTL '${ttlSpec}'. Examples: 30m, 8h, 1d, 3600s.`);
-  }
-  const value = Number(match[1]);
-  const unit = match[2] || 's';
-  const mult = unit === 'd' ? 86400 : unit === 'h' ? 3600 : unit === 'm' ? 60 : 1;
-  const seconds = value * mult;
   if (seconds < 60 || seconds > 7 * 86400) {
     throw new Error(`TTL must be between 60s and 7d (got ${seconds}s).`);
   }

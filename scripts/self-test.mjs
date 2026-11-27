@@ -7894,7 +7894,6 @@ test('QE Software Factory Phase 2: Encrypted VPC Auth Vault, resolveGateChoice, 
       resumeGate: '01-cli-explorer',
       choice: 1,
     });
-    // Even if active gate mismatches or stops at a human gate, output must never be a silent empty completion
     assert.ok(realSubRes.parsed !== null, 'Expected structured JSON from real orchestrate.mjs subprocess');
     if (realSubRes.exitCode === 0) {
       assert.ok(
@@ -7902,6 +7901,54 @@ test('QE Software Factory Phase 2: Encrypted VPC Auth Vault, resolveGateChoice, 
         'Expected --loop --resume-gate to return full loop result (stoppedReason/finalBlueprint), not early exit'
       );
     }
+
+    // 6. PR #72 re-review fixes: numeric TTL bounds + executeSafeGateOption deterministic execution (no ping-pong)
+    const { parseTtlSeconds } = await import('./auth-vault.mjs');
+    const { executeSafeGateOption } = await import('./orchestrate.mjs');
+    assert.throws(() => parseTtlSeconds(10), /between 60s and 7d/);
+    assert.throws(() => parseTtlSeconds(8 * 86400), /between 60s and 7d/);
+    assert.equal(parseTtlSeconds(3600), 3600);
+
+    // Interactive browser command in deterministic mode returns requiresAgentSeat (no infinite ping-pong)
+    const interactiveRes = executeSafeGateOption(tmpDir, {
+      label: 'Explore checkout',
+      command: 'npx cortex explore start --url https://staging.example.com',
+    });
+    assert.equal(interactiveRes.executed, false);
+    assert.equal(interactiveRes.requiresAgentSeat, true);
+
+    // Cancel command returns canceled: true
+    assert.equal(executeSafeGateOption(tmpDir, { label: 'Cancel', command: 'cancel' }).canceled, true);
+
+    // Real deterministic command (`npx cortex graph`) actually executes and produces domain-graph.json
+    fs.mkdirSync(path.join(tmpDir, '.agents/domain/shards'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.agents/domain/domain-memory.md'),
+      '# Domain Memory\n- **App Name:** Demo\n- **Base URL:** `https://example.com`\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.agents/domain/shards/checkout.md'),
+      '# Shard: Checkout\n- **Route:** `/checkout`\n',
+      'utf8'
+    );
+    const detRes = executeSafeGateOption(tmpDir, { label: 'Rebuild graph', command: 'npx cortex graph' });
+    assert.equal(detRes.executed, true);
+    assert.equal(detRes.exitCode, 0);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.agents/domain/domain-graph.json')), true);
+
+    // Runner must fail cleanly (not re-park or falsely complete) when orchestrate reports requiresAgentSeat
+    const requiresSeatCycle = await runSinglePollCycle({
+      cloudClient: hbClient,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'deterministic',
+      cwd: tmpDir,
+      runOrchestrate: async () => ({
+        exitCode: 1,
+        parsed: { resumed: true, executed: false, requiresAgentSeat: true, error: 'Requires agent-seat runner' },
+      }),
+    });
+    assert.equal(requiresSeatCycle.outcome, 'failed');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
