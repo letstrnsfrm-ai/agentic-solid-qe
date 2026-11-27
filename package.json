@@ -43,7 +43,7 @@
     "test:perf": "playwright test --project=chromium --grep \"@perf\" --pass-with-no-tests",
     "test:security": "playwright test --project=chromium --grep \"@security\" --pass-with-no-tests",
     "test:nfr": "playwright test --project=chromium --grep \"@a11y|@perf|@security|@nfr\" --pass-with-no-tests",
-    "test:engine": "node --test scripts/self-test.mjs",
+    "test:engine": "node --test scripts/self-test.mjs scripts/tests/*.test.mjs",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
     "test:explore": "PW_PAUSE_FOR_EXPLORE=1 EXPLORE_CDP_PORT=9222 playwright test --project=chromium --headed --timeout=0",

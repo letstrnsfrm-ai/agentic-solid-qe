@@ -22,6 +22,7 @@ export const TOKEN_BUDGETS = Object.freeze({
   copilotInstructions: 600,
   skillMd: 500,
   referenceMd: 800,
+  overrideMd: 800,
 });
 
 /**

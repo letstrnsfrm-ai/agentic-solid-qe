@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { capToTokens, estimateTokens } from './lib/cli-output.mjs';
+import { collectOverrides, formatOverridesForContextPack } from './lib/overrides-store.mjs';
 import { buildImpactGraph, getFileImpact } from './impact-graph.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -324,7 +325,7 @@ function inspectSpec(rootDir, specArg) {
 
 export function buildContextPack(
   rootDir = process.cwd(),
-  { route = '', squad = '', tape = '', spec = '', file = '' } = {}
+  { route = '', squad = '', tape = '', spec = '', file = '', skill = '' } = {}
 ) {
   const domainMemory = readTextSafe(path.join(rootDir, '.agents/domain/domain-memory.md'));
   const baseUrlMatch = domainMemory.match(/Base URL[^`]*`([^`]+)`/i) || domainMemory.match(/https?:\/\/[^\s)>`]+/);
@@ -427,6 +428,8 @@ export function buildContextPack(
     .map((f) => path.relative(rootDir, f).replace(/\\/g, '/'))
     .sort((a, b) => scoreRelevance(b) - scoreRelevance(a) || a.localeCompare(b));
 
+  const overrides = collectOverrides(rootDir, { route, squad, skill, keywords: lowerKeywords });
+
   return {
     scope: {
       route: route || null,
@@ -434,9 +437,11 @@ export function buildContextPack(
       tape: tape || null,
       spec: spec || null,
       file: file || null,
+      skill: skill || null,
     },
     app: { baseUrl, authSessions },
     shards,
+    overrides,
     architecture: arch,
     impact,
     tapeSummary: effectiveTape?.data ? summarizeTapeCompact(effectiveTape.data) : null,
@@ -479,6 +484,10 @@ export function formatContextPack(pack, { maxTokens = 400 } = {}) {
 
   if (pack.tapeSummary) {
     lines.push(pack.tapeSummary);
+  }
+
+  if (pack.overrides?.length > 0) {
+    lines.push(...formatOverridesForContextPack(pack.overrides));
   }
 
   if (pack.shards.length > 0) {
@@ -546,10 +555,11 @@ if (isMain) {
   const tape = getVal('--tape');
   const spec = getVal('--spec');
   const file = getVal('--file');
+  const skill = getVal('--skill');
   const maxTokens = Math.max(120, Math.min(2000, Number(getVal('--max-tokens')) || 400));
   const jsonOnly = args.includes('--json');
 
-  const pack = buildContextPack(process.cwd(), { route, squad, tape, spec, file });
+  const pack = buildContextPack(process.cwd(), { route, squad, tape, spec, file, skill });
   if (jsonOnly) {
     const out = { ...pack, tapeData: undefined, estimatedTokens: estimateTokens(formatContextPack(pack, { maxTokens })) };
     console.log(JSON.stringify(out));

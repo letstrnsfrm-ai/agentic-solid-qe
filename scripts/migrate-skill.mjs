@@ -389,7 +389,7 @@ function runWorkspaceDiscovery() {
     ...walkFiles(path.join(scanRoot, 'helpers'), ['.sh', '.js', '.mjs', '.ts', '.py']),
   ]
     .map((f) => relFromScan(f))
-    .filter((r) => !CORE_ENGINE_SCRIPTS.has(r));
+    .filter((r) => !CORE_ENGINE_SCRIPTS.has(r) && !r.startsWith('scripts/lib/') && !r.startsWith('scripts/tests/'));
 
   // Audit existing specs and src for SOLID guardrail alignment
   const specFiles = [
