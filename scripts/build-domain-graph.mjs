@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSystemMap } from './build-system-map.mjs';
+import { compileOntologyIndex } from './lib/ontology.mjs';
 
 const ROOT = process.cwd();
 const DOMAIN_DIR = path.join(ROOT, '.agents/domain');
@@ -174,19 +175,23 @@ export function buildDomainGraph({ rootDir = process.cwd(), writeToDisk = true, 
     owner: hub.ownerSquad,
   }));
 
+  const compiledOntology = compileOntologyIndex(rootDir);
+
   const graph = {
-    schemaVersion: '2.0.0',
+    schemaVersion: '3.0.0',
     architecture: '3-tier-federated-brain',
     targetApp: { appName, baseUrl },
     summary: {
       totalDomainHubs: domainHubs.length,
       totalShards: allShards.length,
       staleShards: allShards.filter((s) => s.isStale).map((s) => s.path),
+      ...(compiledOntology ? { ontology: compiledOntology.summary } : {}),
     },
     domainHubs,
     shards: allShards,
     routeIndex,
     codeownersRules,
+    ontology: compiledOntology,
   };
 
   const isUnsafeWritePath = (targetPath) => {

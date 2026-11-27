@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isSafeRegexPattern } from './dotnet-enterprise-analyzer.mjs';
 import { isCompactMode } from './lib/cli-output.mjs';
 import { getFileImpact } from './impact-graph.mjs';
+import { resolveHealOntologyContext, formatHealDefectOntologyLines, formatHealCompactOntologyLine } from './lib/ontology.mjs';
 import { runFastVerify } from './verify-fast.mjs';
 
 const MAX_FILE_BYTES = 1024 * 1024;
@@ -860,23 +861,12 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
 
   const componentMatch = findMatchingComponentProperty(projectRoot, failingLocator, specPath);
   const tapeMatch = findMatchingTape(projectRoot, specPath, failingLocator);
-  const blastRadius = componentMatch
-    ? getFileImpact(projectRoot, componentMatch.relPath, {
-        sharedThreshold: options.sharedThreshold,
-      })
-    : null;
-
-  const candidates =
-    rootCause.category === 'locator-drift'
-      ? scoreSnapshotCandidates(failingLocator, componentMatch?.propertyName || '', snapshotNodes)
-      : [];
-
+  const blastRadius = componentMatch ? getFileImpact(projectRoot, componentMatch.relPath, { sharedThreshold: options.sharedThreshold }) : null;
+  const ontologyContext = resolveHealOntologyContext(projectRoot, { componentMatch, specPath, tapeMatch });
+  const candidates = rootCause.category === 'locator-drift' ? scoreSnapshotCandidates(failingLocator, componentMatch?.propertyName || '', snapshotNodes) : [];
   const topCandidate = candidates[0] || null;
   const secondCandidate = candidates[1] || null;
-  const hasClearWinner =
-    topCandidate &&
-    topCandidate.confidence >= HIGH_CONFIDENCE_THRESHOLD &&
-    (!secondCandidate || topCandidate.confidence - secondCandidate.confidence >= 0.1);
+  const hasClearWinner = topCandidate && topCandidate.confidence >= HIGH_CONFIDENCE_THRESHOLD && (!secondCandidate || topCandidate.confidence - secondCandidate.confidence >= 0.1);
 
   const result = {
     status: 'diagnosed',
@@ -884,33 +874,21 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
     specPath: specPath || null,
     failingLocator: failingLocator || null,
     snapshotUsed: snapshotFile ? path.relative(projectRoot, snapshotFile).replace(/\\/g, '/') : null,
-    componentMatch: componentMatch
-      ? { file: componentMatch.relPath, property: componentMatch.propertyName, currentExpr: componentMatch.currentExpr }
-      : null,
+    componentMatch: componentMatch ? { file: componentMatch.relPath, property: componentMatch.propertyName, currentExpr: componentMatch.currentExpr } : null,
     blastRadius,
+    ...(ontologyContext ? { ontologyContext } : {}),
     tapeMatch: tapeMatch ? { file: tapeMatch.relPath, scenarioId: tapeMatch.tape.scenarioId } : null,
-    candidates: candidates.slice(0, 3).map((c) => ({
-      role: c.node.role,
-      name: c.node.name,
-      confidence: c.confidence,
-      suggestedExpr: c.suggestedExpr,
-    })),
+    candidates: candidates.slice(0, 3).map((c) => ({ role: c.node.role, name: c.node.name, confidence: c.confidence, suggestedExpr: c.suggestedExpr })),
     autoHealReady: Boolean(options.to || (rootCause.category === 'locator-drift' && hasClearWinner)),
     appliedChanges: [],
     defectFile: null,
   };
-
-  if (!options.apply) {
-    return result;
-  }
-
-  // Apply phase
+  if (!options.apply) return result;
   if (rootCause.category === 'auth-drift') {
     result.status = 'auth-refresh-required';
     result.nextCommand = 'npx playwright test --project=setup';
     return result;
   }
-
   if (rootCause.category === 'app-regression') {
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const slug = slugifyKebab(specPath ? path.basename(specPath, '.spec.ts') : 'app-regression');
@@ -925,21 +903,14 @@ export function analyzeAndHealDrift(projectRoot, options = {}) {
     fs.writeFileSync(
       defectFull,
       [
-        `# Defect Report: ${slug}`,
-        ``,
+        `# Defect Report: ${slug}`, ``,
         `- **Detected By:** \`npx cortex heal\``,
         `- **Root Cause Category:** Case ${rootCause.caseId} (${rootCause.category})`,
         `- **Spec:** \`${safeSpecLabel}\``,
         `- **Summary:** ${String(rootCause.summary || '').replace(/[\r\n]/g, ' ')}`,
-        ``,
-        `## Error Excerpt`,
-        fence,
-        safeExcerpt,
-        fence,
-        ``,
-        `## Guardrail Note`,
-        `Strict \`expect()\` assertions in the spec were preserved (never weakened).`,
-        ``,
+        ...formatHealDefectOntologyLines(ontologyContext), ``,
+        `## Error Excerpt`, fence, safeExcerpt, fence, ``,
+        `## Guardrail Note`, `Strict \`expect()\` assertions in the spec were preserved (never weakened).`, ``,
       ].join('\n'),
       'utf8'
     );
@@ -1117,6 +1088,8 @@ export function formatCompactHealResult(res) {
       `BLAST  | fanIn=${br.fanIn} | risk=${br.riskTier}${br.isShared ? ' [SHARED]' : ''} | specs=${br.affectedSpecs.slice(0, 4).join(', ') || 'none'}${br.affectedSpecs.length > 4 ? ` (+${br.affectedSpecs.length - 4} more)` : ''}`
     );
   }
+  const ontLine = formatHealCompactOntologyLine(res.ontologyContext);
+  if (ontLine) lines.push(ontLine);
   const top = res.topCandidate || res.candidates?.[0];
   if (top) {
     lines.push(

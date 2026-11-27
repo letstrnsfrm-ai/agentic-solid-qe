@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildSystemMapOntologyModel, SYSTEM_MAP_ONTOLOGY_SECTION_HTML, SYSTEM_MAP_ONTOLOGY_BIZ_KPI_JS, SYSTEM_MAP_ONTOLOGY_RENDERER_JS } from './lib/ontology.mjs';
 
 let ROOT = process.cwd();
 const MAX_FILE_BYTES = 1024 * 1024;
@@ -1158,14 +1159,8 @@ export function collectSystemKnowledge(rootDir = process.cwd(), { persistWaveSna
       scenarioDelta,
     },
     trend: combinedTrend.slice(-12),
-    domains,
-    scenarios,
-    shards: shardCoverage,
-    tapes,
-    specs,
-    defects,
-    src,
-    apis,
+    domains, scenarios, shards: shardCoverage, tapes, specs, defects, src, apis,
+    ontology: buildSystemMapOntologyModel(ROOT),
   };
 }
 
@@ -1378,6 +1373,7 @@ function renderHtml(model, { liveReload = false } = {}) {
       <button class="tab-btn active" data-tab="arch">Domain-Grouped Topology</button>
       <button class="tab-btn" data-tab="flows">Session Tapes &amp; 4-Lane API Sequence</button>
       <button class="tab-btn" data-tab="contracts">Shard &amp; API Contract Matrix</button>
+      <button class="tab-btn" data-tab="ontology">Operational QE Ontology</button>
     </div>
     <section id="view-arch" class="view active">
       <div id="arch-swimlanes"></div>
@@ -1401,6 +1397,7 @@ function renderHtml(model, { liveReload = false } = {}) {
         <table id="api-table"></table>
       </div>
     </section>
+    ${SYSTEM_MAP_ONTOLOGY_SECTION_HTML}
   </section>
 </main>
 
@@ -1470,6 +1467,7 @@ const bizKpis = [
     lbl: 'Critical Path (@p0) Protected',
     sub: EX.smokeScenarios + ' smoke-gated scenarios',
   },
+  ${SYSTEM_MAP_ONTOLOGY_BIZ_KPI_JS}
   {
     val: execHealthVal,
     badge: EX.failedScenarios > 0 ? '<span class="pill red">' + EX.failedScenarios + ' Failing</span>' : (EX.passRatePct === 100 ? '<span class="pill green">Passing</span>' : ''),
@@ -1840,6 +1838,7 @@ renderBusinessDomains();
 renderEngineeringTopology();
 renderEngineeringFlows();
 renderContractsTable();
+${SYSTEM_MAP_ONTOLOGY_RENDERER_JS}
 ${liveReloadScript}
 </script>
 </body>

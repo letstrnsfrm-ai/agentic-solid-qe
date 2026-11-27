@@ -124,5 +124,20 @@
       "targetProperty": "cartBadge",
       "expectedValueRef": "ProductBuilder.singleItemBadgeCount()"
     }
-  ]
+  ],
+  "ontology": {
+    "entities": ["User", "Product", "Cart"],
+    "actions": ["authenticateUser", "addItemToCart"],
+    "transitions": [
+      "User:anonymous->authenticated",
+      "User:anonymous->locked_out",
+      "Product:listed->in_cart",
+      "Cart:empty->populated"
+    ],
+    "invariants": [
+      "inv-standard-user-reaches-inventory",
+      "inv-locked-user-denied-inventory",
+      "inv-cart-badge-matches-item-count"
+    ]
+  }
 }

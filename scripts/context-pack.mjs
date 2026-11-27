@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { capToTokens, estimateTokens } from './lib/cli-output.mjs';
 import { collectOverrides, formatOverridesForContextPack } from './lib/overrides-store.mjs';
 import { buildImpactGraph, getFileImpact } from './impact-graph.mjs';
+import { resolveContextOntologySlice, collectOntologyKeywords, formatContextOntologyLines } from './lib/ontology.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -325,22 +326,19 @@ function inspectSpec(rootDir, specArg) {
 
 export function buildContextPack(
   rootDir = process.cwd(),
-  { route = '', squad = '', tape = '', spec = '', file = '', skill = '' } = {}
+  { route = '', squad = '', tape = '', spec = '', file = '', skill = '', entity = '', action = '' } = {}
 ) {
   const domainMemory = readTextSafe(path.join(rootDir, '.agents/domain/domain-memory.md'));
   const baseUrlMatch = domainMemory.match(/Base URL[^`]*`([^`]+)`/i) || domainMemory.match(/https?:\/\/[^\s)>`]+/);
   const baseUrl = baseUrlMatch ? (baseUrlMatch[1] || baseUrlMatch[0]) : 'unconfigured';
-
   const authDir = path.join(rootDir, '.auth');
-  const authSessions = fs.existsSync(authDir)
-    ? fs.readdirSync(authDir).filter((f) => f.endsWith('.json')).sort()
-    : [];
-
+  const authSessions = fs.existsSync(authDir) ? fs.readdirSync(authDir).filter((f) => f.endsWith('.json')).sort() : [];
   const tapeEntry = tape ? loadTapeById(rootDir, tape) : null;
   const specInfo = spec ? inspectSpec(rootDir, spec) : null;
   const effectiveTape = tapeEntry || (specInfo?.linkedTapeId ? loadTapeById(rootDir, specInfo.linkedTapeId) : null);
+  const ontologySlice = resolveContextOntologySlice(rootDir, { entity, action });
 
-  const keywords = [];
+  const keywords = [...collectOntologyKeywords(ontologySlice)];
   if (route) keywords.push(...route.split(/[/?=&_-]+/).filter(Boolean));
   if (squad) keywords.push(squad);
   if (file) keywords.push(...path.basename(file, '.ts').split(/[.-]+/).filter(Boolean));
@@ -356,7 +354,7 @@ export function buildContextPack(
     keywords.push(...path.basename(specInfo.rel, '.spec.ts').split('-'));
   }
 
-  let shards = collectShards(rootDir, { route, squad });
+  let shards = collectShards(rootDir, { route: route || ontologySlice?.entity?.routes?.[0] || '', squad });
   const arch = collectArchitecture(rootDir, { squad, keywords });
 
   // Compute reverse-dependency blast radius for --file or shared modules consumed by --spec
@@ -431,15 +429,9 @@ export function buildContextPack(
   const overrides = collectOverrides(rootDir, { route, squad, skill, keywords: lowerKeywords });
 
   return {
-    scope: {
-      route: route || null,
-      squad: squad || null,
-      tape: tape || null,
-      spec: spec || null,
-      file: file || null,
-      skill: skill || null,
-    },
+    scope: { route: route || null, squad: squad || null, tape: tape || null, spec: spec || null, file: file || null, skill: skill || null, entity: entity || null, action: action || null },
     app: { baseUrl, authSessions },
+    ...(ontologySlice ? { ontologySlice } : {}),
     shards,
     overrides,
     architecture: arch,
@@ -454,50 +446,33 @@ export function buildContextPack(
 
 export function formatContextPack(pack, { maxTokens = 400 } = {}) {
   const lines = [];
-  const scopeBits = Object.entries(pack.scope)
-    .filter(([, v]) => v)
-    .map(([k, v]) => `${k}=${v}`);
+  const scopeBits = Object.entries(pack.scope).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`);
   lines.push(`CONTEXT | ${scopeBits.length > 0 ? scopeBits.join(' ') : 'repo-overview'} | base=${pack.app.baseUrl} | auth=[${pack.app.authSessions.join(', ') || 'none'}]`);
+  lines.push(...formatContextOntologyLines(pack.ontologySlice));
 
   if (pack.specInfo) {
-    lines.push(
-      `SPEC   | ${pack.specInfo.rel} | tags=${pack.specInfo.tags.join(' ') || 'none'} | fixtures=[${pack.specInfo.fixturesUsed.join(', ')}]`
-    );
-    if (pack.specInfo.steps.length > 0) {
-      lines.push(`BSTEPS | ${pack.specInfo.steps.join(' -> ')}`);
-    }
+    lines.push(`SPEC   | ${pack.specInfo.rel} | tags=${pack.specInfo.tags.join(' ') || 'none'} | fixtures=[${pack.specInfo.fixturesUsed.join(', ')}]`);
+    if (pack.specInfo.steps.length > 0) lines.push(`BSTEPS | ${pack.specInfo.steps.join(' -> ')}`);
   }
 
   if (pack.impact?.target) {
     const t = pack.impact.target;
     const tag = t.isShared ? `SHARED risk=${t.riskTier}` : `risk=${t.riskTier}`;
-    lines.push(
-      `IMPACT | ${t.file} [${tag} fanIn=${t.fanIn}] -> ${t.affectedSpecs.slice(0, 5).join(', ') || 'none'}${t.affectedSpecs.length > 5 ? ` (+${t.affectedSpecs.length - 5} more)` : ''}`
-    );
+    lines.push(`IMPACT | ${t.file} [${tag} fanIn=${t.fanIn}] -> ${t.affectedSpecs.slice(0, 5).join(', ') || 'none'}${t.affectedSpecs.length > 5 ? ` (+${t.affectedSpecs.length - 5} more)` : ''}`);
   } else if (pack.impact?.sharedModules?.length) {
-    const items = pack.impact.sharedModules
-      .slice(0, 4)
-      .map((m) => `${path.basename(m.file)}(${m.fanIn}s${m.isShared ? ',SHARED' : ''})`)
-      .join(', ');
+    const items = pack.impact.sharedModules.slice(0, 4).map((m) => `${path.basename(m.file)}(${m.fanIn}s${m.isShared ? ',SHARED' : ''})`).join(', ');
     lines.push(`IMPACT | Shared deps (prefer additive OCP or run affected): ${items}`);
   }
 
-  if (pack.tapeSummary) {
-    lines.push(pack.tapeSummary);
-  }
-
-  if (pack.overrides?.length > 0) {
-    lines.push(...formatOverridesForContextPack(pack.overrides));
-  }
+  if (pack.tapeSummary) lines.push(pack.tapeSummary);
+  if (pack.overrides?.length > 0) lines.push(...formatOverridesForContextPack(pack.overrides));
 
   if (pack.shards.length > 0) {
     lines.push(`SHARDS (${pack.shards.length}):`);
     for (const sh of pack.shards.slice(0, 5)) {
       lines.push(`  - ${sh.rel} [${sh.routes.join(', ') || 'no-routes'}]: ${sh.title}`);
       if (pack.scope.route || pack.scope.squad) {
-        for (const b of sh.bullets.slice(0, 3)) {
-          lines.push(`    ${b}`);
-        }
+        for (const b of sh.bullets.slice(0, 3)) lines.push(`    ${b}`);
       }
     }
   }
@@ -518,30 +493,23 @@ export function formatContextPack(pack, { maxTokens = 400 } = {}) {
   if (flows.length) lines.push(`FLOWS  | ${flows.slice(0, 4).map(fmtSig).join(' | ')}`);
 
   if (!pack.tapeSummary && pack.tapes.length > 0) {
-    lines.push(
-      `TAPES  | ${pack.tapes.slice(0, 8).map((t) => `${t.scenarioId}(${t.steps}s)`).join(', ')}`
-    );
+    lines.push(`TAPES  | ${pack.tapes.slice(0, 8).map((t) => `${t.scenarioId}(${t.steps}s)`).join(', ')}`);
   }
-  if (!pack.specInfo && pack.specs.length > 0) {
-    lines.push(`SPECS  | ${pack.specs.slice(0, 8).join(', ')}`);
-  }
+  if (!pack.specInfo && pack.specs.length > 0) lines.push(`SPECS  | ${pack.specs.slice(0, 8).join(', ')}`);
 
-  return capToTokens(lines.join('\n'), maxTokens, 'narrow --route/--squad/--tape/--spec/--file or raise --max-tokens');
+  return capToTokens(lines.join('\n'), maxTokens, 'narrow --route/--squad/--tape/--spec/--file/--entity/--action or raise --max-tokens');
 }
 
 const isMain = (() => {
   if (!process.argv[1]) return false;
-  try {
-    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
-  } catch {
-    return path.resolve(process.argv[1]) === path.resolve(__filename);
-  }
+  try { return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename); }
+  catch { return path.resolve(process.argv[1]) === path.resolve(__filename); }
 })();
 
 if (isMain) {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
-    console.log(`Usage: npx cortex context [--route <path>] [--squad <squad>] [--tape <id>] [--spec <path>] [--file <src-path>] [--max-tokens <n>] [--json]`);
+    console.log(`Usage: npx cortex context [--route <path>] [--squad <squad>] [--tape <id>] [--spec <path>] [--file <src-path>] [--entity <Entity>] [--action <Action>] [--max-tokens <n>] [--json]`);
     process.exit(0);
   }
   const getVal = (flag) => {
@@ -550,16 +518,12 @@ if (isMain) {
     const eq = args.find((a) => a.startsWith(`${flag}=`));
     return eq ? eq.slice(flag.length + 1) : '';
   };
-  const route = getVal('--route');
-  const squad = getVal('--squad');
-  const tape = getVal('--tape');
-  const spec = getVal('--spec');
-  const file = getVal('--file');
-  const skill = getVal('--skill');
+  const route = getVal('--route'), squad = getVal('--squad'), tape = getVal('--tape'), spec = getVal('--spec');
+  const file = getVal('--file'), skill = getVal('--skill'), entity = getVal('--entity'), action = getVal('--action');
   const maxTokens = Math.max(120, Math.min(2000, Number(getVal('--max-tokens')) || 400));
   const jsonOnly = args.includes('--json');
 
-  const pack = buildContextPack(process.cwd(), { route, squad, tape, spec, file, skill });
+  const pack = buildContextPack(process.cwd(), { route, squad, tape, spec, file, skill, entity, action });
   if (jsonOnly) {
     const out = { ...pack, tapeData: undefined, estimatedTokens: estimateTokens(formatContextPack(pack, { maxTokens })) };
     console.log(JSON.stringify(out));

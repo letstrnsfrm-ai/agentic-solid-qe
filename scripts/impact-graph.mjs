@@ -16,6 +16,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isCompactMode } from './lib/cli-output.mjs';
+import { querySemanticImpact } from './lib/ontology.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const MAX_FILE_BYTES = 1024 * 1024;
@@ -1059,25 +1060,13 @@ export function getFileImpact(rootDir, targetFileRel, { graph = null, sharedThre
 
 export function analyzeImpact(
   rootDir = process.cwd(),
-  {
-    files = null,
-    baseRef = '',
-    sharedThreshold = DEFAULT_SHARED_FAN_IN,
-    maxFastSpecs = DEFAULT_MAX_FAST_SPECS,
-    graph = null,
-  } = {}
+  { files = null, baseRef = '', entity = null, action = null, api = null, sharedThreshold = DEFAULT_SHARED_FAN_IN, maxFastSpecs = DEFAULT_MAX_FAST_SPECS, graph = null } = {}
 ) {
   const resolvedRoot = path.resolve(rootDir);
   const resolvedGraph = graph || buildImpactGraph(resolvedRoot);
   const changedFiles = Array.isArray(files)
-    ? [
-        ...new Set(
-          files
-            .map((f) => String(f || '').trim().replace(/\\/g, '/').replace(/^\.\//, ''))
-            .filter(Boolean)
-        ),
-      ].sort()
-    : detectGitChangedFiles(resolvedRoot, baseRef);
+    ? [...new Set(files.map((f) => String(f || '').trim().replace(/\\/g, '/').replace(/^\.\//, '')).filter(Boolean))].sort()
+    : entity || action || api ? [] : detectGitChangedFiles(resolvedRoot, baseRef);
 
   const perFile = [];
   const affectedSpecSet = new Set();
@@ -1085,15 +1074,16 @@ export function analyzeImpact(
   const riskRank = { low: 0, medium: 1, high: 2 };
 
   for (const file of changedFiles) {
-    const info = getFileImpact(resolvedRoot, file, {
-      graph: resolvedGraph,
-      sharedThreshold,
-    });
+    const info = getFileImpact(resolvedRoot, file, { graph: resolvedGraph, sharedThreshold });
     perFile.push(info);
     for (const sp of info.affectedSpecs) affectedSpecSet.add(sp);
-    if (riskRank[info.riskTier] > riskRank[highestRisk]) {
-      highestRisk = info.riskTier;
-    }
+    if (riskRank[info.riskTier] > riskRank[highestRisk]) highestRisk = info.riskTier;
+  }
+
+  const semanticImpact = querySemanticImpact(resolvedRoot, { entity, action, api, files: changedFiles });
+  if (semanticImpact.hasOntology) {
+    for (const sp of semanticImpact.specs) affectedSpecSet.add(sp);
+    if (semanticImpact.invariants.length > 0 && highestRisk === 'low') highestRisk = 'medium';
   }
 
   const affectedSpecs = [...affectedSpecSet].sort();
@@ -1102,27 +1092,17 @@ export function analyzeImpact(
     return tags.includes('@p0') || tags.includes('@smoke');
   });
   const affectedRegressionSpecs = affectedSpecs.filter((sp) => !affectedSmokeSpecs.includes(sp));
-
   const exceedsFastCap = affectedSpecs.length > maxFastSpecs;
   const highBlastRadius = exceedsFastCap || highestRisk === 'high';
   const recommendedFastSpecs = !exceedsFastCap
     ? affectedSpecs
-    : affectedSmokeSpecs.length > 0
-      ? affectedSmokeSpecs.slice(0, maxFastSpecs)
-      : affectedSpecs.slice(0, maxFastSpecs);
+    : affectedSmokeSpecs.length > 0 ? affectedSmokeSpecs.slice(0, maxFastSpecs) : affectedSpecs.slice(0, maxFastSpecs);
 
   return {
-    changedFiles,
-    perFile,
-    affectedSpecs,
-    affectedSmokeSpecs,
-    affectedRegressionSpecs,
-    highestRisk,
-    highBlastRadius,
-    exceedsFastCap,
-    maxFastSpecs,
-    recommendedFastSpecs,
+    changedFiles, perFile, affectedSpecs, affectedSmokeSpecs, affectedRegressionSpecs,
+    highestRisk, highBlastRadius, exceedsFastCap, maxFastSpecs, recommendedFastSpecs,
     deferredSpecs: affectedSpecs.filter((sp) => !recommendedFastSpecs.includes(sp)),
+    ...(semanticImpact.hasOntology ? { semanticImpact } : {}),
   };
 }
 
@@ -1132,78 +1112,52 @@ export function formatCompactImpact(result) {
   ];
   for (const f of result.perFile.slice(0, 8)) {
     const badge = f.isShared ? `SHARED fanIn=${f.fanIn}` : `fanIn=${f.fanIn}`;
-    const targetList =
-      f.affectedSpecs.length > 0
-        ? f.affectedSpecs.slice(0, 4).join(', ') +
-          (f.affectedSpecs.length > 4 ? ` (+${f.affectedSpecs.length - 4} more)` : '')
-        : 'none';
+    const targetList = f.affectedSpecs.length > 0 ? f.affectedSpecs.slice(0, 4).join(', ') + (f.affectedSpecs.length > 4 ? ` (+${f.affectedSpecs.length - 4} more)` : '') : 'none';
     lines.push(`FILE   | ${f.file} [${badge}] -> ${targetList}`);
   }
-  if (result.affectedSpecs.length > 0) {
-    lines.push(`SPECS  | ${result.recommendedFastSpecs.join(', ')}`);
+  const sem = result.semanticImpact;
+  if (sem && (sem.entities.length > 0 || sem.actions.length > 0 || sem.invariants.length > 0)) {
+    lines.push(`ONTOL  | entities=[${sem.entities.join(', ')}] actions=[${sem.actions.join(', ')}] invariants=[${sem.invariants.join(', ')}]`);
   }
+  if (result.affectedSpecs.length > 0) lines.push(`SPECS  | ${result.recommendedFastSpecs.join(', ')}`);
   if (result.deferredSpecs.length > 0) {
-    lines.push(
-      `WARN   | HIGH BLAST RADIUS: ${result.deferredSpecs.length} additional affected spec(s) deferred; run 'npx cortex verify --affected --max-affected ${result.affectedSpecs.length}' or full CI.`
-    );
+    lines.push(`WARN   | HIGH BLAST RADIUS: ${result.deferredSpecs.length} additional affected spec(s) deferred; run 'npx cortex verify --affected --max-affected ${result.affectedSpecs.length}' or full CI.`);
   }
   return lines.join('\n');
 }
 
-const isMain =
-  Boolean(process.argv[1]) &&
-  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
-
+const isMain = Boolean(process.argv[1]) && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
 if (isMain) {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
-    console.log(`
-🕸️  Cortex Fixture-Aware Impact & Blast-Radius Analyzer (npx cortex impact)
-
-Usage:
-  npx cortex impact [--files src/a.ts,src/b.ts] [--file <path>] [--base <git-ref>] [--max-fast <N>] [--compact|--json|--specs-only]
-`);
+    console.log('\n🕸️  Cortex Fixture-Aware & Ontology Semantic Impact Analyzer (npx cortex impact)\n\nUsage:\n  npx cortex impact [--files src/a.ts,src/b.ts] [--file <path>] [--entity <Entity>] [--action <Action>] [--api <METHOD /path>] [--base <git-ref>] [--max-fast <N>] [--compact|--json|--specs-only]\n');
     process.exit(0);
   }
-
   const files = [];
-  let baseRef = '';
+  let baseRef = '', entity = null, action = null, api = null;
   let maxFastSpecs = DEFAULT_MAX_FAST_SPECS;
-
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if ((a === '--file' || a === '--files') && args[i + 1]) {
-      files.push(...args[++i].split(',').filter(Boolean));
-    } else if (a.startsWith('--file=')) {
-      files.push(a.slice('--file='.length));
-    } else if (a.startsWith('--files=')) {
-      files.push(...a.slice('--files='.length).split(',').filter(Boolean));
-    } else if (a === '--base' && args[i + 1]) {
-      baseRef = args[++i];
-    } else if (a.startsWith('--base=')) {
-      baseRef = a.slice('--base='.length);
-    } else if (a === '--max-fast' && args[i + 1]) {
-      maxFastSpecs = Math.max(1, Number(args[++i]) || DEFAULT_MAX_FAST_SPECS);
-    } else if (a.startsWith('--max-fast=')) {
-      maxFastSpecs = Math.max(1, Number(a.slice('--max-fast='.length)) || DEFAULT_MAX_FAST_SPECS);
-    }
+    if ((a === '--file' || a === '--files') && args[i + 1]) files.push(...args[++i].split(',').filter(Boolean));
+    else if (a.startsWith('--file=')) files.push(a.slice('--file='.length));
+    else if (a.startsWith('--files=')) files.push(...a.slice('--files='.length).split(',').filter(Boolean));
+    else if (a === '--entity' && args[i + 1]) entity = args[++i].trim();
+    else if (a.startsWith('--entity=')) entity = a.slice('--entity='.length).trim();
+    else if (a === '--action' && args[i + 1]) action = args[++i].trim();
+    else if (a.startsWith('--action=')) action = a.slice('--action='.length).trim();
+    else if (a === '--api' && args[i + 1]) api = args[++i].trim();
+    else if (a.startsWith('--api=')) api = a.slice('--api='.length).trim();
+    else if (a === '--base' && args[i + 1]) baseRef = args[++i];
+    else if (a.startsWith('--base=')) baseRef = a.slice('--base='.length);
+    else if (a === '--max-fast' && args[i + 1]) maxFastSpecs = Math.max(1, Number(args[++i]) || DEFAULT_MAX_FAST_SPECS);
+    else if (a.startsWith('--max-fast=')) maxFastSpecs = Math.max(1, Number(a.slice('--max-fast='.length)) || DEFAULT_MAX_FAST_SPECS);
   }
-
   try {
-    const res = analyzeImpact(process.cwd(), {
-      files: files.length > 0 ? files : null,
-      baseRef,
-      maxFastSpecs,
-    });
-    if (args.includes('--json')) {
-      console.log(JSON.stringify(res, null, 2));
-    } else if (args.includes('--specs-only')) {
-      if (res.affectedSpecs.length > 0) console.log(res.affectedSpecs.join(' '));
-    } else if (isCompactMode(args)) {
-      console.log(formatCompactImpact(res));
-    } else {
-      console.log(formatCompactImpact(res));
-    }
+    const res = analyzeImpact(process.cwd(), { files: files.length > 0 ? files : null, baseRef, entity, action, api, maxFastSpecs });
+    if (args.includes('--json')) console.log(JSON.stringify(res, null, 2));
+    else if (args.includes('--specs-only')) { if (res.affectedSpecs.length > 0) console.log(res.affectedSpecs.join(' ')); }
+    else if (isCompactMode(args)) console.log(formatCompactImpact(res));
+    else console.log(formatCompactImpact(res));
   } catch (err) {
     console.error(`❌ impact error: ${err.message}`);
     process.exit(1);

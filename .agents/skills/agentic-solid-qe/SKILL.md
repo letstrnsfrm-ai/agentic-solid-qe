@@ -17,12 +17,13 @@ description: Autonomous single entry point for Agentic-SOLID-QE. Human gives dir
    - **Failures:** `--heal-action <dry-run|apply> [--verify-affected]` (`03-drift-healer`).
    - **Legacy:** `npx cortex wave --run --verify --workers 4` (`05-skill-migrator`).
    - **CI & Verify:** `--ci-init` ➔ `--verify [--fast]`.
+   - **Ontology:** `npx cortex ontology [--seed|--gaps|--validate]`, `impact --entity <E>|--action <A>`.
    - **Autonomous:** `--autonomous <start|loop|step|resume|status|stop|quarantine>` (`--interval`).
 
 ## 2. Lazy References (Read ONLY When Needed)
-- `references/master-orchestration-playbook.md` — Stage 0–4 ladder & SOLID contracts.
-- `references/human-gates-and-reporting.md` — Decision flow, gates & Blueprint.
-- `references/autonomous-mode.md` — Kickoff, autopilot & check-in intervals.
-- `references/onboarding-and-upgrade.md` — `init`, `cortex sync`, multi-squad & legacy.
-- `references/subagent-isolation.md` — Subagent delegation & model-tiering.
+- `references/master-orchestration-playbook.md` — Stage 0–4 ladder & SOLID.
+- `references/human-gates-and-reporting.md` — Gates & Blueprint.
+- `references/autonomous-mode.md` — Kickoff, autopilot & intervals.
+- `references/onboarding-and-upgrade.md` — `init`, `sync`, squads & legacy.
+- `references/subagent-isolation.md` — Subagents & tiering.
 

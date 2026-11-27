@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/letstrnsfrm-ai/agentic-solid-qe/schemas/ontology.schema.json",
+  "title": "Agentic-SOLID-QE Operational QE Ontology",
+  "description": "Operational QE Ontology modeling domain Entities (Objects), Typed Links, Actions, Lifecycle Transitions, and Business Invariants mapped to routes, APIs, SOLID components, and tests.",
+  "type": "object",
+  "required": ["schemaVersion", "domain", "entities", "links", "actions", "invariants"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "domain": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Kebab-case identifier for the target business domain."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 5
+    },
+    "lastVerified": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "states"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          },
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" },
+          "ownerSquad": { "type": "string", "pattern": "^@[a-z0-9-]+/[a-z0-9-]+$" },
+          "states": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "pattern": "^[a-z0-9_-]+$" }
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["from", "to", "viaAction"],
+              "additionalProperties": false,
+              "properties": {
+                "from": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+                "to": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+                "viaAction": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+                "guard": { "type": "string" }
+              }
+            }
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "type"],
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+                "type": { "type": "string", "minLength": 1 },
+                "required": { "type": "boolean" },
+                "pii": { "type": "boolean" }
+              }
+            }
+          },
+          "routes": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^/" }
+          },
+          "components": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+          },
+          "dataBuilders": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+          }
+        }
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "from", "relation", "to"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+          "from": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+          "relation": {
+            "type": "string",
+            "enum": [
+              "contains",
+              "creates",
+              "owns",
+              "references",
+              "mutates",
+              "authenticates",
+              "triggers",
+              "depends_on"
+            ]
+          },
+          "to": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+          "cardinality": {
+            "type": "string",
+            "enum": ["1:1", "1:N", "N:1", "N:M"]
+          },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "targetEntity"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" },
+          "actorPersonas": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[a-z0-9_-]+$" }
+          },
+          "targetEntity": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+          "mutatesEntities": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" }
+          },
+          "fromState": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+          "toState": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+          "routes": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^/" }
+          },
+          "apiEndpoints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["method", "pathPattern"],
+              "additionalProperties": false,
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+                },
+                "pathPattern": { "type": "string", "minLength": 1 }
+              }
+            }
+          },
+          "components": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+          }
+        }
+      }
+    },
+    "invariants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "severity", "entity"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+          "description": { "type": "string", "minLength": 5 },
+          "severity": {
+            "type": "string",
+            "enum": ["p0", "p1", "p2"]
+          },
+          "entity": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+          "action": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+          "personas": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[a-z0-9_-]+$" }
+          },
+          "enforcedBy": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "routes": { "type": "array", "items": { "type": "string", "pattern": "^/" } },
+              "components": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+              },
+              "apiEndpoints": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

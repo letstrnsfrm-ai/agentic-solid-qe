@@ -234,5 +234,28 @@
       "targetProperty": "confirmationHeading",
       "expectedValueRef": "CheckoutBuilder.confirmationHeading()"
     }
-  ]
+  ],
+  "ontology": {
+    "entities": ["User", "Product", "Cart", "Order"],
+    "actions": [
+      "authenticateUser",
+      "addItemToCart",
+      "proceedToCheckout",
+      "submitShippingInfo",
+      "completeOrder"
+    ],
+    "transitions": [
+      "User:anonymous->authenticated",
+      "Product:listed->in_cart",
+      "Cart:empty->populated",
+      "Cart:populated->checked_out",
+      "Order:draft->shipping_entered",
+      "Order:shipping_entered->completed"
+    ],
+    "invariants": [
+      "inv-standard-user-reaches-inventory",
+      "inv-cart-badge-matches-item-count",
+      "inv-order-confirmation-shown"
+    ]
+  }
 }

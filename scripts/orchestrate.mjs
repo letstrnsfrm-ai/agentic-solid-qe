@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { analyzeCoverage } from './analyze-coverage.mjs';
+import { appendOntologyGateOptions } from './lib/ontology.mjs';
 import { buildDomainGraph } from './build-domain-graph.mjs';
 import { compileSessionTape, finalizeBatchDomainRefresh } from './compile-tape.mjs';
 import { analyzeAndHealDrift, healDriftWithGuardrail } from './heal-drift.mjs';
@@ -533,18 +534,18 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
     }
 
     const stageOptions = [];
+    const whyParts = ['All domain shards are covered, tapes compiled, zero drift detected, and CI is configured.'];
+    const hasOntologyGaps = appendOntologyGateOptions(coverage, stageOptions, whyParts);
     if (stageNum === 2) {
       stageOptions.push({
         id: 'stage2-clone-negative',
-        label: `(Recommended) Clone '${firstTapeSlug}' into a @p1 boundary/negative variant via cortex tape clone`,
+        label: `${hasOntologyGaps ? '' : '(Recommended) '}Clone '${firstTapeSlug}' into a @p1 boundary/negative variant via cortex tape clone`,
         command: `npx cortex orchestrate --tape clone ${firstTapeSlug} ${firstTapeSlug}-negative --charter boundary-analysis --tags @p1,@regression`,
       });
     }
     if (handoffs.length > 0) {
       const topH = handoffs[0];
-      const safeScenarioId = /^[a-z0-9][a-z0-9-]*$/.test(String(topH?.scenarioId || ''))
-        ? String(topH.scenarioId)
-        : firstTapeSlug;
+      const safeScenarioId = /^[a-z0-9][a-z0-9-]*$/.test(String(topH?.scenarioId || '')) ? String(topH.scenarioId) : firstTapeSlug;
       stageOptions.push({
         id: 'stage3-handoff-split',
         label: `Segment ${Number(topH.stepCount) || 0}-step tape '${safeScenarioId}' at step ${Number(topH.suggestedSplitStep) || 1} (${String(topH.recommendedHandoffStrategy || 'api-seed').replace(/[^a-z0-9_-]/gi, '')})`,
@@ -556,17 +557,11 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       label: 'Run full verification gate (tsc + domain:graph + audit:solid + validate:tapes + smoke)',
       command: 'npx cortex orchestrate --verify',
     });
+    if (stageNum === 2) whyParts.push('Ready for Stage 2 persona/boundary variant expansion.');
+    else if (stageNum === 3) whyParts.push('Ready for Stage 3 enterprise wizard/API/seeder expansion.');
+    if (handoffs.length > 0) whyParts.push(`${handoffs.length} long tape(s) eligible for Point-to-Point handoff segmentation.`);
 
-    const whyParts = ['All domain shards are covered, tapes compiled, zero drift detected, and CI is configured.'];
-    if (stageNum === 2) {
-      whyParts.push('Ready for Stage 2 persona/boundary variant expansion.');
-    } else if (stageNum === 3) {
-      whyParts.push('Ready for Stage 3 enterprise wizard/API/seeder expansion.');
-    }
-    if (handoffs.length > 0) {
-      whyParts.push(`${handoffs.length} long tape(s) eligible for Point-to-Point handoff segmentation.`);
-    }
-
+    const hasExpansionOptions = stageNum < 4 || handoffs.length > 0 || hasOntologyGaps;
     nextAction = {
       priority: 7,
       skill: 'agentic-solid-qe',
@@ -574,11 +569,10 @@ export function buildOrchestrationBlueprint(rootDir = process.cwd(), options = {
       command: 'npx cortex orchestrate --verify',
       npmScript: 'verify',
       autoRunnable: true,
-      humanGate:
-        stageNum < 4 || handoffs.length > 0
-          ? 'None — reporting verified results (optional Stage 2/3 expansion options available in GATE_OPTIONS).'
-          : 'None — reporting verified results.',
-      ...(stageNum < 4 || handoffs.length > 0
+      humanGate: hasExpansionOptions
+        ? 'None — reporting verified results (optional Stage 2/3 & Ontology expansion options available in GATE_OPTIONS).'
+        : 'None — reporting verified results.',
+      ...(hasExpansionOptions
         ? {
             gatePayload: {
               gateId: `stage${stageNum}-expansion-advisory`,

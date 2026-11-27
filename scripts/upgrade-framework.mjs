@@ -373,12 +373,8 @@ function assertSafePatchDestination(targetRoot, targetPath, label = 'patch targe
 
 function isAllowedUpgradePatchTarget(targetRel) {
   if (ALLOWED_UPGRADE_PATCH_TARGETS.has(targetRel)) return true;
-  if (targetRel === '.agents/domain/session-tape.schema.json' || targetRel === 'CHANGELOG.json') return true;
-  if (
-    targetRel.startsWith('.agents/skills/') ||
-    targetRel.startsWith('.github/prompts/') ||
-    targetRel.startsWith('.claude/commands/')
-  ) {
+  if (targetRel === '.agents/domain/session-tape.schema.json' || targetRel === '.agents/domain/ontology.schema.json' || targetRel === 'CHANGELOG.json') return true;
+  if (targetRel.startsWith('.agents/skills/') || targetRel.startsWith('.github/prompts/') || targetRel.startsWith('.claude/commands/') || targetRel.startsWith('scripts/lib/')) {
     return !targetRel.includes('..');
   }
   return false;

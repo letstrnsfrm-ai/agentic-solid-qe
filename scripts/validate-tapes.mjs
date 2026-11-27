@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertSafeTargetHttpUrl } from './report-cloud.mjs';
+import { loadOntology, validateTapeOntologyBindings } from './lib/ontology.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -132,7 +133,7 @@ function checkUnknownKeys(obj, allowedSet, contextLabel, errorsList) {
   }
 }
 
-export function validateTapeObject(tape, file = 'session-tape.json', { expectedScenarioId } = {}) {
+export function validateTapeObject(tape, file = 'session-tape.json', { expectedScenarioId, ontology = null } = {}) {
   const errors = [];
   if (!tape || typeof tape !== 'object' || Array.isArray(tape)) {
     errors.push(`[${file}] Session Tape root must be a JSON object.`);
@@ -716,32 +717,27 @@ export function validateTapeObject(tape, file = 'session-tape.json', { expectedS
         !state.expectedValueRef.startsWith('//') &&
         !state.expectedValueRef.includes('..') &&
         !hasQuerySecretParam(state.expectedValueRef);
-      if (
-        typeof state.expectedValueRef !== 'string' ||
-        (!isCapturedVarRef && !isSafeUrlPathRef && !isSafeMemberRef(state.expectedValueRef))
-      ) {
+      if (typeof state.expectedValueRef !== 'string' || (!isCapturedVarRef && !isSafeUrlPathRef && !isSafeMemberRef(state.expectedValueRef))) {
         errors.push(`[${file}] Invalid expectedStates.expectedValueRef '${state.expectedValueRef}'.`);
       }
     }
   }
-
+  errors.push(...validateTapeOntologyBindings(tape, file, ontology));
   return errors;
 }
 
-const isMain =
-  Boolean(process.argv[1]) &&
-  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+const isMain = Boolean(process.argv[1]) && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   if (!fs.existsSync(TAPES_DIR)) {
     console.log('ℹ️ No .exploratory/tapes directory found. Skipping tape validation.');
     process.exit(0);
   }
-
-  const tapeFiles = fs
-    .readdirSync(TAPES_DIR, { withFileTypes: true })
+  const loadedOnt = loadOntology(ROOT);
+  const activeOntology = loadedOnt.exists && loadedOnt.ontology ? loadedOnt.ontology : null;
+  const tapeFiles = fs.readdirSync(TAPES_DIR, { withFileTypes: true })
     .filter((e) => !e.isSymbolicLink() && e.isFile() && e.name.endsWith('.json'))
     .map((e) => e.name);
-  let errors = [];
+  let errors = loadedOnt.exists && loadedOnt.parseError ? [loadedOnt.parseError] : [];
   const seenScenarioIds = new Map();
 
   for (const file of tapeFiles) {
@@ -758,28 +754,21 @@ if (isMain) {
       errors.push(`[${file}] Invalid JSON: ${err.message}`);
       continue;
     }
-
     if (tape && typeof tape === 'object' && typeof tape.scenarioId === 'string' && tape.scenarioId) {
       if (seenScenarioIds.has(tape.scenarioId)) {
-        errors.push(
-          `[${file}] Duplicate scenarioId '${tape.scenarioId}' (already defined in ${seenScenarioIds.get(tape.scenarioId)}).`
-        );
+        errors.push(`[${file}] Duplicate scenarioId '${tape.scenarioId}' (already defined in ${seenScenarioIds.get(tape.scenarioId)}).`);
       } else {
         seenScenarioIds.set(tape.scenarioId, file);
       }
     }
-
-    errors.push(...validateTapeObject(tape, file));
+    errors.push(...validateTapeObject(tape, file, { ontology: activeOntology }));
   }
 
   if (errors.length > 0) {
     console.error('\n❌ Session Tape Validation Failed:\n');
-    for (const e of errors) {
-      console.error(`  - ${e}`);
-    }
+    for (const e of errors) console.error(`  - ${e}`);
     process.exit(1);
   }
-
-  console.log(`✅ Session Tape Validation Passed (${tapeFiles.length} tape(s) verified against session-tape.schema.json).`);
+  console.log(`✅ Session Tape Validation Passed (${tapeFiles.length} tape(s) verified against session-tape.schema.json${activeOntology ? ' + ontology.json' : ''}).`);
 }
 
