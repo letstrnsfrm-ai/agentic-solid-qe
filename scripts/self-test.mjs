@@ -7617,3 +7617,340 @@ test('Non-Functional Testing (NFR): schema validation, SOLID tape compilation (@
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('QE Software Factory Phase 2: Encrypted VPC Auth Vault, resolveGateChoice, and Zero-API-Key VPC Runner lifecycle', async () => {
+  const {
+    encryptStorageState,
+    decryptStorageState,
+    pushAuthState,
+    pullAuthState,
+  } = await import('./auth-vault.mjs');
+  const { resolveGateChoice } = await import('./orchestrate.mjs');
+  const {
+    createCloudClient,
+    buildExecutorPrompt,
+    extractGatePayloadFromBlueprint,
+    runSinglePollCycle,
+  } = await import('./runner-daemon.mjs');
+
+  // 1. AES-256-GCM Encrypted Auth Vault round-trip, wrong-key rejection & TTL expiry
+  const sampleState = JSON.stringify({ cookies: [{ name: 'sid', value: 'secret-token' }], origins: [] });
+  const now = new Date('2026-11-27T10:00:00Z');
+  const envelope = encryptStorageState(sampleState, 'vpc-master-passphrase', {
+    personaId: 'underwriter-std',
+    ttl: '2h',
+    now,
+  });
+  assert.equal(envelope.alg, 'aes-256-gcm');
+  assert.equal(envelope.ciphertext.includes('secret-token'), false);
+
+  const decrypted = decryptStorageState(envelope, 'vpc-master-passphrase', {
+    now: new Date('2026-11-27T11:00:00Z'),
+  });
+  assert.equal(decrypted.plaintext, sampleState);
+
+  assert.throws(
+    () => decryptStorageState(envelope, 'wrong-key', { now: new Date('2026-11-27T11:00:00Z') }),
+    /Failed to decrypt/
+  );
+  assert.throws(
+    () => decryptStorageState(envelope, 'vpc-master-passphrase', { now: new Date('2026-11-27T12:05:00Z') }),
+    /expired/
+  );
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asqe-factory-p2-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, '.auth'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.auth/underwriter-std.json'), sampleState, 'utf8');
+    const pushed = pushAuthState({
+      personaId: 'underwriter-std',
+      vaultUri: `file://${path.join(tmpDir, 'vault')}`,
+      ttl: '4h',
+      secretMaterial: 'vpc-master-passphrase',
+      cwd: tmpDir,
+    });
+    assert.equal(pushed.backend, 'file');
+
+    fs.rmSync(path.join(tmpDir, '.auth/underwriter-std.json'));
+    const pulled = pullAuthState({
+      personaId: 'underwriter-std',
+      vaultUri: `file://${path.join(tmpDir, 'vault')}`,
+      secretMaterial: 'vpc-master-passphrase',
+      cwd: tmpDir,
+    });
+    assert.equal(fs.readFileSync(pulled.outputPath, 'utf8'), sampleState);
+
+    // 2. resolveGateChoice validates gateId and choice bounds
+    const mockBlueprint = {
+      nextAction: {
+        skill: '01-cli-explorer',
+        gatePayload: {
+          gateId: 'scenario-approval',
+          options: [
+            { label: 'Explore checkout happy path', command: 'npx cortex explore start' },
+            { label: 'Skip shard', command: 'npx cortex orchestrate --skip' },
+          ],
+        },
+      },
+    };
+    const okChoice = resolveGateChoice(mockBlueprint, 'scenario-approval', 1);
+    assert.equal(okChoice.ok, true);
+    assert.equal(okChoice.option.label, 'Explore checkout happy path');
+    assert.equal(resolveGateChoice(mockBlueprint, 'wrong-gate', 1).ok, false);
+    assert.equal(resolveGateChoice(mockBlueprint, 'scenario-approval', 9).ok, false);
+
+    // 3. Zero-API-Key Runner Daemon full pull -> claim -> gate-park -> resume -> complete cycle
+    const calls = [];
+    const mockWorkOrder = {
+      id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      squad: 'checkout',
+      shardKey: 'routes/checkout-payment',
+      branchName: 'cortex/wo-aaaaaaaa-checkout-routes-checkout-payment',
+      payload: {
+        deployedUrl: 'https://staging.acme.internal/checkout',
+        routeShard: 'routes/checkout-payment',
+        goal: 'Cover payment checkout flow',
+      },
+      lastGateResolution: null,
+    };
+
+    let pollCount = 0;
+    const mockFetch = async (url, init) => {
+      const parsedBody = init?.body ? JSON.parse(init.body) : null;
+      calls.push({ url, method: init?.method, body: parsedBody });
+      if (url.endsWith('/api/v1/runners/claim')) {
+        pollCount++;
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              workOrder:
+                pollCount === 1
+                  ? mockWorkOrder
+                  : {
+                      ...mockWorkOrder,
+                      lastGateResolution: {
+                        gateId: 'scenario-approval',
+                        selectedOptionIndex: 1,
+                        label: 'Explore checkout happy path',
+                        command: 'npx cortex explore start',
+                      },
+                    },
+            }),
+        };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+    };
+
+    const client = createCloudClient({
+      cloudUrl: 'https://cloud.example.internal',
+      token: 'cq_live_testtoken',
+      fetchImpl: mockFetch,
+    });
+
+    // Cycle 1: orchestrator hits a human gate -> runner posts GATE_OPTIONS and parks non-blockingly
+    const cycle1 = await runSinglePollCycle({
+      cloudClient: client,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'deterministic',
+      cwd: tmpDir,
+      runOrchestrate: async () => ({ exitCode: 0, parsed: mockBlueprint }),
+    });
+    assert.equal(cycle1.claimed, true);
+    assert.equal(cycle1.outcome, 'waiting_gate');
+    assert.equal(cycle1.gateId, 'scenario-approval');
+    assert.ok(calls.some((c) => c.url.endsWith('/gates') && c.body.gateId === 'scenario-approval'));
+
+    // Cycle 2: resumed with human gate choice -> completes cleanly with zero LLM API keys
+    let receivedResume = null;
+    const cycle2 = await runSinglePollCycle({
+      cloudClient: client,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'agent-seat',
+      cwd: tmpDir,
+      runAgentSeat: async ({ prompt }) => {
+        assert.match(prompt, /Resolved Human Gate \(scenario-approval\)/);
+      },
+      runOrchestrate: async ({ resumeGate, choice }) => {
+        receivedResume = { resumeGate, choice };
+        return { exitCode: 0, parsed: { stoppedReason: 'completed', tokenUsed: 320 } };
+      },
+    });
+    assert.equal(cycle2.outcome, 'completed');
+    assert.deepEqual(receivedResume, { resumeGate: 'scenario-approval', choice: 1 });
+    assert.ok(calls.some((c) => c.url.endsWith('/events') && c.body.status === 'completed' && c.body.tokenUsed === 320));
+    assert.ok(extractGatePayloadFromBlueprint(mockBlueprint));
+    assert.match(buildExecutorPrompt(mockWorkOrder), /Target Deployed App URL/);
+
+    // 4. Phase 4: Runner enforces per-work-order tokenBudget fail-fast
+    const budgetClient = createCloudClient({
+      cloudUrl: 'https://cloud.example.internal',
+      token: 'cq_live_testtoken',
+      fetchImpl: async (url, init) => {
+        const parsedBody = init?.body ? JSON.parse(init.body) : null;
+        calls.push({ url, method: init?.method, body: parsedBody });
+        if (url.endsWith('/api/v1/runners/claim')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ workOrder: { ...mockWorkOrder, tokenBudget: 200 } }),
+          };
+        }
+        return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+      },
+    });
+    const budgetCycle = await runSinglePollCycle({
+      cloudClient: budgetClient,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'deterministic',
+      cwd: tmpDir,
+      runOrchestrate: async () => ({ exitCode: 0, parsed: { stoppedReason: 'completed', tokenUsed: 500 } }),
+    });
+    assert.equal(budgetCycle.outcome, 'budget_exceeded');
+    assert.ok(
+      calls.some(
+        (c) =>
+          c.url.endsWith('/events') &&
+          c.body.status === 'failed' &&
+          /Token footprint budget exceeded/.test(c.body.error || '')
+      )
+    );
+
+    // 5. PR #72 review fixes: random per-envelope salt, in-flight heartbeat, resume-only guard,
+    //    parseCommandLine, normalizePollMs, vpc-iam-gateway, and real orchestrate.mjs --loop --resume-gate subprocess
+    const {
+      parseCommandLine,
+      normalizePollMs,
+      defaultRunCortexOrchestrate,
+    } = await import('./runner-daemon.mjs');
+
+    // Distinct random scrypt salt per encryption
+    const envA = encryptStorageState(sampleState, 'vpc-master-passphrase', { personaId: 'p1', ttl: '2h', now });
+    const envB = encryptStorageState(sampleState, 'vpc-master-passphrase', { personaId: 'p1', ttl: '2h', now });
+    assert.ok(envA.salt && envB.salt && envA.salt !== envB.salt);
+    assert.notEqual(envA.ciphertext, envB.ciphertext);
+    assert.equal(decryptStorageState(envB, 'vpc-master-passphrase', { now: new Date('2026-11-27T11:00:00Z') }).plaintext, sampleState);
+
+    // Quote-aware parseCommandLine & pollMs NaN guard
+    assert.deepEqual(parseCommandLine('gh copilot --model "claude sonnet" --dir \'/tmp/my app\''), [
+      'gh',
+      'copilot',
+      '--model',
+      'claude sonnet',
+      '--dir',
+      '/tmp/my app',
+    ]);
+    assert.throws(() => parseCommandLine('gh "unterminated'), /Unterminated/);
+    assert.equal(normalizePollMs('not-a-number', 5000), 5000);
+    assert.equal(normalizePollMs(200, 5000), 5000);
+    assert.equal(normalizePollMs('2500', 5000), 2500);
+
+    // In-flight heartbeat fires during long-running executeWorkOrder & stops after completion
+    let inFlightHeartbeats = 0;
+    let vpcIamInvoked = false;
+    const hbClient = createCloudClient({
+      cloudUrl: 'https://cloud.example.internal',
+      token: 'cq_live_testtoken',
+      fetchImpl: async (url) => {
+        if (url.endsWith('/api/v1/runners/heartbeat')) inFlightHeartbeats++;
+        if (url.endsWith('/api/v1/runners/claim')) {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ workOrder: mockWorkOrder }) };
+        }
+        return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+      },
+    });
+    const hbCycle = await runSinglePollCycle({
+      cloudClient: hbClient,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'vpc-iam-gateway',
+      heartbeatIntervalMs: 25,
+      cwd: tmpDir,
+      runAgentSeat: async ({ executorMode }) => {
+        vpcIamInvoked = executorMode === 'vpc-iam-gateway';
+      },
+      runOrchestrate: async () => {
+        await new Promise((r) => setTimeout(r, 90));
+        return { exitCode: 0, parsed: { stoppedReason: 'completed', tokenUsed: 120 } };
+      },
+    });
+    assert.equal(hbCycle.outcome, 'completed');
+    assert.equal(vpcIamInvoked, true);
+    assert.ok(inFlightHeartbeats >= 2, `Expected >=2 in-flight heartbeats, got ${inFlightHeartbeats}`);
+
+    // Guard: resume-only (executed: false) output must NOT mark work order completed
+    const resumeOnlyCycle = await runSinglePollCycle({
+      cloudClient: hbClient,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'deterministic',
+      cwd: tmpDir,
+      runOrchestrate: async () => ({ exitCode: 0, parsed: { resumed: true, executed: false } }),
+    });
+    assert.equal(resumeOnlyCycle.outcome, 'failed');
+
+    // Real subprocess test: orchestrate.mjs --loop --json --resume-gate runs the loop (does not exit early)
+    const realSubRes = defaultRunCortexOrchestrate({
+      cwd: path.resolve(__dirname, '..'),
+      resumeGate: '01-cli-explorer',
+      choice: 1,
+    });
+    assert.ok(realSubRes.parsed !== null, 'Expected structured JSON from real orchestrate.mjs subprocess');
+    if (realSubRes.exitCode === 0) {
+      assert.ok(
+        realSubRes.parsed.stoppedReason || realSubRes.parsed.finalBlueprint,
+        'Expected --loop --resume-gate to return full loop result (stoppedReason/finalBlueprint), not early exit'
+      );
+    }
+
+    // 6. PR #72 re-review fixes: numeric TTL bounds + executeSafeGateOption deterministic execution (no ping-pong)
+    const { parseTtlSeconds } = await import('./auth-vault.mjs');
+    const { executeSafeGateOption } = await import('./orchestrate.mjs');
+    assert.throws(() => parseTtlSeconds(10), /between 60s and 7d/);
+    assert.throws(() => parseTtlSeconds(8 * 86400), /between 60s and 7d/);
+    assert.equal(parseTtlSeconds(3600), 3600);
+
+    // Interactive browser command in deterministic mode returns requiresAgentSeat (no infinite ping-pong)
+    const interactiveRes = executeSafeGateOption(tmpDir, {
+      label: 'Explore checkout',
+      command: 'npx cortex explore start --url https://staging.example.com',
+    });
+    assert.equal(interactiveRes.executed, false);
+    assert.equal(interactiveRes.requiresAgentSeat, true);
+
+    // Cancel command returns canceled: true
+    assert.equal(executeSafeGateOption(tmpDir, { label: 'Cancel', command: 'cancel' }).canceled, true);
+
+    // Real deterministic command (`npx cortex graph`) actually executes and produces domain-graph.json
+    fs.mkdirSync(path.join(tmpDir, '.agents/domain/shards'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.agents/domain/domain-memory.md'),
+      '# Domain Memory\n- **App Name:** Demo\n- **Base URL:** `https://example.com`\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.agents/domain/shards/checkout.md'),
+      '# Shard: Checkout\n- **Route:** `/checkout`\n',
+      'utf8'
+    );
+    const detRes = executeSafeGateOption(tmpDir, { label: 'Rebuild graph', command: 'npx cortex graph' });
+    assert.equal(detRes.executed, true);
+    assert.equal(detRes.exitCode, 0);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.agents/domain/domain-graph.json')), true);
+
+    // Runner must fail cleanly (not re-park or falsely complete) when orchestrate reports requiresAgentSeat
+    const requiresSeatCycle = await runSinglePollCycle({
+      cloudClient: hbClient,
+      runnerId: '11111111-2222-4333-8444-555555555555',
+      executorMode: 'deterministic',
+      cwd: tmpDir,
+      runOrchestrate: async () => ({
+        exitCode: 1,
+        parsed: { resumed: true, executed: false, requiresAgentSeat: true, error: 'Requires agent-seat runner' },
+      }),
+    });
+    assert.equal(requiresSeatCycle.outcome, 'failed');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
