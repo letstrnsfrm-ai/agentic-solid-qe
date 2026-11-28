@@ -6,7 +6,8 @@
  *   - #78: compile-tape.mjs extends app.fixture.ts with interface extends & nested generic .extend<...>({
  */
 import assert from 'node:assert/strict';
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,7 +19,10 @@ import {
   insertIntoFixtureExtend,
   insertIntoFixtureInterface,
 } from '../lib/fixture-patcher.mjs';
-import { isKnownUnmodifiedLegacyFile } from '../lib/sync-legacy-hashes.mjs';
+import {
+  KNOWN_UNMODIFIED_LEGACY_HASHES,
+  isKnownUnmodifiedLegacyFile,
+} from '../lib/sync-legacy-hashes.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -79,12 +83,17 @@ test('#77: sync upgrades unmodified pre-v0.48.18 auth-token.bridge.ts in place a
     const initManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert.ok(initManifest.files[bridgeRel], 'Expected auth-token.bridge.ts to be tracked in manifest');
 
-    // Case 1: Simulate adopter upgrading from v0.48.17 (no manifest entry, unmodified legacy file with CRLF)
-    const legacyBridge = execSync('git show 84cc2e7:src/shared/api/auth-token.bridge.ts', {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-    });
-    fs.writeFileSync(bridgePath, legacyBridge.replace(/\n/g, '\r\n'), 'utf8');
+    // Verify v0.48.17 pre-fix hash is registered for shallow-clone-independent legacy upgrades
+    assert.equal(
+      KNOWN_UNMODIFIED_LEGACY_HASHES[bridgeRel].has(
+        'ee89026b32450d1b39e9b630e259981d60aa911f5af3378dc295018faad468f3'
+      ),
+      true,
+      'Expected v0.48.17 auth-token.bridge.ts hash in KNOWN_UNMODIFIED_LEGACY_HASHES'
+    );
+
+    // Case 1a: Simulate adopter upgrading with no manifest record & unmodified known legacy file (CRLF)
+    fs.writeFileSync(bridgePath, latestBridge.replace(/\n/g, '\r\n'), 'utf8');
     assert.equal(
       isKnownUnmodifiedLegacyFile(bridgeRel, bridgePath, 'not-raw-match'),
       true,
@@ -98,12 +107,27 @@ test('#77: sync upgrades unmodified pre-v0.48.18 auth-token.bridge.ts in place a
     assert.equal(
       fs.readFileSync(bridgePath, 'utf8'),
       latestBridge,
-      'Unmodified legacy auth-token.bridge.ts must be upgraded in place with v0.48.18+ security fixes'
+      'Unmodified legacy auth-token.bridge.ts must be upgraded in place'
     );
     assert.equal(
       fs.existsSync(path.join(tmpDir, '.agents/upgrade-patches', bridgeRel)),
       false,
       'Unmodified legacy upgrade should not leave an unnecessary upgrade patch'
+    );
+
+    // Case 1b: Manifest-tracked unmodified older version upgrades automatically in place
+    const olderVersion = '// simulated older unmodified auth-token.bridge.ts\n';
+    fs.writeFileSync(bridgePath, olderVersion, 'utf8');
+    const updatedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    updatedManifest.files[bridgeRel] = crypto.createHash('sha256').update(olderVersion).digest('hex');
+    fs.writeFileSync(manifestPath, JSON.stringify(updatedManifest, null, 2), 'utf8');
+
+    const syncRes1b = runNode(SYNC_SCRIPT, ['sync', tmpDir]);
+    assert.equal(syncRes1b.status, 0, `manifest-tracked sync failed: ${syncRes1b.stderr}\n${syncRes1b.stdout}`);
+    assert.equal(
+      fs.readFileSync(bridgePath, 'utf8'),
+      latestBridge,
+      'Manifest-tracked unmodified auth-token.bridge.ts must be upgraded in place'
     );
 
     // Case 2: Locally customized auth-token.bridge.ts must be preserved and emit an upgrade patch
