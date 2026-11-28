@@ -1,7 +1,21 @@
 {
   "schemaVersion": "1.0.0",
-  "latestVersion": "0.49.0",
+  "latestVersion": "0.50.0",
   "releases": [
+    {
+      "version": "0.50.0",
+      "date": "2026-11-28",
+      "highlights": [
+        "feat(ontology): modular Operational QE Ontology compliant with #73 script ratchet (#74)",
+        "feat(governance): add sharded .agents/overrides/ store and framework scripts line-count ratchet (#73)",
+        "feat(factory): Zero-API-Key VPC Runner Daemon, Encrypted Auth Vault & --resume-gate (#72)",
+        "fix(auth): read Swag Labs demo password from login page when TEST_PASSWORD is unset",
+        "chore(permissions): restore executable mode on sync-skills.mjs and validate-tapes.mjs"
+      ],
+      "nextActions": [
+        "Run `npx cortex upgrade` to sync v0.50.0."
+      ]
+    },
     {
       "version": "0.49.0",
       "date": "2026-11-24",
