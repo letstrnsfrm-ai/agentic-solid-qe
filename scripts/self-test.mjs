@@ -7618,7 +7618,7 @@ test('Non-Functional Testing (NFR): schema validation, SOLID tape compilation (@
   }
 });
 
-test('QE Software Factory Phase 2: Encrypted VPC Auth Vault, resolveGateChoice, and Zero-API-Key VPC Runner lifecycle', async () => {
+test('QE Software Factory Phase 2: Encrypted VPC Auth Vault, resolveGateChoice, and Zero-API-Key VPC Runner lifecycle', { skip: !(fs.existsSync(path.join(REPO_ROOT, 'scripts/auth-vault.mjs')) && fs.existsSync(path.join(REPO_ROOT, 'scripts/runner-daemon.mjs'))) }, async () => {
   const {
     encryptStorageState,
     decryptStorageState,

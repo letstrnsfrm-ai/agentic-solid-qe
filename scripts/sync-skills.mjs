@@ -18,6 +18,7 @@ import {
   discoverLegacyTests,
   syncDiscoveryToManifest,
 } from './legacy-test-migrator.mjs';
+import { isKnownUnmodifiedLegacyFile } from './lib/sync-legacy-hashes.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -556,7 +557,9 @@ function copyRecursive(src, dest, { overwrite = true, trackManifest = false, sou
       // Without a trustworthy previous hash we cannot tell a framework file
       // from a local edit, so the local file is kept and the incoming
       // version is saved as a patch. --force still overwrites deliberately.
-      const locallyEdited = prevHash ? destHash !== prevHash : true;
+      const locallyEdited = prevHash
+        ? destHash !== prevHash
+        : !isKnownUnmodifiedLegacyFile(relPath, dest, destHash);
       if (trackManifest && locallyEdited && !forceOverwrite) {
         const patchDest = path.join(UPGRADE_PATCHES_DIR, relPath);
         if (!dryRun && !isUnsafeDest(patchDest)) {
@@ -744,10 +747,6 @@ export interface ErrorBannerContract extends IdentifiableComponent {
     'src/contracts/flow.contract.ts',
     'src/contracts/state-seeder.contract.ts',
     'src/contracts/wizard-step.contract.ts',
-    'src/shared/api/auth-token.bridge.ts',
-    'src/shared/data/relative-date.helper.ts',
-    'src/shared/ui/explore-handshake.ts',
-    'src/shared/nfr',
     'src/data/nfr-budget.builder.ts',
   ]) {
     copyRecursive(path.join(SOURCE_ROOT, sharedPath), path.join(TARGET_ROOT, sharedPath), {
@@ -1411,6 +1410,11 @@ const coreEnginePaths = [
   'scripts/upgrade-framework.mjs',
   'scripts/report-cloud.mjs',
   'scripts/self-test.mjs',
+  'src/shared/api/auth-token.bridge.ts',
+  'src/shared/data/relative-date.helper.ts',
+  'src/shared/ui/explore-handshake.ts',
+  'src/shared/ui/overlay-handler.ts',
+  'src/shared/nfr',
 ];
 
 console.log(
@@ -1598,11 +1602,6 @@ if (command === 'init') {
     'src/contracts/state-seeder.contract.ts',
     'src/contracts/catalog-list.contract.ts',
     'src/contracts/wizard-step.contract.ts',
-    'src/shared/api/auth-token.bridge.ts',
-    'src/shared/data/relative-date.helper.ts',
-    'src/shared/ui/explore-handshake.ts',
-    'src/shared/ui/overlay-handler.ts',
-    'src/shared/nfr',
     'src/data/nfr-budget.builder.ts',
   ]) {
     copyRecursive(path.join(SOURCE_ROOT, foundationalPath), path.join(TARGET_ROOT, foundationalPath), {

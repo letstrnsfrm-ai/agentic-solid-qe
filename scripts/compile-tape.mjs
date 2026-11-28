@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDomainGraph, seedShardsFromTapes } from './build-domain-graph.mjs';
 import { isCompactMode } from './lib/cli-output.mjs';
+import { extendFixtureContent } from './lib/fixture-patcher.mjs';
 import {
   FORBIDDEN_IDENTIFIERS,
   isSafeClassName,
@@ -1545,16 +1546,9 @@ export class ${seederClass} implements StateSeederContract<Record<string, unknow
             .map((e) => `import { ${e.typeName} } from '${e.importAlias}';`)
         ),
       ].join('\n');
-      if (importLines) {
-        fixtureContent = `${importLines}\n${fixtureContent}`;
-      }
       const interfaceLines = missingEntries
         .map((e) => `  ${e.propName}: ${e.fixtureType || e.typeName};`)
         .join('\n');
-      fixtureContent = fixtureContent.replace(
-        /(export\s+interface\s+[A-Za-z0-9_]+\s*\{)/,
-        `$1\n${interfaceLines}`
-      );
 
       const implLines = missingEntries
         .map((e) => {
@@ -1575,10 +1569,12 @@ export class ${seederClass} implements StateSeederContract<Record<string, unknow
         })
         .join('\n');
 
-      fixtureContent = fixtureContent.replace(
-        /([A-Za-z_][A-Za-z0-9_]*\.extend<[^>]+>\(\{)/,
-        (_, m1) => `${m1}\n${implLines}`
-      );
+      fixtureContent = extendFixtureContent(fixtureContent, {
+        importLines,
+        interfaceLines,
+        implLines,
+        fixtureRelPath,
+      });
 
       plannedOperations.push({
         layer: 'fixture',
